@@ -121,20 +121,23 @@ serve(async (req) => {
           is_active: true,
         });
 
-        // 4. Immediately get QR code via GET /instance/connectionState/{name}
+        // 4. Call connect to initiate WhatsApp connection (generates QR)
         let qrcode = null;
         try {
-          const qrRes = await fetch(`${apiBase}/instance/connectionState/${instName}`, {
+          const connectRes = await fetch(`${apiBase}/instance/connect/${instName}`, {
             method: 'GET',
             headers: { 'token': instanceToken },
           });
-          if (qrRes.ok) {
-            const qrData = await qrRes.json();
-            console.log('UAZAPI connectionState after create:', JSON.stringify(qrData));
-            qrcode = qrData.qrcode || qrData.base64 || qrData.urlcode || null;
+          if (connectRes.ok) {
+            const connectData = await connectRes.json();
+            console.log('UAZAPI connect response:', JSON.stringify(connectData));
+            qrcode = connectData.qrcode || connectData.base64 || connectData.urlcode || connectData.pairingCode || null;
+          } else {
+            const errText = await connectRes.text();
+            console.error('UAZAPI connect error:', connectRes.status, errText);
           }
         } catch (qrErr) {
-          console.error('QR fetch after create failed:', qrErr);
+          console.error('Connect after create failed:', qrErr);
         }
 
         return new Response(JSON.stringify({ ok: true, instance_name: instName, token: instanceToken, qrcode }), {
@@ -158,11 +161,57 @@ serve(async (req) => {
           return new Response(JSON.stringify({ error: 'Nenhuma instância encontrada. Crie uma primeiro.' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
-        // GET /instance/connectionState/{instanceName} returns state + qrcode
-        const stateRes = await fetch(`${apiBase}/instance/connectionState/${instance.instance_name}`, {
-          method: 'GET',
-          headers: { 'token': instance.api_token_encrypted || '' },
-        });
+        const instToken = instance.api_token_encrypted || '';
+        
+        // Try multiple header/endpoint combinations for compatibility
+        const endpoints = [
+          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'apikey': instToken } },
+          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'token': instToken } },
+          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'admintoken': adminToken } },
+          { url: `${apiBase}/instance/connect/${instance.instance_name}`, headers: { 'apikey': instToken } },
+          { url: `${apiBase}/instance/connect/${instance.instance_name}`, headers: { 'token': instToken } },
+        ];
+
+        let successData: any = null;
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep.url, { method: 'GET', headers: ep.headers });
+            console.log(`UAZAPI probe ${ep.url} [${Object.keys(ep.headers)[0]}]: ${res.status}`);
+            if (res.ok) {
+              successData = await res.json();
+              console.log('UAZAPI success response:', JSON.stringify(successData));
+              break;
+            } else {
+              const body = await res.text();
+              console.log(`UAZAPI probe body: ${body.substring(0, 200)}`);
+            }
+          } catch (e) {
+            console.error(`UAZAPI probe error: ${e}`);
+          }
+        }
+
+        if (successData) {
+          const qrcode = successData.qrcode || successData.base64 || successData.urlcode || successData.pairingCode || null;
+          const state = successData.state || successData.status || (qrcode ? 'connecting' : 'disconnected');
+          const phoneNumber = successData.instance?.phone || successData.phone || instance.phone_number;
+
+          if (state === 'connected' && phoneNumber) {
+            await supabaseAdmin.from('whatsapp_instances').update({ phone_number: phoneNumber }).eq('id', instance.id);
+          }
+
+          return new Response(JSON.stringify({
+            status: state,
+            phone: phoneNumber || null,
+            instance_name: instance.instance_name,
+            qrcode,
+          }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        // All probes failed - return error with debug info
+        return new Response(JSON.stringify({ 
+          error: 'Não foi possível conectar à API UAZAPI. Verifique se o servidor está acessível e a instância existe.',
+          debug: { base_url: apiBase, instance_name: instance.instance_name }
+        }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
         if (!stateRes.ok) {
           const errText = await stateRes.text();
@@ -173,12 +222,10 @@ serve(async (req) => {
         const stateData = await stateRes.json();
         console.log('UAZAPI connectionState:', JSON.stringify(stateData));
 
-        // Extract state - UAZAPI returns { state: "disconnected"|"connecting"|"connected", ... }
         const state = stateData.state || stateData.status || 'unknown';
         const qrcode = stateData.qrcode || stateData.base64 || stateData.urlcode || null;
         const phoneNumber = stateData.instance?.phone || stateData.phone || instance.phone_number;
 
-        // Update phone number if connected
         if (state === 'connected' && phoneNumber) {
           await supabaseAdmin.from('whatsapp_instances')
             .update({ phone_number: phoneNumber })
