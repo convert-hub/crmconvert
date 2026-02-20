@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Member { id: string; user_id: string; role: string; is_active: boolean; profile?: { full_name: string | null; phone: string | null }; }
@@ -18,6 +18,164 @@ interface StageRow { id: string; name: string; color: string; position: number; 
 interface AiConfig { id: string; task_type: string; provider: string; model: string; daily_limit: number; monthly_limit: number; daily_usage: number; monthly_usage: number; }
 
 const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qa_review: 'QA / Review', qualification: 'Qualificação', stage_classifier: 'Classificador de Etapa' };
+
+function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
+  const [waStatus, setWaStatus] = useState<'loading' | 'no_instance' | 'disconnected' | 'connecting' | 'connected' | 'error'>('loading');
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [phone, setPhone] = useState<string | null>(null);
+  const [instanceName, setInstanceName] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const callProxy = useCallback(async (action: string) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/uazapi-proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      },
+      body: JSON.stringify({ action, tenant_id: tenantId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }, [tenantId]);
+
+  const checkStatus = useCallback(async () => {
+    if (!tenantId) return;
+    try {
+      const data = await callProxy('get_status');
+      const state = data.status;
+      setPhone(data.phone || null);
+      setInstanceName(data.instance_name || null);
+      setQrCode(data.qrcode || null);
+      if (state === 'no_instance') { setWaStatus('no_instance'); }
+      else if (state === 'connected') { setWaStatus('connected'); setPolling(false); }
+      else if (state === 'connecting' || data.qrcode) { setWaStatus('connecting'); }
+      else { setWaStatus('disconnected'); }
+    } catch {
+      setWaStatus('error');
+    }
+  }, [tenantId, callProxy]);
+
+  useEffect(() => { checkStatus(); }, [checkStatus]);
+
+  useEffect(() => {
+    if (!polling) return;
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, [polling, checkStatus]);
+
+  const handleCreateInstance = async () => {
+    setCreating(true);
+    try {
+      await callProxy('create_instance');
+      toast.success('Instância criada! Escaneie o QR code.');
+      setPolling(true);
+      await checkStatus();
+    } catch (e: any) { toast.error(e.message); }
+    setCreating(false);
+  };
+
+  const handleGetQr = async () => {
+    try {
+      const data = await callProxy('get_qr');
+      setQrCode(data.qrcode || data.base64 || null);
+      setWaStatus('connecting');
+      setPolling(true);
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  const handleDisconnect = async () => {
+    if (!confirm('Desconectar WhatsApp?')) return;
+    try {
+      await callProxy('disconnect');
+      toast.success('WhatsApp desconectado');
+      setWaStatus('no_instance');
+      setQrCode(null);
+      setPhone(null);
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  return (
+    <Card className="glass-card rounded-2xl">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2"><QrCode className="h-5 w-5" />WhatsApp (UAZAPI)</CardTitle>
+            <CardDescription>Conecte sua conta do WhatsApp Business</CardDescription>
+          </div>
+          {waStatus === 'connected' && <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 rounded-full"><Wifi className="h-3 w-3 mr-1" />Conectado</Badge>}
+          {(waStatus === 'disconnected' || waStatus === 'no_instance') && <Badge variant="secondary" className="rounded-full"><WifiOff className="h-3 w-3 mr-1" />Desconectado</Badge>}
+          {waStatus === 'connecting' && <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 rounded-full"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aguardando QR</Badge>}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {waStatus === 'loading' && <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
+
+        {waStatus === 'no_instance' && (
+          <div className="text-center py-6 space-y-3">
+            <p className="text-sm text-muted-foreground">Nenhuma instância WhatsApp configurada.</p>
+            <Button onClick={handleCreateInstance} disabled={creating} className="rounded-xl">
+              {creating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Criar Instância e Conectar
+            </Button>
+          </div>
+        )}
+
+        {waStatus === 'connecting' && qrCode && (
+          <div className="text-center space-y-4">
+            <p className="text-sm text-muted-foreground">Escaneie o QR code com seu WhatsApp Business:</p>
+            <div className="inline-block p-4 bg-white rounded-2xl shadow-lg">
+              <img src={qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`} alt="QR Code WhatsApp" className="w-64 h-64" />
+            </div>
+            <div className="flex justify-center gap-2">
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={handleGetQr}><RefreshCw className="h-4 w-4 mr-1" />Atualizar QR</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">O status será atualizado automaticamente ao escanear.</p>
+          </div>
+        )}
+
+        {waStatus === 'connecting' && !qrCode && (
+          <div className="text-center py-6 space-y-3">
+            <p className="text-sm text-muted-foreground">Instância criada. Gere o QR code para conectar.</p>
+            <Button onClick={handleGetQr} className="rounded-xl"><QrCode className="h-4 w-4 mr-2" />Obter QR Code</Button>
+          </div>
+        )}
+
+        {waStatus === 'disconnected' && (
+          <div className="text-center py-6 space-y-3">
+            <p className="text-sm text-muted-foreground">Instância existente mas desconectada.</p>
+            <Button onClick={handleGetQr} className="rounded-xl"><QrCode className="h-4 w-4 mr-2" />Reconectar via QR Code</Button>
+          </div>
+        )}
+
+        {waStatus === 'connected' && (
+          <div className="space-y-3">
+            <div className="rounded-xl bg-muted/50 p-4 space-y-2">
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Telefone:</span><span className="font-mono text-foreground">{phone || '—'}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Instância:</span><span className="font-mono text-foreground">{instanceName || '—'}</span></div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={checkStatus}><RefreshCw className="h-4 w-4 mr-1" />Verificar Status</Button>
+              <Button variant="outline" size="sm" className="rounded-xl text-destructive" onClick={handleDisconnect}><LogOut className="h-4 w-4 mr-1" />Desconectar</Button>
+            </div>
+          </div>
+        )}
+
+        {waStatus === 'error' && (
+          <div className="text-center py-6 space-y-3">
+            <p className="text-sm text-destructive">Erro ao verificar status. Verifique se o UAZAPI está configurado no painel admin.</p>
+            <Button variant="outline" size="sm" className="rounded-xl" onClick={checkStatus}><RefreshCw className="h-4 w-4 mr-1" />Tentar Novamente</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const { tenant, role } = useAuth();
@@ -216,10 +374,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="integrations" className="space-y-4 pt-4">
-          <Card className="glass-card rounded-2xl">
-            <CardHeader><CardTitle>WhatsApp (UAZAPI)</CardTitle><CardDescription>Configure sua instância WhatsApp</CardDescription></CardHeader>
-            <CardContent><p className="text-sm text-muted-foreground">Configure na seção de integrações do admin.</p></CardContent>
-          </Card>
+          <WhatsAppIntegrationCard tenantId={tenant?.id} />
           <Card className="glass-card rounded-2xl">
             <CardHeader><CardTitle>Webhooks</CardTitle><CardDescription>URLs de webhook para formulários e Facebook Lead Ads</CardDescription></CardHeader>
             <CardContent className="space-y-2 text-sm">

@@ -128,6 +128,7 @@ const handlers = {
 
     // Find or create contact
     let contact = await findContact(tenant_id, phone, null);
+    const isNewContact = !contact;
     if (!contact) {
       const name = msg.pushName || msg.notifyName || phone;
       const { data: c } = await supabase.from('contacts').insert({
@@ -168,6 +169,15 @@ const handlers = {
       updates.last_agent_message_at = new Date().toISOString();
     }
     await supabase.from('conversations').update(updates).eq('id', conversation.id);
+
+    // AI Auto-reply: only for inbound messages, and only if no human agent is assigned
+    if (!isFromMe && !conversation.assigned_to) {
+      try {
+        await handleAiAutoReply(tenant_id, conversation, contact, content);
+      } catch (err) {
+        console.error('[Worker] AI auto-reply error:', err.message);
+      }
+    }
 
     return { contact_id: contact.id, conversation_id: conversation.id };
   },
@@ -229,8 +239,209 @@ async function findContact(tenantId, phone, email) {
   return null;
 }
 
-// Main loop
-async function pollJobs() {
+// AI Functions
+async function getAiConfig(tenantId, taskType) {
+  const { data } = await supabase.from('ai_configs').select('*, global_api_key:global_api_keys(*)')
+    .eq('tenant_id', tenantId).eq('task_type', taskType).limit(1);
+  if (!data || data.length === 0) return null;
+  const config = data[0];
+  // Check daily/monthly limits
+  const now = new Date();
+  const resetAt = config.usage_reset_at ? new Date(config.usage_reset_at) : null;
+  if (resetAt && now.toDateString() !== resetAt.toDateString()) {
+    await supabase.from('ai_configs').update({ daily_usage: 0, usage_reset_at: now.toISOString() }).eq('id', config.id);
+    config.daily_usage = 0;
+  }
+  if (config.daily_usage >= (config.daily_limit || 100)) return null;
+  if (config.monthly_usage >= (config.monthly_limit || 3000)) return null;
+  return config;
+}
+
+async function callOpenAI(apiKey, model, messages) {
+  const startTime = Date.now();
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 500 }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(`OpenAI error: ${data.error?.message || response.status}`);
+  return {
+    content: data.choices?.[0]?.message?.content || '',
+    tokens: data.usage?.total_tokens || 0,
+    duration: Date.now() - startTime,
+  };
+}
+
+async function getConversationHistory(conversationId, limit = 20) {
+  const { data } = await supabase.from('messages').select('direction, content, created_at')
+    .eq('conversation_id', conversationId).order('created_at', { ascending: true }).limit(limit);
+  return (data || []).map(m => ({
+    role: m.direction === 'inbound' ? 'user' : 'assistant',
+    content: m.content || '',
+  }));
+}
+
+async function getPromptTemplate(tenantId, taskType) {
+  const { data } = await supabase.from('prompt_templates').select('*')
+    .eq('tenant_id', tenantId).eq('task_type', taskType).eq('is_active', true).limit(1);
+  return data?.[0] || null;
+}
+
+async function incrementAiUsage(configId) {
+  // Increment daily and monthly usage
+  const { data: config } = await supabase.from('ai_configs').select('daily_usage, monthly_usage').eq('id', configId).single();
+  if (config) {
+    await supabase.from('ai_configs').update({
+      daily_usage: (config.daily_usage || 0) + 1,
+      monthly_usage: (config.monthly_usage || 0) + 1,
+      usage_reset_at: new Date().toISOString(),
+    }).eq('id', configId);
+  }
+}
+
+async function logAiCall(tenantId, taskType, model, provider, tokens, duration, input, output, error) {
+  await supabase.from('ai_logs').insert({
+    tenant_id: tenantId, task_type: taskType, model, provider,
+    tokens_used: tokens, duration_ms: duration,
+    input_data: input, output_data: output, error,
+  });
+}
+
+async function handleAiAutoReply(tenantId, conversation, contact, incomingMessage) {
+  // Get message_generation config
+  const config = await getAiConfig(tenantId, 'message_generation');
+  if (!config) {
+    console.log('[Worker] No AI config for message_generation or limits reached');
+    return;
+  }
+
+  const apiKey = config.global_api_key?.api_key_encrypted;
+  if (!apiKey) {
+    console.log('[Worker] No API key for message_generation');
+    return;
+  }
+
+  // Get conversation history
+  const history = await getConversationHistory(conversation.id);
+
+  // Get prompt template
+  const template = await getPromptTemplate(tenantId, 'message_generation');
+  const systemPrompt = template?.content || `Você é um atendente virtual de uma empresa. Seja cordial, objetivo e profissional.
+Responda perguntas sobre a empresa e seus serviços.
+Se o cliente demonstrar interesse real em comprar ou contratar, responda normalmente mas sinalize internamente que está qualificado.
+NÃO use emojis em excesso. Mantenha mensagens curtas e claras para WhatsApp.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+  ];
+
+  try {
+    const result = await callOpenAI(apiKey, config.model || 'gpt-4o-mini', messages);
+    
+    await incrementAiUsage(config.id);
+    await logAiCall(tenantId, 'message_generation', config.model, config.provider, result.tokens, result.duration, { message: incomingMessage }, { reply: result.content }, null);
+
+    if (result.content) {
+      // Send via WhatsApp
+      await supabase.rpc('enqueue_job', {
+        _type: 'send_whatsapp',
+        _payload: JSON.stringify({
+          tenant_id: tenantId,
+          phone: contact.phone,
+          message: result.content,
+          conversation_id: conversation.id,
+        }),
+        _tenant_id: tenantId,
+      });
+
+      // Save AI message to DB
+      await supabase.from('messages').insert({
+        tenant_id: tenantId,
+        conversation_id: conversation.id,
+        direction: 'outbound',
+        content: result.content,
+        is_ai_generated: true,
+      });
+
+      // Run qualification check
+      await checkQualification(tenantId, conversation, contact, history.concat([
+        { role: 'user', content: incomingMessage },
+        { role: 'assistant', content: result.content },
+      ]));
+    }
+  } catch (err) {
+    await logAiCall(tenantId, 'message_generation', config.model, config.provider, 0, 0, { message: incomingMessage }, null, err.message);
+    throw err;
+  }
+}
+
+async function checkQualification(tenantId, conversation, contact, history) {
+  const config = await getAiConfig(tenantId, 'qualification');
+  if (!config) return;
+
+  const apiKey = config.global_api_key?.api_key_encrypted;
+  if (!apiKey) return;
+
+  const template = await getPromptTemplate(tenantId, 'qualification');
+  const systemPrompt = template?.content || `Analise a conversa a seguir e determine se o lead está QUALIFICADO para falar com um atendente humano.
+Um lead qualificado demonstra:
+- Interesse real em comprar/contratar
+- Fez perguntas sobre preço, disponibilidade ou como funciona
+- Forneceu informações de contato ou demonstrou urgência
+
+Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "confidence": 0.0-1.0}`;
+
+  try {
+    const result = await callOpenAI(apiKey, config.model || 'gpt-4o-mini', [
+      { role: 'system', content: systemPrompt },
+      ...history,
+    ]);
+
+    await incrementAiUsage(config.id);
+    
+    let qualification;
+    try {
+      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+      qualification = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch { qualification = null; }
+
+    await logAiCall(tenantId, 'qualification', config.model, config.provider, result.tokens, result.duration, { history_length: history.length }, qualification, null);
+
+    if (qualification?.qualified && qualification.confidence >= 0.7) {
+      console.log(`[Worker] Lead ${contact.id} QUALIFIED - handing off to human`);
+      
+      // Update contact status
+      await supabase.from('contacts').update({ status: 'customer' }).eq('id', contact.id);
+      
+      // Update conversation to waiting_agent so a human picks it up
+      await supabase.from('conversations').update({ 
+        status: 'waiting_agent',
+        metadata: { ...((conversation.metadata || {})), qualification: qualification },
+      }).eq('id', conversation.id);
+
+      // Store qualification data on opportunity if exists
+      const { data: opps } = await supabase.from('opportunities')
+        .select('id').eq('contact_id', contact.id).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
+      if (opps && opps.length > 0) {
+        await supabase.from('opportunities').update({ qualification_data: qualification }).eq('id', opps[0].id);
+      }
+
+      // Create activity noting the handoff
+      await supabase.from('activities').insert({
+        tenant_id: tenantId,
+        type: 'note',
+        title: 'Lead qualificado pela IA',
+        description: `Motivo: ${qualification.reason || 'Lead demonstrou interesse'}. Confiança: ${Math.round((qualification.confidence || 0) * 100)}%`,
+        contact_id: contact.id,
+        conversation_id: conversation.id,
+      });
+    }
+  } catch (err) {
+    console.error('[Worker] Qualification error:', err.message);
+  }
+}
   try {
     const { data: job } = await supabase.rpc('acquire_next_job', {
       _types: Object.keys(handlers),
