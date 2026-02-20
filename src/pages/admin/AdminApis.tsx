@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { Plus, Loader2, Trash2, Plug, MessageCircle, Brain, Key, Eye, EyeOff } from 'lucide-react';
+import { Plus, Loader2, Trash2, Plug, MessageCircle, Brain, Key, Eye, EyeOff, Edit2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 
@@ -55,6 +55,12 @@ export default function AdminApis() {
   const [gkForm, setGkForm] = useState({ provider: 'openai', label: '', api_key: '' });
   const [gkSaving, setGkSaving] = useState(false);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+
+  // Edit Global Key
+  const [editGkOpen, setEditGkOpen] = useState(false);
+  const [editGkId, setEditGkId] = useState<string | null>(null);
+  const [editGkForm, setEditGkForm] = useState({ provider: 'openai', label: '', api_key: '' });
+  const [editGkSaving, setEditGkSaving] = useState(false);
 
   // WhatsApp form
   const [waOpen, setWaOpen] = useState(false);
@@ -114,6 +120,26 @@ export default function AdminApis() {
   const handleToggleKeyActive = async (id: string, active: boolean) => {
     await supabase.from('global_api_keys').update({ is_active: active } as any).eq('id', id);
     load();
+  };
+
+  const openEditGk = (k: GlobalApiKey) => {
+    setEditGkId(k.id);
+    setEditGkForm({ provider: k.provider, label: k.label, api_key: '' });
+    setEditGkOpen(true);
+  };
+
+  const handleEditGlobalKey = async () => {
+    if (!editGkId || !editGkForm.label.trim()) return;
+    setEditGkSaving(true);
+    const updates: any = { provider: editGkForm.provider, label: editGkForm.label };
+    if (editGkForm.api_key.trim()) updates.api_key_encrypted = editGkForm.api_key;
+    const { error } = await supabase.from('global_api_keys').update(updates).eq('id', editGkId);
+    if (error) { toast.error(error.message); } else {
+      toast.success('Chave atualizada!');
+      setEditGkOpen(false);
+      load();
+    }
+    setEditGkSaving(false);
   };
 
   const maskKey = (key: string) => {
@@ -265,6 +291,9 @@ export default function AdminApis() {
                     </div>
                   </div>
                   <Switch checked={k.is_active} onCheckedChange={v => handleToggleKeyActive(k.id, v)} />
+                  <Button variant="ghost" size="icon" className="rounded-xl" onClick={() => openEditGk(k)}>
+                    <Edit2 className="h-4 w-4" />
+                  </Button>
                   <Button variant="ghost" size="icon" className="rounded-xl text-destructive" onClick={() => handleDeleteGlobalKey(k.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -272,6 +301,38 @@ export default function AdminApis() {
               ))}
             </div>
           )}
+
+          {/* Edit Global Key Dialog */}
+          <Dialog open={editGkOpen} onOpenChange={setEditGkOpen}>
+            <DialogContent className="rounded-2xl">
+              <DialogHeader><DialogTitle>Editar Chave API Global</DialogTitle></DialogHeader>
+              <div className="space-y-3 pt-2">
+                <div className="space-y-1">
+                  <Label>Provider</Label>
+                  <Select value={editGkForm.provider} onValueChange={v => setEditGkForm(f => ({ ...f, provider: v }))}>
+                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="anthropic">Anthropic</SelectItem>
+                      <SelectItem value="google">Google</SelectItem>
+                      <SelectItem value="other">Outro</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Nome / Label</Label>
+                  <Input className="rounded-xl" value={editGkForm.label} onChange={e => setEditGkForm(f => ({ ...f, label: e.target.value }))} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Nova API Key (deixe vazio para manter a atual)</Label>
+                  <Input className="rounded-xl" type="password" value={editGkForm.api_key} onChange={e => setEditGkForm(f => ({ ...f, api_key: e.target.value }))} placeholder="sk-..." />
+                </div>
+                <Button onClick={handleEditGlobalKey} disabled={editGkSaving || !editGkForm.label} className="w-full rounded-xl gradient-primary text-white border-0">
+                  {editGkSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Salvar Alterações
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* ── AI Agents (per tenant) ── */}
