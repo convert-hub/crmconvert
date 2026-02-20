@@ -17,6 +17,7 @@ import JobsPage from "@/pages/JobsPage";
 import AutomationsPage from "@/pages/AutomationsPage";
 import PromptStudioPage from "@/pages/PromptStudioPage";
 import ReportsPage from "@/pages/ReportsPage";
+import CompaniesPage from "@/pages/CompaniesPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -43,8 +44,8 @@ function AppRoutes() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="pipeline" element={<PipelinePage />} />
         <Route path="contacts" element={<ContactsPage />} />
-        <Route path="companies" element={<div className="p-6"><h1 className="text-2xl font-bold">Empresas</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
-        <Route path="activities" element={<div className="p-6"><h1 className="text-2xl font-bold">Atividades</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
+        <Route path="companies" element={<CompaniesPage />} />
+        <Route path="activities" element={<div className="p-6"><h1 className="text-xl font-bold text-foreground">Atividades</h1><p className="text-sm text-muted-foreground mt-1">Em breve</p></div>} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="prompt-studio" element={<PromptStudioPage />} />
