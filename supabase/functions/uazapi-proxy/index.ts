@@ -6,16 +6,19 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Auth check
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ error: 'Unauthorized' }, 401);
     }
 
     const supabaseAdmin = createClient(
@@ -32,14 +35,13 @@ serve(async (req) => {
     const token = authHeader.replace('Bearer ', '');
     const { data: claimsData, error: claimsError } = await supabaseUser.auth.getClaims(token);
     if (claimsError || !claimsData?.claims) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ error: 'Unauthorized' }, 401);
     }
     const userId = claimsData.claims.sub;
 
     const body = await req.json();
     const { action, tenant_id, instance_name } = body;
 
-    // Get user's tenant membership
     const { data: membership } = await supabaseAdmin.from('tenant_memberships')
       .select('id, role, tenant_id')
       .eq('user_id', userId)
@@ -49,7 +51,7 @@ serve(async (req) => {
 
     const effectiveTenantId = tenant_id || membership?.tenant_id;
     if (!effectiveTenantId) {
-      return new Response(JSON.stringify({ error: 'No tenant found' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ error: 'No tenant found' }, 400);
     }
 
     // Get UAZAPI global key (admin token + base_url)
@@ -61,25 +63,23 @@ serve(async (req) => {
       .single();
 
     if (!uazapiKey) {
-      return new Response(JSON.stringify({ error: 'UAZAPI não configurado. Adicione a chave global do provider "uazapi" no painel admin.' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ error: 'UAZAPI não configurado. Adicione a chave global do provider "uazapi" no painel admin.' }, 400);
     }
 
     const adminToken = uazapiKey.api_key_encrypted;
     const baseUrl = (uazapiKey as any).metadata?.base_url;
     if (!baseUrl) {
-      return new Response(JSON.stringify({ error: 'URL base do UAZAPI não configurada na chave global.' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ error: 'URL base do UAZAPI não configurada na chave global.' }, 400);
     }
 
-    // Ensure baseUrl has no trailing slash
     const apiBase = baseUrl.replace(/\/+$/, '');
 
-    // Route actions
     switch (action) {
+      // ── CREATE INSTANCE ──
       case 'create_instance': {
         const instName = instance_name || `tenant_${effectiveTenantId.slice(0, 8)}`;
-        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi`;
 
-        // 1. Create instance via POST /instance/init (UAZAPI v2)
+        // 1. Create instance via POST /instance/init (admintoken header)
         const createRes = await fetch(`${apiBase}/instance/init`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'admintoken': adminToken },
@@ -89,20 +89,21 @@ serve(async (req) => {
         if (!createRes.ok) {
           const errText = await createRes.text();
           console.error('UAZAPI create error:', createRes.status, errText);
-          return new Response(JSON.stringify({ error: `Falha ao criar instância: ${createRes.status} ${errText}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          return jsonResponse({ error: `Falha ao criar instância: ${createRes.status} ${errText}` }, 500);
         }
 
         const createData = await createRes.json();
         console.log('UAZAPI create response:', JSON.stringify(createData));
         const instanceToken = createData.token || createData.apikey || createData.instance?.token || '';
 
-        // 2. Set webhook
+        // 2. Set webhook (uses instance token header)
+        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi`;
         try {
-          const whRes = await fetch(`${apiBase}/instance/setWebhook/${instName}`, {
+          const whRes = await fetch(`${apiBase}/webhook/set`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'token': instanceToken },
             body: JSON.stringify({
-              webhookUrl: webhookUrl,
+              webhookUrl,
               webhookEvents: ['messages.upsert', 'connection.update', 'messages.update'],
               headers: { 'x-tenant-id': effectiveTenantId },
             }),
@@ -121,12 +122,13 @@ serve(async (req) => {
           is_active: true,
         });
 
-        // 4. Call connect to initiate WhatsApp connection (generates QR)
+        // 4. Connect (POST /instance/connect with token header, empty body = QR code)
         let qrcode = null;
         try {
-          const connectRes = await fetch(`${apiBase}/instance/connect/${instName}`, {
-            method: 'GET',
-            headers: { 'token': instanceToken },
+          const connectRes = await fetch(`${apiBase}/instance/connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': instanceToken },
+            body: JSON.stringify({}),
           });
           if (connectRes.ok) {
             const connectData = await connectRes.json();
@@ -140,11 +142,10 @@ serve(async (req) => {
           console.error('Connect after create failed:', qrErr);
         }
 
-        return new Response(JSON.stringify({ ok: true, instance_name: instName, token: instanceToken, qrcode }), {
-          status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ ok: true, instance_name: instName, token: instanceToken, qrcode });
       }
 
+      // ── GET QR / GET STATUS ──
       case 'get_qr':
       case 'get_status': {
         const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
@@ -156,92 +157,47 @@ serve(async (req) => {
 
         if (!instance) {
           if (action === 'get_status') {
-            return new Response(JSON.stringify({ status: 'no_instance' }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            return jsonResponse({ status: 'no_instance' });
           }
-          return new Response(JSON.stringify({ error: 'Nenhuma instância encontrada. Crie uma primeiro.' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          return jsonResponse({ error: 'Nenhuma instância encontrada. Crie uma primeiro.' }, 404);
         }
 
         const instToken = instance.api_token_encrypted || '';
-        
-        // Try multiple header/endpoint combinations for compatibility
-        const endpoints = [
-          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'apikey': instToken } },
-          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'token': instToken } },
-          { url: `${apiBase}/instance/connectionState/${instance.instance_name}`, headers: { 'admintoken': adminToken } },
-          { url: `${apiBase}/instance/connect/${instance.instance_name}`, headers: { 'apikey': instToken } },
-          { url: `${apiBase}/instance/connect/${instance.instance_name}`, headers: { 'token': instToken } },
-        ];
 
-        let successData: any = null;
-        for (const ep of endpoints) {
-          try {
-            const res = await fetch(ep.url, { method: 'GET', headers: ep.headers });
-            console.log(`UAZAPI probe ${ep.url} [${Object.keys(ep.headers)[0]}]: ${res.status}`);
-            if (res.ok) {
-              successData = await res.json();
-              console.log('UAZAPI success response:', JSON.stringify(successData));
-              break;
-            } else {
-              const body = await res.text();
-              console.log(`UAZAPI probe body: ${body.substring(0, 200)}`);
-            }
-          } catch (e) {
-            console.error(`UAZAPI probe error: ${e}`);
-          }
+        // GET /instance/status with token header
+        const statusRes = await fetch(`${apiBase}/instance/status`, {
+          method: 'GET',
+          headers: { 'token': instToken },
+        });
+
+        console.log(`UAZAPI /instance/status: ${statusRes.status}`);
+
+        if (!statusRes.ok) {
+          const errText = await statusRes.text();
+          console.error('UAZAPI status error:', statusRes.status, errText);
+          return jsonResponse({ error: `Falha ao obter status: ${statusRes.status} ${errText}` }, 500);
         }
 
-        if (successData) {
-          const qrcode = successData.qrcode || successData.base64 || successData.urlcode || successData.pairingCode || null;
-          const state = successData.state || successData.status || (qrcode ? 'connecting' : 'disconnected');
-          const phoneNumber = successData.instance?.phone || successData.phone || instance.phone_number;
+        const statusData = await statusRes.json();
+        console.log('UAZAPI status response:', JSON.stringify(statusData));
 
-          if (state === 'connected' && phoneNumber) {
-            await supabaseAdmin.from('whatsapp_instances').update({ phone_number: phoneNumber }).eq('id', instance.id);
-          }
-
-          return new Response(JSON.stringify({
-            status: state,
-            phone: phoneNumber || null,
-            instance_name: instance.instance_name,
-            qrcode,
-          }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        }
-
-        // All probes failed - return error with debug info
-        return new Response(JSON.stringify({ 
-          error: 'Não foi possível conectar à API UAZAPI. Verifique se o servidor está acessível e a instância existe.',
-          debug: { base_url: apiBase, instance_name: instance.instance_name }
-        }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
-        if (!stateRes.ok) {
-          const errText = await stateRes.text();
-          console.error('UAZAPI connectionState error:', stateRes.status, errText);
-          return new Response(JSON.stringify({ error: `Falha ao obter status: ${stateRes.status} ${errText}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        }
-
-        const stateData = await stateRes.json();
-        console.log('UAZAPI connectionState:', JSON.stringify(stateData));
-
-        const state = stateData.state || stateData.status || 'unknown';
-        const qrcode = stateData.qrcode || stateData.base64 || stateData.urlcode || null;
-        const phoneNumber = stateData.instance?.phone || stateData.phone || instance.phone_number;
+        const qrcode = statusData.qrcode || statusData.base64 || statusData.urlcode || statusData.pairingCode || null;
+        const state = statusData.state || statusData.status || (qrcode ? 'connecting' : 'disconnected');
+        const phoneNumber = statusData.instance?.phone || statusData.phone || instance.phone_number;
 
         if (state === 'connected' && phoneNumber) {
-          await supabaseAdmin.from('whatsapp_instances')
-            .update({ phone_number: phoneNumber })
-            .eq('id', instance.id);
+          await supabaseAdmin.from('whatsapp_instances').update({ phone_number: phoneNumber }).eq('id', instance.id);
         }
 
-        return new Response(JSON.stringify({
+        return jsonResponse({
           status: state,
           phone: phoneNumber || null,
           instance_name: instance.instance_name,
-          qrcode: qrcode,
-        }), {
-          status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          qrcode,
         });
       }
 
+      // ── DISCONNECT ──
       case 'disconnect': {
         const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
           .select('*')
@@ -252,28 +208,24 @@ serve(async (req) => {
 
         if (instance) {
           try {
-            await fetch(`${apiBase}/instance/logout/${instance.instance_name}`, {
-              method: 'DELETE',
+            await fetch(`${apiBase}/instance/disconnect`, {
+              method: 'POST',
               headers: { 'token': instance.api_token_encrypted || '' },
             });
           } catch (e) {
-            console.error('Logout request failed:', e);
+            console.error('Disconnect request failed:', e);
           }
           await supabaseAdmin.from('whatsapp_instances').update({ is_active: false }).eq('id', instance.id);
         }
 
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ ok: true });
       }
 
       default:
-        return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        return jsonResponse({ error: `Unknown action: ${action}` }, 400);
     }
   } catch (error) {
     console.error('uazapi-proxy error:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ error: error.message }, 500);
   }
 });
