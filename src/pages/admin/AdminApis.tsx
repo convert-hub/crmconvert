@@ -64,7 +64,7 @@ export default function AdminApis() {
 
   // WhatsApp form
   const [waOpen, setWaOpen] = useState(false);
-  const [waForm, setWaForm] = useState({ tenant_id: '', instance_name: '', api_url: '', api_token: '', phone_number: '' });
+  const [waForm, setWaForm] = useState({ tenant_id: '', instance_name: '' });
   const [waSaving, setWaSaving] = useState(false);
 
   // AI Agent form
@@ -154,23 +154,35 @@ export default function AdminApis() {
     return key.slice(0, 4) + '••••••••' + key.slice(-4);
   };
 
-  // WhatsApp handlers
-  const handleCreateWhatsApp = async () => {
+  // WhatsApp handlers - uses uazapi-proxy edge function with global key
+  const handleCreateWhatsAppViaProxy = async () => {
+    if (!waForm.tenant_id) return;
     setWaSaving(true);
-    const { error } = await supabase.from('whatsapp_instances').insert({
-      tenant_id: waForm.tenant_id,
-      instance_name: waForm.instance_name,
-      api_url: waForm.api_url,
-      api_token_encrypted: waForm.api_token,
-      phone_number: waForm.phone_number || null,
-    });
-    if (error) { toast.error(error.message); } else {
-      toast.success('Instância WhatsApp criada!');
-      setWaOpen(false);
-      setWaForm({ tenant_id: '', instance_name: '', api_url: '', api_token: '', phone_number: '' });
-      load();
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const res = await supabase.functions.invoke('uazapi-proxy', {
+        body: {
+          action: 'create_instance',
+          tenant_id: waForm.tenant_id,
+          instance_name: waForm.instance_name || undefined,
+        },
+      });
+      if (res.error || res.data?.error) {
+        toast.error(res.data?.error || res.error?.message || 'Erro ao criar instância');
+      } else {
+        toast.success(`Instância "${res.data.instance_name}" criada! O tenant pode escanear o QR Code em Configurações.`);
+        setWaOpen(false);
+        setWaForm({ tenant_id: '', instance_name: '' });
+        load();
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Erro inesperado');
     }
     setWaSaving(false);
+  };
+
+  const handleCreateWhatsApp = async () => {
+    // kept for backwards compat but unused
   };
 
   const handleDeleteWa = async (id: string) => {
@@ -447,32 +459,42 @@ export default function AdminApis() {
 
         {/* ── WhatsApp ── */}
         <TabsContent value="whatsapp" className="mt-6 space-y-4">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Instâncias WhatsApp por empresa. Usam a chave global UAZAPI automaticamente.</p>
             <Dialog open={waOpen} onOpenChange={setWaOpen}>
               <DialogTrigger asChild>
-                <Button className="rounded-xl gradient-primary text-white border-0"><Plus className="h-4 w-4 mr-2" />Nova Instância</Button>
+                <Button className="rounded-xl gradient-primary text-white border-0" disabled={!globalKeys.some(k => k.provider === 'uazapi' && k.is_active)}>
+                  <Plus className="h-4 w-4 mr-2" />Conectar Empresa
+                </Button>
               </DialogTrigger>
               <DialogContent className="rounded-2xl">
-                <DialogHeader><DialogTitle>Nova Instância WhatsApp</DialogTitle></DialogHeader>
+                <DialogHeader><DialogTitle>Conectar WhatsApp a uma Empresa</DialogTitle></DialogHeader>
+                <p className="text-sm text-muted-foreground">Selecione a empresa e um nome para a instância. A chave global UAZAPI será usada automaticamente.</p>
                 <div className="space-y-3 pt-2">
                   <div className="space-y-1">
                     <Label>Empresa</Label>
                     <Select value={waForm.tenant_id} onValueChange={v => setWaForm(f => ({ ...f, tenant_id: v }))}>
-                      <SelectTrigger className="rounded-xl"><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                      <SelectTrigger className="rounded-xl"><SelectValue placeholder="Selecione a empresa..." /></SelectTrigger>
                       <SelectContent>{tenants.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1"><Label>Nome da Instância</Label><Input className="rounded-xl" value={waForm.instance_name} onChange={e => setWaForm(f => ({ ...f, instance_name: e.target.value }))} placeholder="principal" /></div>
-                  <div className="space-y-1"><Label>URL da API</Label><Input className="rounded-xl" value={waForm.api_url} onChange={e => setWaForm(f => ({ ...f, api_url: e.target.value }))} placeholder="https://api.uazapi.com/..." /></div>
-                  <div className="space-y-1"><Label>Token da API</Label><Input className="rounded-xl" type="password" value={waForm.api_token} onChange={e => setWaForm(f => ({ ...f, api_token: e.target.value }))} /></div>
-                  <div className="space-y-1"><Label>Telefone (opcional)</Label><Input className="rounded-xl" value={waForm.phone_number} onChange={e => setWaForm(f => ({ ...f, phone_number: e.target.value }))} placeholder="+5511..." /></div>
-                  <Button onClick={handleCreateWhatsApp} disabled={waSaving || !waForm.tenant_id || !waForm.api_url} className="w-full rounded-xl gradient-primary text-white border-0">
-                    {waSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Criar
+                  <div className="space-y-1">
+                    <Label>Nome da Instância (opcional)</Label>
+                    <Input className="rounded-xl" value={waForm.instance_name} onChange={e => setWaForm(f => ({ ...f, instance_name: e.target.value }))} placeholder="Ex: principal (gerado automaticamente se vazio)" />
+                  </div>
+                  <Button onClick={handleCreateWhatsAppViaProxy} disabled={waSaving || !waForm.tenant_id} className="w-full rounded-xl gradient-primary text-white border-0">
+                    {waSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Criar Instância
                   </Button>
                 </div>
               </DialogContent>
             </Dialog>
           </div>
+
+          {!globalKeys.some(k => k.provider === 'uazapi' && k.is_active) && (
+            <div className="rounded-xl border border-dashed border-amber-500/50 bg-amber-500/5 p-4 text-sm text-amber-600">
+              ⚠️ Cadastre uma chave global com provider "UAZAPI" na aba "Chaves Globais" antes de conectar empresas.
+            </div>
+          )}
 
           {whatsappInstances.length === 0 ? (
             <div className="glass-card rounded-2xl p-12 text-center">
