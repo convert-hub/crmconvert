@@ -14,6 +14,9 @@ import ContactsPage from "@/pages/ContactsPage";
 import InboxPage from "@/pages/InboxPage";
 import SettingsPage from "@/pages/SettingsPage";
 import JobsPage from "@/pages/JobsPage";
+import AutomationsPage from "@/pages/AutomationsPage";
+import PromptStudioPage from "@/pages/PromptStudioPage";
+import ReportsPage from "@/pages/ReportsPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -43,11 +46,11 @@ function AppRoutes() {
         <Route path="companies" element={<div className="p-6"><h1 className="text-2xl font-bold">Empresas</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
         <Route path="activities" element={<div className="p-6"><h1 className="text-2xl font-bold">Atividades</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
         <Route path="inbox" element={<InboxPage />} />
-        <Route path="automations" element={<div className="p-6"><h1 className="text-2xl font-bold">Automações</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
-        <Route path="prompt-studio" element={<div className="p-6"><h1 className="text-2xl font-bold">Prompt Studio</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
+        <Route path="automations" element={<AutomationsPage />} />
+        <Route path="prompt-studio" element={<PromptStudioPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="jobs" element={<JobsPage />} />
-        <Route path="reports" element={<div className="p-6"><h1 className="text-2xl font-bold">Relatórios</h1><p className="text-muted-foreground mt-2">Em breve</p></div>} />
+        <Route path="reports" element={<ReportsPage />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
