@@ -71,8 +71,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(sess);
         setUser(sess?.user ?? null);
         if (sess?.user) {
-          // defer to avoid deadlock with supabase auth
-          setTimeout(() => loadUserData(sess.user.id), 0);
+          await loadUserData(sess.user.id);
         } else {
           setProfile(null);
           setMembership(null);
@@ -82,10 +81,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
+    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
       setSession(s);
       setUser(s?.user ?? null);
-      if (s?.user) loadUserData(s.user.id);
+      if (s?.user) await loadUserData(s.user.id);
       setLoading(false);
     });
 
