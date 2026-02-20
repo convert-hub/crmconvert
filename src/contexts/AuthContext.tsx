@@ -10,13 +10,14 @@ interface AuthState {
   membership: TenantMembership | null;
   tenant: Tenant | null;
   role: TenantRole | null;
+  isSaasAdmin: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
   session: null, user: null, profile: null, membership: null,
-  tenant: null, role: null, loading: true, signOut: async () => {},
+  tenant: null, role: null, isSaasAdmin: false, loading: true, signOut: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -27,6 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [membership, setMembership] = useState<TenantMembership | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [isSaasAdmin, setIsSaasAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const loadUserData = async (userId: string) => {
@@ -60,6 +62,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .single();
         setTenant(t as unknown as Tenant);
       }
+
+      // Check SaaS admin
+      const { data: saasRow } = await supabase
+        .from('saas_admins')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      setIsSaasAdmin(!!saasRow);
     } catch (e) {
       console.error('Error loading user data:', e);
     }
@@ -97,6 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(null);
           setMembership(null);
           setTenant(null);
+          setIsSaasAdmin(false);
           setLoading(false);
         }
       }
@@ -115,12 +126,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProfile(null);
     setMembership(null);
     setTenant(null);
+    setIsSaasAdmin(false);
   };
 
   return (
     <AuthContext.Provider value={{
       session, user, profile, membership, tenant,
-      role: membership?.role ?? null, loading, signOut,
+      role: membership?.role ?? null, isSaasAdmin, loading, signOut,
     }}>
       {children}
     </AuthContext.Provider>

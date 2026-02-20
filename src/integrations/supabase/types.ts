@@ -986,6 +986,24 @@ export type Database = {
           },
         ]
       }
+      saas_admins: {
+        Row: {
+          created_at: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       stage_moves: {
         Row: {
           ai_reason: string | null
@@ -1351,6 +1369,7 @@ export type Database = {
       }
       is_admin_or_manager: { Args: { _tenant_id: string }; Returns: boolean }
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
+      is_saas_admin: { Args: never; Returns: boolean }
     }
     Enums: {
       activity_type:
