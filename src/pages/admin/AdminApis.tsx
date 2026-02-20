@@ -52,14 +52,14 @@ export default function AdminApis() {
 
   // Global Key form
   const [gkOpen, setGkOpen] = useState(false);
-  const [gkForm, setGkForm] = useState({ provider: 'openai', label: '', api_key: '' });
+  const [gkForm, setGkForm] = useState({ provider: 'openai', label: '', api_key: '', base_url: '' });
   const [gkSaving, setGkSaving] = useState(false);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
   // Edit Global Key
   const [editGkOpen, setEditGkOpen] = useState(false);
   const [editGkId, setEditGkId] = useState<string | null>(null);
-  const [editGkForm, setEditGkForm] = useState({ provider: 'openai', label: '', api_key: '' });
+  const [editGkForm, setEditGkForm] = useState({ provider: 'openai', label: '', api_key: '', base_url: '' });
   const [editGkSaving, setEditGkSaving] = useState(false);
 
   // WhatsApp form
@@ -96,15 +96,19 @@ export default function AdminApis() {
   const handleCreateGlobalKey = async () => {
     if (!gkForm.label.trim() || !gkForm.api_key.trim()) return;
     setGkSaving(true);
-    const { error } = await supabase.from('global_api_keys').insert({
+    const insertData: any = {
       provider: gkForm.provider,
       label: gkForm.label,
       api_key_encrypted: gkForm.api_key,
-    } as any);
+    };
+    if (gkForm.provider === 'uazapi' && gkForm.base_url.trim()) {
+      insertData.metadata = { base_url: gkForm.base_url.trim().replace(/\/+$/, '') };
+    }
+    const { error } = await supabase.from('global_api_keys').insert(insertData as any);
     if (error) { toast.error(error.message); } else {
       toast.success('Chave API global criada!');
       setGkOpen(false);
-      setGkForm({ provider: 'openai', label: '', api_key: '' });
+      setGkForm({ provider: 'openai', label: '', api_key: '', base_url: '' });
       load();
     }
     setGkSaving(false);
@@ -124,7 +128,7 @@ export default function AdminApis() {
 
   const openEditGk = (k: GlobalApiKey) => {
     setEditGkId(k.id);
-    setEditGkForm({ provider: k.provider, label: k.label, api_key: '' });
+    setEditGkForm({ provider: k.provider, label: k.label, api_key: '', base_url: (k as any).metadata?.base_url || '' });
     setEditGkOpen(true);
   };
 
@@ -133,6 +137,9 @@ export default function AdminApis() {
     setEditGkSaving(true);
     const updates: any = { provider: editGkForm.provider, label: editGkForm.label };
     if (editGkForm.api_key.trim()) updates.api_key_encrypted = editGkForm.api_key;
+    if (editGkForm.provider === 'uazapi') {
+      updates.metadata = { base_url: editGkForm.base_url.trim().replace(/\/+$/, '') };
+    }
     const { error } = await supabase.from('global_api_keys').update(updates).eq('id', editGkId);
     if (error) { toast.error(error.message); } else {
       toast.success('Chave atualizada!');
@@ -242,6 +249,7 @@ export default function AdminApis() {
                         <SelectItem value="openai">OpenAI</SelectItem>
                         <SelectItem value="anthropic">Anthropic</SelectItem>
                         <SelectItem value="google">Google</SelectItem>
+                        <SelectItem value="uazapi">UAZAPI (WhatsApp)</SelectItem>
                         <SelectItem value="other">Outro</SelectItem>
                       </SelectContent>
                     </Select>
@@ -251,9 +259,15 @@ export default function AdminApis() {
                     <Input className="rounded-xl" value={gkForm.label} onChange={e => setGkForm(f => ({ ...f, label: e.target.value }))} placeholder="Ex: OpenAI Produção" />
                   </div>
                   <div className="space-y-1">
-                    <Label>API Key</Label>
-                    <Input className="rounded-xl" type="password" value={gkForm.api_key} onChange={e => setGkForm(f => ({ ...f, api_key: e.target.value }))} placeholder="sk-..." />
+                    <Label>{gkForm.provider === 'uazapi' ? 'Admin Token' : 'API Key'}</Label>
+                    <Input className="rounded-xl" type="password" value={gkForm.api_key} onChange={e => setGkForm(f => ({ ...f, api_key: e.target.value }))} placeholder={gkForm.provider === 'uazapi' ? 'admin-token...' : 'sk-...'} />
                   </div>
+                  {gkForm.provider === 'uazapi' && (
+                    <div className="space-y-1">
+                      <Label>URL Base do Servidor UAZAPI</Label>
+                      <Input className="rounded-xl" value={gkForm.base_url} onChange={e => setGkForm(f => ({ ...f, base_url: e.target.value }))} placeholder="https://seuservidor.uazapi.com" />
+                    </div>
+                  )}
                   <Button onClick={handleCreateGlobalKey} disabled={gkSaving || !gkForm.label || !gkForm.api_key} className="w-full rounded-xl gradient-primary text-white border-0">
                     {gkSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Salvar Chave
                   </Button>
@@ -315,6 +329,7 @@ export default function AdminApis() {
                       <SelectItem value="openai">OpenAI</SelectItem>
                       <SelectItem value="anthropic">Anthropic</SelectItem>
                       <SelectItem value="google">Google</SelectItem>
+                      <SelectItem value="uazapi">UAZAPI (WhatsApp)</SelectItem>
                       <SelectItem value="other">Outro</SelectItem>
                     </SelectContent>
                   </Select>
@@ -327,6 +342,12 @@ export default function AdminApis() {
                   <Label>Nova API Key (deixe vazio para manter a atual)</Label>
                   <Input className="rounded-xl" type="password" value={editGkForm.api_key} onChange={e => setEditGkForm(f => ({ ...f, api_key: e.target.value }))} placeholder="sk-..." />
                 </div>
+                {editGkForm.provider === 'uazapi' && (
+                  <div className="space-y-1">
+                    <Label>URL Base do Servidor UAZAPI</Label>
+                    <Input className="rounded-xl" value={editGkForm.base_url} onChange={e => setEditGkForm(f => ({ ...f, base_url: e.target.value }))} placeholder="https://seuservidor.uazapi.com" />
+                  </div>
+                )}
                 <Button onClick={handleEditGlobalKey} disabled={editGkSaving || !editGkForm.label} className="w-full rounded-xl gradient-primary text-white border-0">
                   {editGkSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Salvar Alterações
                 </Button>
