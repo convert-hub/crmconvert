@@ -21,13 +21,12 @@ export default function Onboarding() {
     setLoading(true);
 
     const slug = tenantName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const tenantId = crypto.randomUUID();
 
-    // Create tenant
-    const { data: tenant, error: tErr } = await supabase
+    // Create tenant (no .select() — SELECT policy requires membership which doesn't exist yet)
+    const { error: tErr } = await supabase
       .from('tenants')
-      .insert({ name: tenantName, slug })
-      .select()
-      .single();
+      .insert({ id: tenantId, name: tenantName, slug });
 
     if (tErr) {
       toast.error('Erro ao criar empresa: ' + tErr.message);
@@ -38,7 +37,7 @@ export default function Onboarding() {
     // Create admin membership
     const { error: mErr } = await supabase
       .from('tenant_memberships')
-      .insert({ tenant_id: tenant.id, user_id: user.id, role: 'admin' });
+      .insert({ tenant_id: tenantId, user_id: user.id, role: 'admin' });
 
     if (mErr) {
       toast.error('Erro ao criar membership: ' + mErr.message);
@@ -46,14 +45,13 @@ export default function Onboarding() {
       return;
     }
 
-    // Create default pipeline
-    const { data: pipeline } = await supabase
+    // Create default pipeline (now user is a member, so .select() works)
+    const pipelineId = crypto.randomUUID();
+    const { error: pErr } = await supabase
       .from('pipelines')
-      .insert({ tenant_id: tenant.id, name: 'Pipeline Principal', is_default: true, position: 0 })
-      .select()
-      .single();
+      .insert({ id: pipelineId, tenant_id: tenantId, name: 'Pipeline Principal', is_default: true, position: 0 });
 
-    if (pipeline) {
+    if (!pErr) {
       const stages = [
         { name: 'Novo Lead', position: 0, color: '#6366f1' },
         { name: 'Contato Feito', position: 1, color: '#8b5cf6' },
@@ -64,7 +62,7 @@ export default function Onboarding() {
         { name: 'Perdido', position: 6, color: '#94a3b8', is_lost: true },
       ];
       await supabase.from('stages').insert(
-        stages.map(s => ({ ...s, tenant_id: tenant.id, pipeline_id: pipeline.id }))
+        stages.map(s => ({ ...s, tenant_id: tenantId, pipeline_id: pipelineId }))
       );
     }
 
