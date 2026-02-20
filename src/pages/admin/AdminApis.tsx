@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { Plus, Loader2, Trash2, Plug, MessageCircle, Brain, Key, Eye, EyeOff, Edit2 } from 'lucide-react';
+import { Plus, Loader2, Trash2, Brain, Key, Eye, EyeOff, Edit2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 
@@ -232,14 +232,13 @@ export default function AdminApis() {
     <div className="p-8 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground">APIs & Integrações</h1>
-        <p className="text-sm text-muted-foreground mt-1">Gerencie chaves globais, agentes de IA por empresa e integrações WhatsApp</p>
+        <p className="text-sm text-muted-foreground mt-1">Gerencie chaves globais e agentes de IA por empresa</p>
       </div>
 
       <Tabs defaultValue="global-keys" className="w-full">
         <TabsList className="rounded-xl bg-muted">
           <TabsTrigger value="global-keys" className="rounded-lg"><Key className="h-4 w-4 mr-2" />Chaves Globais</TabsTrigger>
           <TabsTrigger value="ai-agents" className="rounded-lg"><Brain className="h-4 w-4 mr-2" />Agentes IA</TabsTrigger>
-          <TabsTrigger value="whatsapp" className="rounded-lg"><MessageCircle className="h-4 w-4 mr-2" />WhatsApp</TabsTrigger>
         </TabsList>
 
         {/* ── Global API Keys ── */}
@@ -449,73 +448,6 @@ export default function AdminApis() {
                     </p>
                   </div>
                   <Button variant="ghost" size="icon" className="rounded-xl text-destructive" onClick={() => handleDeleteAi(a.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ── WhatsApp ── */}
-        <TabsContent value="whatsapp" className="mt-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Instâncias WhatsApp por empresa. Usam a chave global UAZAPI automaticamente.</p>
-            <Dialog open={waOpen} onOpenChange={setWaOpen}>
-              <DialogTrigger asChild>
-                <Button className="rounded-xl gradient-primary text-white border-0" disabled={!globalKeys.some(k => k.provider === 'uazapi' && k.is_active)}>
-                  <Plus className="h-4 w-4 mr-2" />Conectar Empresa
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="rounded-2xl">
-                <DialogHeader><DialogTitle>Conectar WhatsApp a uma Empresa</DialogTitle></DialogHeader>
-                <p className="text-sm text-muted-foreground">Selecione a empresa e um nome para a instância. A chave global UAZAPI será usada automaticamente.</p>
-                <div className="space-y-3 pt-2">
-                  <div className="space-y-1">
-                    <Label>Empresa</Label>
-                    <Select value={waForm.tenant_id} onValueChange={v => setWaForm(f => ({ ...f, tenant_id: v }))}>
-                      <SelectTrigger className="rounded-xl"><SelectValue placeholder="Selecione a empresa..." /></SelectTrigger>
-                      <SelectContent>{tenants.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Nome da Instância (opcional)</Label>
-                    <Input className="rounded-xl" value={waForm.instance_name} onChange={e => setWaForm(f => ({ ...f, instance_name: e.target.value }))} placeholder="Ex: principal (gerado automaticamente se vazio)" />
-                  </div>
-                  <Button onClick={handleCreateWhatsAppViaProxy} disabled={waSaving || !waForm.tenant_id} className="w-full rounded-xl gradient-primary text-white border-0">
-                    {waSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Criar Instância
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          {!globalKeys.some(k => k.provider === 'uazapi' && k.is_active) && (
-            <div className="rounded-xl border border-dashed border-amber-500/50 bg-amber-500/5 p-4 text-sm text-amber-600">
-              ⚠️ Cadastre uma chave global com provider "UAZAPI" na aba "Chaves Globais" antes de conectar empresas.
-            </div>
-          )}
-
-          {whatsappInstances.length === 0 ? (
-            <div className="glass-card rounded-2xl p-12 text-center">
-              <Plug className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <p className="text-muted-foreground">Nenhuma instância configurada</p>
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {whatsappInstances.map(w => (
-                <div key={w.id} className="glass-card rounded-2xl p-4 flex items-center gap-4 hover-lift">
-                  <div className="h-10 w-10 rounded-xl bg-success/10 text-success flex items-center justify-center">
-                    <MessageCircle className="h-5 w-5" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-foreground text-sm">{w.instance_name}</p>
-                      <Badge variant={w.is_active ? 'default' : 'secondary'} className="text-[10px]">{w.is_active ? 'Ativo' : 'Inativo'}</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">{getTenantName(w.tenant_id)} · {w.phone_number ?? 'Sem telefone'}</p>
-                  </div>
-                  <Button variant="ghost" size="icon" className="rounded-xl text-destructive" onClick={() => handleDeleteWa(w.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
