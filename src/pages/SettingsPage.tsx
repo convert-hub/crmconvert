@@ -56,8 +56,10 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
       else if (state === 'connected') { setWaStatus('connected'); setPolling(false); }
       else if (state === 'connecting' || data.qrcode) { setWaStatus('connecting'); }
       else { setWaStatus('disconnected'); }
-    } catch {
+    } catch (e: any) {
+      console.warn('WhatsApp status check failed:', e?.message);
       setWaStatus('error');
+      setPolling(false);
     }
   }, [tenantId, callProxy]);
 
