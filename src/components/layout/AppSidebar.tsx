@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Building2, ChevronDown
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Building2, ChevronDown, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,7 +24,7 @@ const adminItems = [
 ];
 
 export default function AppSidebar() {
-  const { tenant, role, profile, signOut } = useAuth();
+  const { tenant, role, profile, signOut, isSaasAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -101,6 +101,19 @@ export default function AppSidebar() {
           </>
         )}
       </nav>
+
+      {/* SaaS Admin Link */}
+      {isSaasAdmin && (
+        <div className="px-3 pb-1">
+          <button
+            onClick={() => navigate('/admin')}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground transition-all border border-dashed border-sidebar-border"
+          >
+            <Shield className="h-[18px] w-[18px]" />
+            Painel SaaS Admin
+          </button>
+        </div>
+      )}
 
       {/* User */}
       <div className="p-3">

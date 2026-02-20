@@ -7,7 +7,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import AppLayout from "@/components/layout/AppLayout";
 import Login from "@/pages/Login";
-import Onboarding from "@/pages/Onboarding";
+import WaitingApproval from "@/pages/WaitingApproval";
 import DashboardPage from "@/pages/DashboardPage";
 import PipelinePage from "@/pages/PipelinePage";
 import ContactsPage from "@/pages/ContactsPage";
@@ -18,26 +18,43 @@ import AutomationsPage from "@/pages/AutomationsPage";
 import PromptStudioPage from "@/pages/PromptStudioPage";
 import ReportsPage from "@/pages/ReportsPage";
 import CompaniesPage from "@/pages/CompaniesPage";
+import AdminLayout from "@/pages/admin/AdminLayout";
+import AdminDashboard from "@/pages/admin/AdminDashboard";
+import AdminTenants from "@/pages/admin/AdminTenants";
+import AdminUsers from "@/pages/admin/AdminUsers";
+import AdminApis from "@/pages/admin/AdminApis";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
 
 function AppRoutes() {
-  const { session, membership, loading } = useAuth();
+  const { session, membership, isSaasAdmin, loading } = useAuth();
 
   if (loading) return null;
 
   return (
     <Routes>
-      <Route path="/login" element={session ? <Navigate to="/pipeline" /> : <Login />} />
-      <Route path="/onboarding" element={
-        <ProtectedRoute>
-          <Onboarding />
-        </ProtectedRoute>
+      <Route path="/login" element={session ? <Navigate to={isSaasAdmin && !membership ? "/admin" : "/pipeline"} /> : <Login />} />
+      <Route path="/waiting" element={
+        <ProtectedRoute><WaitingApproval /></ProtectedRoute>
       } />
+
+      {/* SaaS Admin routes */}
+      <Route path="/admin" element={
+        <ProtectedRoute>
+          {isSaasAdmin ? <AdminLayout /> : <Navigate to="/pipeline" />}
+        </ProtectedRoute>
+      }>
+        <Route index element={<AdminDashboard />} />
+        <Route path="tenants" element={<AdminTenants />} />
+        <Route path="users" element={<AdminUsers />} />
+        <Route path="apis" element={<AdminApis />} />
+      </Route>
+
+      {/* CRM routes */}
       <Route path="/" element={
         <ProtectedRoute>
-          {membership ? <AppLayout /> : <Navigate to="/onboarding" />}
+          {membership ? <AppLayout /> : (isSaasAdmin ? <Navigate to="/admin" /> : <Navigate to="/waiting" />)}
         </ProtectedRoute>
       }>
         <Route index element={<Navigate to="/pipeline" replace />} />
