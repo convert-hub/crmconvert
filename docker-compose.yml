@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Frontend app
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+    restart: unless-stopped
+
+  # Background job worker
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - POLL_INTERVAL=2000
+    restart: unless-stopped
+    depends_on:
+      - app
+
+# Note: Supabase self-hosted should be deployed separately
+# following https://supabase.com/docs/guides/self-hosting/docker
+# Use the same SUPABASE_URL and keys in your .env
