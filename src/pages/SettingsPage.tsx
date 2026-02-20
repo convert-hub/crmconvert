@@ -72,10 +72,18 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   const handleCreateInstance = async () => {
     setCreating(true);
     try {
-      await callProxy('create_instance');
-      toast.success('Instância criada! Escaneie o QR code.');
-      setPolling(true);
-      await checkStatus();
+      const data = await callProxy('create_instance');
+      if (data.qrcode) {
+        setQrCode(data.qrcode);
+        setWaStatus('connecting');
+        setPolling(true);
+        toast.success('Instância criada! Escaneie o QR code.');
+      } else {
+        toast.success('Instância criada! Clique em "Obter QR Code" para conectar.');
+        setWaStatus('connecting');
+        setPolling(true);
+      }
+      setInstanceName(data.instance_name || null);
     } catch (e: any) { toast.error(e.message); }
     setCreating(false);
   };
