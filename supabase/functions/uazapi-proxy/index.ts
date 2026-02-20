@@ -181,9 +181,32 @@ serve(async (req) => {
         const statusData = await statusRes.json();
         console.log('UAZAPI status response:', JSON.stringify(statusData));
 
-        const qrcode = statusData.qrcode || statusData.base64 || statusData.urlcode || statusData.pairingCode || null;
-        const state = statusData.state || statusData.status || (qrcode ? 'connecting' : 'disconnected');
+        let qrcode = statusData.qrcode || statusData.base64 || statusData.urlcode || statusData.pairingCode || null;
+        let state = statusData.instance?.status || statusData.state || statusData.status || 'disconnected';
         const phoneNumber = statusData.instance?.phone || statusData.phone || instance.phone_number;
+
+        // If disconnected and no QR, call POST /instance/connect to initiate connection and get QR
+        if ((state === 'disconnected' || (!qrcode && state !== 'connected')) && action === 'get_qr') {
+          console.log('Instance disconnected, calling POST /instance/connect to generate QR...');
+          try {
+            const connectRes = await fetch(`${apiBase}/instance/connect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'token': instToken },
+              body: JSON.stringify({}),
+            });
+            if (connectRes.ok) {
+              const connectData = await connectRes.json();
+              console.log('UAZAPI connect response:', JSON.stringify(connectData));
+              qrcode = connectData.qrcode || connectData.base64 || connectData.urlcode || connectData.pairingCode || qrcode;
+              if (qrcode) state = 'connecting';
+            } else {
+              const errText = await connectRes.text();
+              console.error('UAZAPI connect error:', connectRes.status, errText);
+            }
+          } catch (e) {
+            console.error('Connect call failed:', e);
+          }
+        }
 
         if (state === 'connected' && phoneNumber) {
           await supabaseAdmin.from('whatsapp_instances').update({ phone_number: phoneNumber }).eq('id', instance.id);
