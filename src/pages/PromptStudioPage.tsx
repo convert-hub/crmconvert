@@ -21,15 +21,9 @@ const TASK_TYPES = [
 ];
 
 interface PromptTemplate {
-  id: string;
-  name: string;
-  task_type: string;
-  content: string;
-  variables: string[];
-  forbidden_terms: string[];
-  version: number;
-  is_active: boolean;
-  created_at: string;
+  id: string; name: string; task_type: string; content: string;
+  variables: string[]; forbidden_terms: string[]; version: number;
+  is_active: boolean; created_at: string;
 }
 
 export default function PromptStudioPage() {
@@ -37,7 +31,6 @@ export default function PromptStudioPage() {
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-
   const [name, setName] = useState('');
   const [taskType, setTaskType] = useState('message_generation');
   const [content, setContent] = useState('');
@@ -50,22 +43,14 @@ export default function PromptStudioPage() {
     supabase.from('prompt_templates').select('*').eq('tenant_id', tenant.id).order('task_type').order('version', { ascending: false })
       .then(({ data }) => setTemplates((data as unknown as PromptTemplate[]) ?? []));
   };
-
   useEffect(() => { load(); }, [tenant]);
 
-  const resetForm = () => {
-    setName(''); setTaskType('message_generation'); setContent(''); setVariables(''); setForbiddenTerms(''); setIsActive(true); setEditId(null);
-  };
+  const resetForm = () => { setName(''); setTaskType('message_generation'); setContent(''); setVariables(''); setForbiddenTerms(''); setIsActive(true); setEditId(null); };
 
   const openEdit = (t: PromptTemplate) => {
-    setEditId(t.id);
-    setName(t.name);
-    setTaskType(t.task_type);
-    setContent(t.content);
-    setVariables(t.variables?.join(', ') ?? '');
-    setForbiddenTerms(t.forbidden_terms?.join(', ') ?? '');
-    setIsActive(t.is_active);
-    setDialogOpen(true);
+    setEditId(t.id); setName(t.name); setTaskType(t.task_type); setContent(t.content);
+    setVariables(t.variables?.join(', ') ?? ''); setForbiddenTerms(t.forbidden_terms?.join(', ') ?? '');
+    setIsActive(t.is_active); setDialogOpen(true);
   };
 
   const handleSave = async () => {
@@ -89,77 +74,49 @@ export default function PromptStudioPage() {
       });
       if (error) toast.error(error.message); else toast.success('Prompt criado');
     }
-    setDialogOpen(false);
-    resetForm();
-    load();
+    setDialogOpen(false); resetForm(); load();
   };
 
-  const handleDelete = async (id: string) => {
-    await supabase.from('prompt_templates').delete().eq('id', id);
-    toast.success('Prompt removido');
-    load();
-  };
+  const handleDelete = async (id: string) => { await supabase.from('prompt_templates').delete().eq('id', id); toast.success('Prompt removido'); load(); };
 
   const handleDuplicate = async (t: PromptTemplate) => {
     if (!tenant) return;
     await supabase.from('prompt_templates').insert({
       tenant_id: tenant.id, name: `${t.name} (cópia)`, task_type: t.task_type as any,
-      content: t.content, variables: t.variables, forbidden_terms: t.forbidden_terms,
-      version: 1, is_active: false,
+      content: t.content, variables: t.variables, forbidden_terms: t.forbidden_terms, version: 1, is_active: false,
     });
-    toast.success('Prompt duplicado');
-    load();
+    toast.success('Prompt duplicado'); load();
   };
 
   return (
-    <div className="p-6 max-w-5xl space-y-6">
+    <div className="p-6 max-w-5xl space-y-6 bg-background">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Prompt Studio</h1>
-          <p className="text-sm text-muted-foreground mt-1">Gerencie prompts de IA com versionamento por tarefa</p>
+          <h1 className="text-xl font-bold text-foreground">Prompt Studio</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Gerencie prompts de IA com versionamento por tarefa</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={v => { if (!v) resetForm(); setDialogOpen(v); }}>
-          <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-1" />Novo Prompt</Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogTrigger asChild><Button className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Novo Prompt</Button></DialogTrigger>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl">
             <DialogHeader><DialogTitle>{editId ? 'Nova Versão' : 'Novo Prompt'}</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Nome</Label>
-                  <Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Mensagem de boas-vindas" />
-                </div>
+                <div className="space-y-2"><Label>Nome</Label><Input value={name} onChange={e => setName(e.target.value)} className="rounded-xl" /></div>
                 <div className="space-y-2">
                   <Label>Tipo de Tarefa</Label>
                   <Select value={taskType} onValueChange={setTaskType}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {TASK_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
-                    </SelectContent>
+                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                    <SelectContent>{TASK_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label>Conteúdo do Prompt</Label>
-                <Textarea value={content} onChange={e => setContent(e.target.value)} className="font-mono text-sm min-h-[200px]"
-                  placeholder="Você é um assistente de vendas. Use as variáveis: {{contact_name}}, {{stage_name}}..." />
-              </div>
+              <div className="space-y-2"><Label>Conteúdo do Prompt</Label><Textarea value={content} onChange={e => setContent(e.target.value)} className="font-mono text-sm min-h-[200px] rounded-xl" placeholder="Você é um assistente..." /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Variáveis (separadas por vírgula)</Label>
-                  <Input value={variables} onChange={e => setVariables(e.target.value)} placeholder="contact_name, stage_name, utm_source" />
-                </div>
-                <div className="space-y-2">
-                  <Label>Termos proibidos (separados por vírgula)</Label>
-                  <Input value={forbiddenTerms} onChange={e => setForbiddenTerms(e.target.value)} placeholder="garantia, gratuito, desconto" />
-                </div>
+                <div className="space-y-2"><Label>Variáveis</Label><Input value={variables} onChange={e => setVariables(e.target.value)} placeholder="contact_name, stage_name" className="rounded-xl" /></div>
+                <div className="space-y-2"><Label>Termos proibidos</Label><Input value={forbiddenTerms} onChange={e => setForbiddenTerms(e.target.value)} placeholder="garantia, gratuito" className="rounded-xl" /></div>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={isActive} onCheckedChange={setIsActive} />
-                <Label>Ativo</Label>
-              </div>
-              <Button className="w-full" onClick={handleSave}>Salvar</Button>
+              <div className="flex items-center gap-2"><Switch checked={isActive} onCheckedChange={setIsActive} /><Label>Ativo</Label></div>
+              <Button className="w-full rounded-xl" onClick={handleSave}>Salvar</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -167,32 +124,37 @@ export default function PromptStudioPage() {
 
       <div className="space-y-3">
         {templates.map(t => (
-          <Card key={t.id}>
-            <CardContent className="flex items-center justify-between py-4">
+          <Card key={t.id} className="glass-card rounded-2xl hover-lift">
+            <CardContent className="flex items-center justify-between py-4 px-5">
               <div className="flex items-center gap-4">
-                <Brain className="h-5 w-5 text-primary" />
+                <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <Brain className="h-5 w-5 text-primary" />
+                </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-medium">{t.name}</p>
-                    <Badge variant="outline" className="text-[10px]">v{t.version}</Badge>
-                    {!t.is_active && <Badge variant="secondary" className="text-[10px]">Inativo</Badge>}
+                    <p className="font-semibold text-foreground">{t.name}</p>
+                    <Badge variant="outline" className="text-[10px] rounded-full">v{t.version}</Badge>
+                    {!t.is_active && <Badge variant="secondary" className="text-[10px] rounded-full">Inativo</Badge>}
                   </div>
                   <div className="flex items-center gap-2 mt-1">
-                    <Badge className="text-xs">{TASK_TYPES.find(x => x.value === t.task_type)?.label ?? t.task_type}</Badge>
+                    <Badge className="text-xs rounded-full">{TASK_TYPES.find(x => x.value === t.task_type)?.label ?? t.task_type}</Badge>
                     {t.forbidden_terms?.length > 0 && <span className="text-xs text-muted-foreground">{t.forbidden_terms.length} termos proibidos</span>}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={() => handleDuplicate(t)}><Copy className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" onClick={() => openEdit(t)}><Edit className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" onClick={() => handleDelete(t.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => handleDuplicate(t)}><Copy className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => openEdit(t)}><Edit className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => handleDelete(t.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
               </div>
             </CardContent>
           </Card>
         ))}
         {templates.length === 0 && (
-          <p className="text-center text-muted-foreground py-12">Nenhum prompt configurado. Crie o primeiro para começar.</p>
+          <div className="text-center py-16">
+            <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4"><Brain className="h-8 w-8 text-primary" /></div>
+            <p className="text-muted-foreground font-medium">Nenhum prompt configurado</p>
+          </div>
         )}
       </div>
     </div>

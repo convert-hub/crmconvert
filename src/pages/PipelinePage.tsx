@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Pipeline, Stage, Opportunity, Contact } from '@/types/crm';
@@ -6,12 +6,97 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  DragEndEvent, DragOverEvent, DragStartEvent, DragOverlay,
+} from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useDroppable } from '@dnd-kit/core';
+
+function DroppableColumn({ stage, children, count, total, onAdd }: {
+  stage: Stage; children: React.ReactNode; count: number; total: number;
+  onAdd: () => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `stage-${stage.id}` });
+  return (
+    <div className="flex w-72 flex-shrink-0 flex-col rounded-2xl bg-card/60 backdrop-blur-sm border border-border/50 transition-all duration-200"
+      style={{ boxShadow: isOver ? `0 0 0 2px ${stage.color}, 0 4px 20px ${stage.color}30` : undefined }}>
+      <div className="flex items-center justify-between p-3.5 border-b border-border/50">
+        <div className="flex items-center gap-2.5">
+          <div className="h-3 w-3 rounded-full shadow-sm" style={{ backgroundColor: stage.color }} />
+          <span className="text-sm font-semibold text-foreground">{stage.name}</span>
+          <Badge variant="secondary" className="text-[10px] h-5 px-1.5 rounded-full bg-muted">{count}</Badge>
+        </div>
+        <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground" onClick={onAdd}>
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+      {total > 0 && (
+        <div className="px-3.5 py-2 text-xs font-medium text-muted-foreground">
+          R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+        </div>
+      )}
+      <div ref={setNodeRef} className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2 min-h-[100px]">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SortableOppCard({ opp, onClick }: { opp: Opportunity & { contact?: Contact }; onClick: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <Card ref={setNodeRef} style={style}
+      className="cursor-pointer p-3.5 hover-lift border border-border/50 bg-card rounded-xl group"
+      onClick={onClick}>
+      <div className="space-y-2.5">
+        <div className="flex items-start gap-2">
+          <div {...attributes} {...listeners} className="mt-0.5 opacity-0 group-hover:opacity-60 transition-opacity cursor-grab">
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+          </div>
+          <p className="text-sm font-medium leading-tight flex-1 text-foreground">{opp.title}</p>
+        </div>
+        {opp.contact && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
+            <User className="h-3 w-3" />
+            <span className="truncate">{opp.contact.name}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between pl-5">
+          {(opp.value ?? 0) > 0 && (
+            <div className="flex items-center gap-1 text-xs font-semibold text-success">
+              <DollarSign className="h-3 w-3" />
+              R$ {opp.value.toLocaleString('pt-BR')}
+            </div>
+          )}
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto">
+            <Clock className="h-3 w-3" />
+            {formatDistanceToNow(new Date(opp.created_at), { locale: ptBR, addSuffix: true })}
+          </div>
+        </div>
+        {opp.contact?.tags && opp.contact.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1 pl-5">
+            {opp.contact.tags.slice(0, 3).map(tag => (
+              <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0 rounded-full">{tag}</Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
 
 export default function PipelinePage() {
   const { tenant } = useAuth();
@@ -22,6 +107,9 @@ export default function PipelinePage() {
   const [selectedOpp, setSelectedOpp] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [createStageId, setCreateStageId] = useState<string>('');
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   useEffect(() => {
     if (!tenant) return;
@@ -36,154 +124,123 @@ export default function PipelinePage() {
       });
   }, [tenant]);
 
-  useEffect(() => {
+  const loadOpps = useCallback(() => {
     if (!selectedPipeline || !tenant) return;
-    // Load stages
-    supabase.from('stages').select('*').eq('pipeline_id', selectedPipeline).order('position')
-      .then(({ data }) => setStages((data as unknown as Stage[]) ?? []));
-    // Load opportunities with contact
     supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('position')
       .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
   }, [selectedPipeline, tenant]);
 
-  // Subscribe to realtime updates
+  useEffect(() => {
+    if (!selectedPipeline || !tenant) return;
+    supabase.from('stages').select('*').eq('pipeline_id', selectedPipeline).order('position')
+      .then(({ data }) => setStages((data as unknown as Stage[]) ?? []));
+    loadOpps();
+  }, [selectedPipeline, tenant, loadOpps]);
+
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
     const channel = supabase
       .channel('pipeline-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => {
-        // Reload opportunities
-        supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('position')
-          .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => loadOpps())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [selectedPipeline, tenant]);
+  }, [selectedPipeline, tenant, loadOpps]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
     const stage = stages.find(s => s.id === newStageId);
     const newStatus = stage?.is_won ? 'won' : stage?.is_lost ? 'lost' : 'open';
-    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
     setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any } : o));
+    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
+  };
+
+  const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string);
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveId(null);
+    const { active, over } = event;
+    if (!over) return;
+    const overId = over.id as string;
+    const activeOpp = opportunities.find(o => o.id === active.id);
+    if (!activeOpp) return;
+
+    // Dropped on a stage column
+    if (overId.startsWith('stage-')) {
+      const stageId = overId.replace('stage-', '');
+      if (stageId !== activeOpp.stage_id) {
+        moveOpportunity(activeOpp.id, stageId);
+      }
+    }
+    // Dropped on another opportunity
+    else {
+      const overOpp = opportunities.find(o => o.id === overId);
+      if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
+        moveOpportunity(activeOpp.id, overOpp.stage_id);
+      }
+    }
   };
 
   const oppsByStage = (stageId: string) => opportunities.filter(o => o.stage_id === stageId);
-
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + (o.value || 0), 0);
+  const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-background">
       {/* Header */}
-      <header className="flex items-center justify-between border-b px-6 py-4">
+      <header className="flex items-center justify-between px-6 py-5">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold">Pipeline</h1>
+          <h1 className="text-xl font-bold text-foreground">Pipeline</h1>
           {pipelines.length > 1 && (
             <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
-              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-[200px] rounded-xl"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
               </SelectContent>
             </Select>
           )}
         </div>
+        <div className="text-sm text-muted-foreground">
+          {opportunities.length} oportunidade{opportunities.length !== 1 ? 's' : ''} · R$ {opportunities.reduce((s, o) => s + (o.value || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+        </div>
       </header>
 
       {/* Kanban */}
-      <div className="flex-1 overflow-x-auto p-4">
-        <div className="flex gap-4 h-full min-w-max">
-          {stages.map(stage => (
-            <div key={stage.id} className="flex w-72 flex-col rounded-xl bg-muted/50">
-              {/* Stage header */}
-              <div className="flex items-center justify-between p-3 border-b">
-                <div className="flex items-center gap-2">
-                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: stage.color }} />
-                  <span className="text-sm font-semibold">{stage.name}</span>
-                  <Badge variant="secondary" className="text-xs">{oppsByStage(stage.id).length}</Badge>
-                </div>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {/* Stage total */}
-              {stageTotal(stage.id) > 0 && (
-                <div className="px-3 py-1.5 text-xs text-muted-foreground">
-                  R$ {stageTotal(stage.id).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                </div>
-              )}
-
-              {/* Cards */}
-              <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
-                {oppsByStage(stage.id).map(opp => (
-                  <Card
-                    key={opp.id}
-                    className="cursor-pointer p-3 hover:shadow-md transition-shadow border"
-                    onClick={() => setSelectedOpp(opp.id)}
-                  >
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium leading-tight">{opp.title}</p>
-                      {opp.contact && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <User className="h-3 w-3" />
-                          <span className="truncate">{opp.contact.name}</span>
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between">
-                        {opp.value > 0 && (
-                          <div className="flex items-center gap-1 text-xs font-medium text-success">
-                            <DollarSign className="h-3 w-3" />
-                            R$ {opp.value.toLocaleString('pt-BR')}
-                          </div>
-                        )}
-                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                          <Clock className="h-3 w-3" />
-                          {formatDistanceToNow(new Date(opp.created_at), { locale: ptBR, addSuffix: true })}
-                        </div>
-                      </div>
-                      {opp.contact?.tags && opp.contact.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {opp.contact.tags.slice(0, 3).map(tag => (
-                            <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0">{tag}</Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="flex-1 overflow-x-auto p-4 pt-0">
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <div className="flex gap-4 h-full min-w-max">
+            {stages.map(stage => (
+              <DroppableColumn key={stage.id} stage={stage} count={oppsByStage(stage.id).length}
+                total={stageTotal(stage.id)} onAdd={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
+                <SortableContext items={oppsByStage(stage.id).map(o => o.id)} strategy={verticalListSortingStrategy}>
+                  {oppsByStage(stage.id).map(opp => (
+                    <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)} />
+                  ))}
+                </SortableContext>
+              </DroppableColumn>
+            ))}
+          </div>
+          <DragOverlay>
+            {activeOpp && (
+              <Card className="p-3.5 border border-primary/30 bg-card rounded-xl shadow-xl w-72 rotate-2">
+                <p className="text-sm font-medium">{activeOpp.title}</p>
+                {activeOpp.contact && <p className="text-xs text-muted-foreground mt-1">{activeOpp.contact.name}</p>}
+              </Card>
+            )}
+          </DragOverlay>
+        </DndContext>
       </div>
 
-      {/* Opportunity Detail Drawer */}
+      {/* Detail Drawer */}
       <Sheet open={!!selectedOpp} onOpenChange={() => setSelectedOpp(null)}>
         <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>Detalhes da Oportunidade</SheetTitle>
-          </SheetHeader>
+          <SheetHeader><SheetTitle>Detalhes da Oportunidade</SheetTitle></SheetHeader>
           {selectedOpp && (
-            <OpportunityDetail
-              opportunityId={selectedOpp}
-              stages={stages}
-              onMoveStage={moveOpportunity}
-              onClose={() => setSelectedOpp(null)}
-            />
+            <OpportunityDetail opportunityId={selectedOpp} stages={stages} onMoveStage={moveOpportunity} onClose={() => setSelectedOpp(null)} />
           )}
         </SheetContent>
       </Sheet>
 
-      {/* Create Dialog */}
-      <CreateOpportunityDialog
-        open={showCreate}
-        onOpenChange={setShowCreate}
-        stageId={createStageId}
-        pipelineId={selectedPipeline}
-        onCreated={() => {
-          supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('position')
-            .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
-        }}
-      />
+      <CreateOpportunityDialog open={showCreate} onOpenChange={setShowCreate} stageId={createStageId}
+        pipelineId={selectedPipeline} onCreated={loadOpps} />
     </div>
   );
 }

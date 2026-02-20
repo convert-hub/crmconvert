@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,17 +23,11 @@ const TRIGGER_LABELS: Record<string, string> = {
   tag_added: 'Tag adicionada',
   tag_removed: 'Tag removida',
 };
-
 const TRIGGER_VALUES = Object.keys(TRIGGER_LABELS);
 
 interface Automation {
-  id: string;
-  name: string;
-  trigger_type: string;
-  conditions: Record<string, unknown>;
-  actions: unknown[];
-  is_active: boolean;
-  created_at: string;
+  id: string; name: string; trigger_type: string; conditions: Record<string, unknown>;
+  actions: unknown[]; is_active: boolean; created_at: string;
 }
 
 export default function AutomationsPage() {
@@ -41,8 +35,6 @@ export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-
-  // Form state
   const [name, setName] = useState('');
   const [triggerType, setTriggerType] = useState(TRIGGER_VALUES[0]);
   const [conditionsJson, setConditionsJson] = useState('{}');
@@ -53,19 +45,13 @@ export default function AutomationsPage() {
     supabase.from('automations').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false })
       .then(({ data }) => setAutomations((data as unknown as Automation[]) ?? []));
   };
-
   useEffect(() => { load(); }, [tenant]);
 
-  const resetForm = () => {
-    setName(''); setTriggerType(TRIGGER_VALUES[0]); setConditionsJson('{}'); setActionsJson('[]'); setEditId(null);
-  };
+  const resetForm = () => { setName(''); setTriggerType(TRIGGER_VALUES[0]); setConditionsJson('{}'); setActionsJson('[]'); setEditId(null); };
 
   const openEdit = (a: Automation) => {
-    setEditId(a.id);
-    setName(a.name);
-    setTriggerType(a.trigger_type);
-    setConditionsJson(JSON.stringify(a.conditions, null, 2));
-    setActionsJson(JSON.stringify(a.actions, null, 2));
+    setEditId(a.id); setName(a.name); setTriggerType(a.trigger_type);
+    setConditionsJson(JSON.stringify(a.conditions, null, 2)); setActionsJson(JSON.stringify(a.actions, null, 2));
     setDialogOpen(true);
   };
 
@@ -76,26 +62,13 @@ export default function AutomationsPage() {
     try { actions = JSON.parse(actionsJson); } catch { toast.error('JSON de ações inválido'); return; }
 
     if (editId) {
-      const { error } = await supabase.from('automations').update({
-        name,
-        trigger_type: triggerType as any,
-        conditions: conditions as any,
-        actions: actions as any,
-      }).eq('id', editId);
+      const { error } = await supabase.from('automations').update({ name, trigger_type: triggerType as any, conditions: conditions as any, actions: actions as any }).eq('id', editId);
       if (error) toast.error(error.message); else toast.success('Automação atualizada');
     } else {
-      const { error } = await supabase.from('automations').insert({
-        tenant_id: tenant.id,
-        name,
-        trigger_type: triggerType as any,
-        conditions: conditions as any,
-        actions: actions as any,
-      });
+      const { error } = await supabase.from('automations').insert({ tenant_id: tenant.id, name, trigger_type: triggerType as any, conditions: conditions as any, actions: actions as any });
       if (error) toast.error(error.message); else toast.success('Automação criada');
     }
-    setDialogOpen(false);
-    resetForm();
-    load();
+    setDialogOpen(false); resetForm(); load();
   };
 
   const toggleActive = async (id: string, active: boolean) => {
@@ -104,47 +77,34 @@ export default function AutomationsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    await supabase.from('automations').delete().eq('id', id);
-    toast.success('Automação removida');
-    load();
+    await supabase.from('automations').delete().eq('id', id); toast.success('Automação removida'); load();
   };
 
   return (
-    <div className="p-6 max-w-5xl space-y-6">
+    <div className="p-6 max-w-5xl space-y-6 bg-background">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Automações</h1>
-          <p className="text-sm text-muted-foreground mt-1">Motor de regras event-driven por tenant</p>
+          <h1 className="text-xl font-bold text-foreground">Automações</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Motor de regras event-driven por tenant</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={v => { if (!v) resetForm(); setDialogOpen(v); }}>
           <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-1" />Nova Automação</Button>
+            <Button className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Nova Automação</Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="sm:max-w-lg rounded-2xl">
             <DialogHeader><DialogTitle>{editId ? 'Editar' : 'Nova'} Automação</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
-              <div className="space-y-2">
-                <Label>Nome</Label>
-                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Follow-up automático" />
-              </div>
+              <div className="space-y-2"><Label>Nome</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Follow-up automático" className="rounded-xl" /></div>
               <div className="space-y-2">
                 <Label>Trigger</Label>
                 <Select value={triggerType} onValueChange={setTriggerType}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TRIGGER_VALUES.map(t => <SelectItem key={t} value={t}>{TRIGGER_LABELS[t]}</SelectItem>)}
-                  </SelectContent>
+                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectContent>{TRIGGER_VALUES.map(t => <SelectItem key={t} value={t}>{TRIGGER_LABELS[t]}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Condições (JSON)</Label>
-                <Textarea value={conditionsJson} onChange={e => setConditionsJson(e.target.value)} className="font-mono text-xs min-h-[80px]" />
-              </div>
-              <div className="space-y-2">
-                <Label>Ações (JSON array)</Label>
-                <Textarea value={actionsJson} onChange={e => setActionsJson(e.target.value)} className="font-mono text-xs min-h-[80px]" />
-              </div>
-              <Button className="w-full" onClick={handleSave}>Salvar</Button>
+              <div className="space-y-2"><Label>Condições (JSON)</Label><Textarea value={conditionsJson} onChange={e => setConditionsJson(e.target.value)} className="font-mono text-xs min-h-[80px] rounded-xl" /></div>
+              <div className="space-y-2"><Label>Ações (JSON array)</Label><Textarea value={actionsJson} onChange={e => setActionsJson(e.target.value)} className="font-mono text-xs min-h-[80px] rounded-xl" /></div>
+              <Button className="w-full rounded-xl" onClick={handleSave}>Salvar</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -152,28 +112,33 @@ export default function AutomationsPage() {
 
       <div className="space-y-3">
         {automations.map(a => (
-          <Card key={a.id}>
-            <CardContent className="flex items-center justify-between py-4">
+          <Card key={a.id} className="glass-card rounded-2xl hover-lift">
+            <CardContent className="flex items-center justify-between py-4 px-5">
               <div className="flex items-center gap-4">
-                <Zap className="h-5 w-5 text-warning" />
+                <div className="h-10 w-10 rounded-xl bg-warning/10 flex items-center justify-center">
+                  <Zap className="h-5 w-5 text-warning" />
+                </div>
                 <div>
-                  <p className="font-medium">{a.name}</p>
+                  <p className="font-semibold text-foreground">{a.name}</p>
                   <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="outline" className="text-xs">{TRIGGER_LABELS[a.trigger_type] ?? a.trigger_type}</Badge>
+                    <Badge variant="outline" className="text-xs rounded-full">{TRIGGER_LABELS[a.trigger_type] ?? a.trigger_type}</Badge>
                     <span className="text-xs text-muted-foreground">{format(new Date(a.created_at), 'dd/MM/yyyy')}</span>
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <Switch checked={a.is_active} onCheckedChange={v => toggleActive(a.id, v)} />
-                <Button variant="ghost" size="icon" onClick={() => openEdit(a)}><Edit className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" onClick={() => handleDelete(a.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => openEdit(a)}><Edit className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => handleDelete(a.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
               </div>
             </CardContent>
           </Card>
         ))}
         {automations.length === 0 && (
-          <p className="text-center text-muted-foreground py-12">Nenhuma automação configurada</p>
+          <div className="text-center py-16">
+            <div className="h-16 w-16 rounded-2xl bg-warning/10 flex items-center justify-center mx-auto mb-4"><Zap className="h-8 w-8 text-warning" /></div>
+            <p className="text-muted-foreground font-medium">Nenhuma automação configurada</p>
+          </div>
         )}
       </div>
     </div>
