@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Building2
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Building2, ChevronDown
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -33,74 +33,86 @@ export default function AppSidebar() {
   );
 
   return (
-    <aside className="flex h-screen w-64 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
+    <aside className="flex h-screen w-64 flex-col bg-sidebar text-sidebar-foreground">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-sidebar-border">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground font-bold text-sm">
+      <div className="flex items-center gap-3 px-5 py-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-white font-bold text-sm shadow-lg shadow-primary/30">
           CR
         </div>
-        <div className="flex flex-col">
-          <span className="text-sm font-semibold truncate max-w-[160px]">
+        <div className="flex flex-col flex-1 min-w-0">
+          <span className="text-sm font-bold truncate">
             {tenant?.name ?? 'CRM'}
           </span>
-          <span className="text-xs text-sidebar-muted capitalize">{role ?? ''}</span>
+          <span className="text-[11px] text-sidebar-muted">Workspace</span>
         </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-4 space-y-1">
-        {navItems.map(item => (
-          <button
-            key={item.path}
-            onClick={() => navigate(item.path)}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-              location.pathname === item.path
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-muted hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-            )}
-          >
-            <item.icon className="h-4 w-4" />
-            {item.label}
-          </button>
-        ))}
+      <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-2 space-y-1">
+        <div className="px-3 pb-2">
+          <span className="text-[10px] uppercase tracking-widest text-sidebar-muted font-semibold">
+            Geral
+          </span>
+        </div>
+        {navItems.map(item => {
+          const isActive = location.pathname === item.path;
+          return (
+            <button
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                isActive
+                  ? "gradient-primary text-white shadow-md shadow-primary/25"
+                  : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              )}
+            >
+              <item.icon className="h-[18px] w-[18px]" />
+              {item.label}
+            </button>
+          );
+        })}
 
         {filteredAdminItems.length > 0 && (
           <>
-            <div className="pt-4 pb-2 px-3">
-              <span className="text-[10px] uppercase tracking-wider text-sidebar-muted font-semibold">
+            <div className="pt-6 pb-2 px-3">
+              <span className="text-[10px] uppercase tracking-widest text-sidebar-muted font-semibold">
                 Administração
               </span>
             </div>
-            {filteredAdminItems.map(item => (
-              <button
-                key={item.path}
-                onClick={() => navigate(item.path)}
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  location.pathname === item.path
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-muted hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                )}
-              >
-                <item.icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            ))}
+            {filteredAdminItems.map(item => {
+              const isActive = location.pathname === item.path;
+              return (
+                <button
+                  key={item.path}
+                  onClick={() => navigate(item.path)}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                    isActive
+                      ? "gradient-primary text-white shadow-md shadow-primary/25"
+                      : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  )}
+                >
+                  <item.icon className="h-[18px] w-[18px]" />
+                  {item.label}
+                </button>
+              );
+            })}
           </>
         )}
       </nav>
 
       {/* User */}
-      <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-3 rounded-lg px-3 py-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-accent-foreground text-xs font-semibold">
+      <div className="p-3">
+        <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent px-3 py-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full gradient-warm text-white text-xs font-bold shadow-sm">
             {profile?.full_name?.[0]?.toUpperCase() ?? 'U'}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{profile?.full_name ?? 'Usuário'}</p>
+            <p className="text-sm font-semibold truncate">{profile?.full_name ?? 'Usuário'}</p>
+            <p className="text-[11px] text-sidebar-muted capitalize">{role ?? ''}</p>
           </div>
-          <button onClick={signOut} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors">
+          <button onClick={signOut} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors p-1 rounded-lg hover:bg-sidebar-accent">
             <LogOut className="h-4 w-4" />
           </button>
         </div>
