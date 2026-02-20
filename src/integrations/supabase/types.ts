@@ -110,6 +110,7 @@ export type Database = {
           created_at: string
           daily_limit: number | null
           daily_usage: number | null
+          global_api_key_id: string | null
           id: string
           model: string
           monthly_limit: number | null
@@ -125,6 +126,7 @@ export type Database = {
           created_at?: string
           daily_limit?: number | null
           daily_usage?: number | null
+          global_api_key_id?: string | null
           id?: string
           model?: string
           monthly_limit?: number | null
@@ -140,6 +142,7 @@ export type Database = {
           created_at?: string
           daily_limit?: number | null
           daily_usage?: number | null
+          global_api_key_id?: string | null
           id?: string
           model?: string
           monthly_limit?: number | null
@@ -151,6 +154,13 @@ export type Database = {
           usage_reset_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "ai_configs_global_api_key_id_fkey"
+            columns: ["global_api_key_id"]
+            isOneToOne: false
+            referencedRelation: "global_api_keys"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ai_configs_tenant_id_fkey"
             columns: ["tenant_id"]
@@ -611,6 +621,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      global_api_keys: {
+        Row: {
+          api_key_encrypted: string
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          api_key_encrypted: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label: string
+          provider: string
+          updated_at?: string
+        }
+        Update: {
+          api_key_encrypted?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       job_queue: {
         Row: {
