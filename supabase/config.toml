@@ -1,1 +1,8 @@
-project_id = "zhywwrhzaqfcjcwywkwf"
+[functions.webhook-form-intake]
+verify_jwt = false
+
+[functions.webhook-meta-leads]
+verify_jwt = false
+
+[functions.webhook-uazapi]
+verify_jwt = false
