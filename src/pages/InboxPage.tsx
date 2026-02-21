@@ -159,9 +159,10 @@ export default function InboxPage() {
           console.error('WhatsApp send error:', error || data?.error);
           toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
         } else if (savedMsg?.id && data?.provider_message_id) {
-          supabase.from('messages').update({
+          await supabase.from('messages').update({
             provider_message_id: data.provider_message_id,
           }).eq('id', savedMsg.id);
+          console.log('Saved provider_message_id:', data.provider_message_id, 'for message:', savedMsg.id);
         }
       }
     } catch (err: any) {
