@@ -26,7 +26,7 @@ serve(async (req) => {
       || body.tenant_id;
 
     if (!tenantId) {
-      const instanceName = body.instance?.name || body.instanceName || body.owner;
+      const instanceName = body.instanceName || body.instance?.name || body.owner;
       if (instanceName) {
         const { data: inst } = await supabase.from('whatsapp_instances')
           .select('tenant_id')
@@ -48,9 +48,9 @@ serve(async (req) => {
       tenant_id: tenantId, source: 'uazapi', raw_payload: body,
     }).then(() => {});
 
-    // Detect event type from UAZAPI v2 payload
+    // UAZAPI v2 uses body.EventType for routing
     const eventType = detectEventType(body);
-    console.log(`webhook-uazapi tenant=${tenantId} event=${eventType}`);
+    console.log(`webhook-uazapi tenant=${tenantId} event=${eventType} EventType=${body.EventType || 'none'}`);
 
     switch (eventType) {
       case 'message':
@@ -63,7 +63,7 @@ serve(async (req) => {
         await handleConnectionEvent(supabase, tenantId, body);
         break;
       default:
-        console.log('webhook-uazapi: unhandled event type, body keys:', Object.keys(body));
+        console.log('webhook-uazapi: unhandled event type, EventType:', body.EventType, 'body keys:', Object.keys(body));
     }
 
     return jsonOk({ ok: true });
@@ -81,24 +81,34 @@ function jsonOk(data: unknown) {
 }
 
 function detectEventType(body: any): string {
-  // Status update events (messages_update): have Type field like "Read", "Delivered", "Sent"
-  if (body.Type && ['Read', 'Delivered', 'Sent', 'Played'].includes(body.Type)) {
+  // UAZAPI v2 sends EventType at top level
+  const eventType = body.EventType;
+
+  if (eventType === 'messages') {
+    return 'message';
+  }
+
+  if (eventType === 'messages_update') {
     return 'status_update';
   }
 
-  // Connection events
-  if (body.Type === 'Connected' || body.Type === 'Disconnected' || body.Type === 'LoggedOut') {
+  if (eventType === 'connection') {
     return 'connection';
   }
 
-  // Incoming message: has text/messageType/messageid fields (UAZAPI v2 flat format)
-  if (body.messageid || body.messageType || (body.text !== undefined && body.chatid)) {
+  // Fallback: check for nested message data (legacy/alternative formats)
+  if (body.message && (body.message.chatid || body.message.messageid || body.message.text !== undefined)) {
     return 'message';
   }
 
-  // Baileys-style fallback: has key.remoteJid
-  if (body.key?.remoteJid) {
-    return 'message';
+  // Fallback: check for event with Type field (status updates)
+  if (body.event && body.event.Type && ['Read', 'Delivered', 'Sent', 'Played'].includes(body.event.Type)) {
+    return 'status_update';
+  }
+
+  // Fallback: check instance status in body
+  if (body.instance && body.instance.status) {
+    return 'connection';
   }
 
   return 'unknown';
@@ -114,9 +124,11 @@ function normalizePhone(phone: string): string {
 }
 
 async function handleIncomingMessage(supabase: any, tenantId: string, body: any) {
-  // UAZAPI v2 flat message format
-  const chatid = body.chatid || body.key?.remoteJid || '';
-  const isGroup = chatid.endsWith('@g.us') || body.isGroup === true;
+  // UAZAPI v2: message data is nested inside body.message
+  const msg = body.message || body;
+  
+  const chatid = msg.chatid || msg.key?.remoteJid || '';
+  const isGroup = chatid.endsWith('@g.us') || msg.isGroup === true;
   
   // Skip group messages
   if (isGroup) {
@@ -124,13 +136,13 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     return;
   }
 
-  const fromMe = body.fromMe === true || body.key?.fromMe === true;
-  const text = body.text || body.message?.conversation || body.message?.extendedTextMessage?.text || body.content?.text || '';
-  const senderName = body.senderName || body.pushName || body.notifyName || '';
-  const messageId = body.messageid || body.id || body.key?.id || '';
-  const sender = body.sender || body.chatid || body.key?.remoteJid || '';
-  const mediaType = body.messageType || body.media_type || null;
-  const mediaUrl = body.media_url || body.mediaUrl || null;
+  const fromMe = msg.fromMe === true || msg.key?.fromMe === true;
+  const text = msg.text || msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+  const senderName = msg.senderName || msg.pushName || msg.notifyName || '';
+  const messageId = msg.messageid || msg.id || msg.key?.id || '';
+  const sender = msg.sender || msg.chatid || msg.key?.remoteJid || '';
+  const mediaType = msg.messageType || msg.media_type || null;
+  const mediaUrl = msg.media_url || msg.mediaUrl || msg.fileURL || null;
 
   // Extract phone from sender/chatid
   const phone = normalizePhone(sender);
@@ -140,8 +152,14 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     return;
   }
 
+  // Skip messages sent by API (we already saved those)
+  if (msg.wasSentByApi === true) {
+    console.log('webhook-uazapi: skipping wasSentByApi message');
+    return;
+  }
+
   // Skip messages without content (reactions, presence, etc.)
-  if (!text && !mediaUrl && !['image', 'video', 'audio', 'document', 'sticker'].some(t => mediaType?.toLowerCase().includes(t))) {
+  if (!text && !mediaUrl && !['image', 'video', 'audio', 'document', 'sticker'].some(t => mediaType?.toLowerCase?.()?.includes(t))) {
     console.log(`webhook-uazapi: skipping message without text content, type=${mediaType}`);
     return;
   }
@@ -242,7 +260,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
 
   console.log(`webhook-uazapi: saved ${fromMe ? 'outbound' : 'inbound'} message for conversation ${conversation.id}`);
 
-  // Enqueue AI processing for inbound messages (worker handles AI auto-reply)
+  // Enqueue AI processing for inbound messages
   if (!fromMe) {
     try {
       await supabase.rpc('enqueue_job', {
@@ -252,7 +270,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
           conversation_id: conversation.id,
           contact_id: contact.id,
           message_text: text,
-          already_saved: true, // Flag so worker knows message is already in DB
+          already_saved: true,
         }),
         _tenant_id: tenantId,
         _idempotency_key: `uazapi-ai-${messageId || conversation.id}-${Date.now()}`,
@@ -264,11 +282,12 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
 }
 
 async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
-  // UAZAPI v2 status update format:
-  // { Type: "Read"|"Delivered"|"Sent", MessageIDs: [...], Chat: "...@s.whatsapp.net", ... }
-  const statusType = body.Type; // "Read", "Delivered", "Sent"
-  const messageIds = body.MessageIDs || [];
-  const chat = body.Chat || body.chatid || '';
+  // UAZAPI v2: status data is nested inside body.event
+  const event = body.event || body;
+  
+  const statusType = event.Type || body.state; // "Read", "Delivered", "Sent"
+  const messageIds = event.MessageIDs || [];
+  const chat = event.Chat || event.chatid || '';
 
   if (!messageIds.length) {
     console.log('webhook-uazapi: status update without MessageIDs');
@@ -290,7 +309,6 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
       metadata.status = statusType.toLowerCase();
       metadata.status_updated_at = new Date().toISOString();
 
-      // We can't update messages table (no UPDATE RLS), so we use service role which bypasses RLS
       await supabase.from('messages')
         .update({ provider_metadata: metadata })
         .eq('id', msg.id);
@@ -301,20 +319,29 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
 }
 
 async function handleConnectionEvent(supabase: any, tenantId: string, body: any) {
-  const status = body.Type; // "Connected", "Disconnected", "LoggedOut"
-  console.log(`webhook-uazapi: connection event ${status} for tenant ${tenantId}`);
+  // UAZAPI v2: instance data nested in body.instance
+  const instance = body.instance || {};
+  const status = instance.status || body.type || body.Type; // "connected", "disconnected", etc.
+  
+  console.log(`webhook-uazapi: connection event status=${status} for tenant ${tenantId}`);
 
-  // Update instance status
-  if (status === 'Connected') {
-    const phone = body.phone || body.owner || '';
-    await supabase.from('whatsapp_instances')
-      .update({ phone_number: phone ? normalizePhone(phone) : undefined })
-      .eq('tenant_id', tenantId)
-      .eq('is_active', true);
-  } else if (status === 'LoggedOut') {
+  if (status === 'connected') {
+    const phone = instance.owner || body.owner || '';
+    const updateData: any = {};
+    if (phone) updateData.phone_number = normalizePhone(phone);
+    
+    if (Object.keys(updateData).length > 0) {
+      await supabase.from('whatsapp_instances')
+        .update(updateData)
+        .eq('tenant_id', tenantId)
+        .eq('is_active', true);
+    }
+  } else if (status === 'disconnected' && (body.type === 'LoggedOut' || instance.lastDisconnectReason?.includes('logged out'))) {
+    // Only deactivate on explicit logout, not temporary disconnects
     await supabase.from('whatsapp_instances')
       .update({ is_active: false })
       .eq('tenant_id', tenantId)
       .eq('is_active', true);
+    console.log(`webhook-uazapi: instance deactivated due to logout for tenant ${tenantId}`);
   }
 }

@@ -102,12 +102,12 @@ serve(async (req) => {
           const whRes = await fetch(`${apiBase}/webhook`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'token': instanceToken },
-            body: JSON.stringify({
-              enabled: true,
-              url: webhookUrl,
-              events: ['messages', 'messages_update', 'connection'],
-              excludeMessages: ['wasSentByApi'],
-            }),
+          body: JSON.stringify({
+            enabled: true,
+            url: webhookUrl,
+            events: ['messages', 'messages_update', 'connection'],
+            excludeMessages: ['wasSentByApi', 'isGroupYes'],
+          }),
           });
           const whBody = await whRes.text();
           console.log('Webhook setup status:', whRes.status, whBody);
@@ -283,6 +283,8 @@ serve(async (req) => {
             number: cleanPhone,
             text: message,
             delay: 1000,
+            readchat: true,
+            readmessages: true,
           }),
         });
 
@@ -319,7 +321,7 @@ serve(async (req) => {
             enabled: true,
             url: webhookUrl,
             events: ['messages', 'messages_update', 'connection'],
-            excludeMessages: ['wasSentByApi'],
+            excludeMessages: ['wasSentByApi', 'isGroupYes'],
           }),
         });
         
@@ -327,6 +329,37 @@ serve(async (req) => {
         console.log('Webhook setup:', whRes.status, whBody);
 
         return jsonResponse({ ok: true, status: whRes.status, response: whBody });
+      }
+
+      // ── SET PRESENCE ──
+      case 'set_presence': {
+        const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
+          .select('*')
+          .eq('tenant_id', effectiveTenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+
+        if (!instance) {
+          return jsonResponse({ error: 'Nenhuma instância encontrada' }, 404);
+        }
+
+        const instToken = instance.api_token_encrypted || '';
+        const presence = body.presence || 'available';
+
+        try {
+          const presRes = await fetch(`${apiBase}/instance/setpresence`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': instToken },
+            body: JSON.stringify({ presence }),
+          });
+          const presBody = await presRes.text();
+          console.log('Set presence:', presRes.status, presBody);
+          return jsonResponse({ ok: true, status: presRes.status, response: presBody });
+        } catch (e) {
+          console.error('Set presence failed:', e);
+          return jsonResponse({ error: 'Failed to set presence' }, 500);
+        }
       }
 
       default:
