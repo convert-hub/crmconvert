@@ -89,16 +89,34 @@ export default function InboxPage() {
     const contactPhone = selectedData?.contact?.phone;
     const isWhatsApp = selectedData?.channel === 'whatsapp';
 
+    const msgContent = newMsg;
+    setNewMsg('');
+
+    // Optimistic: add message to UI immediately
+    const optimisticMsg: Message = {
+      id: crypto.randomUUID(),
+      tenant_id: tenant.id,
+      conversation_id: selectedConv,
+      direction: 'outbound',
+      content: msgContent,
+      sender_membership_id: membership.id,
+      created_at: new Date().toISOString(),
+      is_ai_generated: false,
+      media_type: null,
+      media_url: null,
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+
     setSending(true);
     try {
       // Save message to DB
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
-        content: newMsg, sender_membership_id: membership.id,
+        content: msgContent, sender_membership_id: membership.id,
       }).select('id').single();
 
-      // Update conversation timestamps
-      await supabase.from('conversations').update({
+      // Update conversation timestamps (fire and forget)
+      supabase.from('conversations').update({
         last_message_at: new Date().toISOString(),
         last_agent_message_at: new Date().toISOString(),
         status: 'waiting_customer',
@@ -111,28 +129,20 @@ export default function InboxPage() {
             action: 'send_message',
             tenant_id: tenant.id,
             phone: contactPhone,
-            message: newMsg,
+            message: msgContent,
             conversation_id: selectedConv,
           },
         });
 
         if (error || data?.error) {
           console.error('WhatsApp send error:', error || data?.error);
-          toast.warning('Mensagem salva, mas falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
-        } else {
-          toast.success('Mensagem enviada via WhatsApp');
-          // Save provider_message_id so status updates (delivered/read) can be matched
-          if (savedMsg?.id && data?.provider_message_id) {
-            await supabase.from('messages').update({
-              provider_message_id: data.provider_message_id,
-            }).eq('id', savedMsg.id);
-          }
+          toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
+        } else if (savedMsg?.id && data?.provider_message_id) {
+          supabase.from('messages').update({
+            provider_message_id: data.provider_message_id,
+          }).eq('id', savedMsg.id);
         }
-      } else {
-        toast.success('Mensagem salva');
       }
-
-      setNewMsg('');
     } catch (err: any) {
       toast.error('Erro ao enviar: ' + err.message);
     } finally {
