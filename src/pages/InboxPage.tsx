@@ -66,6 +66,11 @@ export default function InboxPage() {
     supabase.from('messages').select('*').eq('conversation_id', selectedConv).order('created_at')
       .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
 
+    // Reset unread count when opening conversation
+    supabase.from('conversations').update({ unread_count: 0 }).eq('id', selectedConv).then(() => {
+      setConversations(prev => prev.map(c => c.id === selectedConv ? { ...c, unread_count: 0 } : c));
+    });
+
     const channel = supabase.channel(`inbox-msgs-${selectedConv}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
         setMessages(prev => [...prev, payload.new as unknown as Message]);
