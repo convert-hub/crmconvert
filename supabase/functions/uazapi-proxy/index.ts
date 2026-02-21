@@ -276,6 +276,29 @@ serve(async (req) => {
         // Format phone: remove + and non-digits, ensure no @s.whatsapp.net
         const cleanPhone = phone.replace(/\D/g, '');
 
+        if (!cleanPhone || cleanPhone.length < 10) {
+          return jsonResponse({ error: 'Número de telefone inválido' }, 400);
+        }
+
+        // Check if number is on WhatsApp first
+        try {
+          const checkRes = await fetch(`${apiBase}/check/number`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': instToken },
+            body: JSON.stringify({ number: cleanPhone }),
+          });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            console.log('UAZAPI check number:', JSON.stringify(checkData));
+            // If exists is explicitly false, the number is not on WhatsApp
+            if (checkData.exists === false || checkData.numberExists === false) {
+              return jsonResponse({ error: `O número ${phone} não está no WhatsApp` }, 400);
+            }
+          }
+        } catch (e) {
+          console.warn('Number check failed (non-critical):', e);
+        }
+
         const sendRes = await fetch(`${apiBase}/send/text`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'token': instToken },
@@ -292,10 +315,13 @@ serve(async (req) => {
         console.log('UAZAPI send response:', sendRes.status, JSON.stringify(sendData));
 
         if (!sendRes.ok) {
-          return jsonResponse({ error: `Falha ao enviar: ${sendRes.status}`, details: sendData }, 500);
+          const errMsg = sendData.error || sendData.message || `Falha ao enviar: ${sendRes.status}`;
+          // Return 400 for client errors (invalid number, etc.), 502 for upstream issues
+          const isClientError = errMsg.includes('not on WhatsApp') || errMsg.includes('invalid') || sendRes.status === 400 || sendRes.status === 404;
+          return jsonResponse({ error: errMsg, details: sendData }, isClientError ? 400 : 502);
         }
 
-        return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.id || null });
+        return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.messageid || sendData.id || null });
       }
 
       // ── SETUP WEBHOOK (re-configure) ──
