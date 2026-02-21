@@ -140,13 +140,23 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   const text = msg.text || msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
   const senderName = msg.senderName || msg.pushName || msg.notifyName || '';
   const messageId = msg.messageid || msg.id || msg.key?.id || '';
-  const sender = msg.sender || msg.chatid || msg.key?.remoteJid || '';
   const mediaType = msg.messageType || msg.media_type || null;
   const mediaUrl = msg.media_url || msg.mediaUrl || msg.fileURL || null;
 
-  // For outbound messages (fromMe), the contact is the chatid (recipient).
-  // For inbound messages, the contact is the sender.
-  const contactIdentifier = fromMe ? chatid : sender;
+  // UAZAPI v2 uses LIDs (e.g. 96293317787655@lid) in `sender` field.
+  // The real phone number is in `sender_pn` (e.g. 553193089817@s.whatsapp.net) or `chatid`.
+  // For outbound (fromMe), the contact is always `chatid`.
+  // For inbound, prefer `sender_pn` > `chatid` > `sender` to avoid LIDs.
+  let contactIdentifier: string;
+  if (fromMe) {
+    contactIdentifier = chatid;
+  } else {
+    const senderPn = msg.sender_pn || '';
+    // Avoid LIDs - they end with @lid and are not phone numbers
+    const senderField = msg.sender || '';
+    const isSenderLid = senderField.endsWith('@lid') || (!senderField.includes('@s.whatsapp.net') && senderField.length > 15);
+    contactIdentifier = senderPn || (isSenderLid ? chatid : senderField) || chatid;
+  }
   const phone = normalizePhone(contactIdentifier);
   
   if (!phone) {
