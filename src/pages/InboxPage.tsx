@@ -41,6 +41,17 @@ export default function InboxPage() {
 
   useEffect(() => { loadConversations(); }, [tenant]);
 
+  // Realtime: listen for new/updated conversations
+  useEffect(() => {
+    if (!tenant) return;
+    const channel = supabase.channel(`inbox-convs-${tenant.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
+        loadConversations();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [tenant]);
+
   useEffect(() => {
     const urlConv = searchParams.get('conv');
     if (urlConv && urlConv !== selectedConv) {
@@ -55,10 +66,14 @@ export default function InboxPage() {
     supabase.from('messages').select('*').eq('conversation_id', selectedConv).order('created_at')
       .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
 
-    const channel = supabase.channel(`inbox-${selectedConv}`)
+    const channel = supabase.channel(`inbox-msgs-${selectedConv}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
         setMessages(prev => [...prev, payload.new as unknown as Message]);
-      }).subscribe();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
+        setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
+      })
+      .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [selectedConv]);
 
