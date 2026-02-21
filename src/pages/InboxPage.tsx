@@ -108,8 +108,9 @@ export default function InboxPage() {
     setNewMsg('');
 
     // Optimistic: add message to UI immediately
+    const optimisticId = crypto.randomUUID();
     const optimisticMsg: Message = {
-      id: crypto.randomUUID(),
+      id: optimisticId,
       tenant_id: tenant.id,
       conversation_id: selectedConv,
       direction: 'outbound',
@@ -129,6 +130,11 @@ export default function InboxPage() {
         tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
         content: msgContent, sender_membership_id: membership.id,
       }).select('id').single();
+
+      // Replace optimistic ID with real DB ID so realtime UPDATEs (delivered/read) match
+      if (savedMsg?.id) {
+        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
+      }
 
       // Update conversation timestamps (fire and forget)
       supabase.from('conversations').update({
