@@ -96,8 +96,8 @@ serve(async (req) => {
         console.log('UAZAPI create response:', JSON.stringify(createData));
         const instanceToken = createData.token || createData.apikey || createData.instance?.token || '';
 
-        // 2. Set webhook (uses instance token header)
-        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi`;
+        // 2. Set webhook with tenant_id in URL (uses instance token header)
+        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
         try {
           const whRes = await fetch(`${apiBase}/webhook`, {
             method: 'POST',
@@ -251,6 +251,82 @@ serve(async (req) => {
         }
 
         return jsonResponse({ ok: true });
+      }
+
+      // ── SEND MESSAGE ──
+      case 'send_message': {
+        const { phone, message, conversation_id } = body;
+        if (!phone || !message) {
+          return jsonResponse({ error: 'phone and message required' }, 400);
+        }
+
+        const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
+          .select('*')
+          .eq('tenant_id', effectiveTenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+
+        if (!instance) {
+          return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
+        }
+
+        const instToken = instance.api_token_encrypted || '';
+        
+        // Format phone: remove + and non-digits, ensure no @s.whatsapp.net
+        const cleanPhone = phone.replace(/\D/g, '');
+
+        const sendRes = await fetch(`${apiBase}/send/text`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': instToken },
+          body: JSON.stringify({
+            number: cleanPhone,
+            text: message,
+            delay: 1000,
+          }),
+        });
+
+        const sendData = await sendRes.json();
+        console.log('UAZAPI send response:', sendRes.status, JSON.stringify(sendData));
+
+        if (!sendRes.ok) {
+          return jsonResponse({ error: `Falha ao enviar: ${sendRes.status}`, details: sendData }, 500);
+        }
+
+        return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.id || null });
+      }
+
+      // ── SETUP WEBHOOK (re-configure) ──
+      case 'setup_webhook': {
+        const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
+          .select('*')
+          .eq('tenant_id', effectiveTenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+
+        if (!instance) {
+          return jsonResponse({ error: 'Nenhuma instância encontrada' }, 404);
+        }
+
+        const instToken = instance.api_token_encrypted || '';
+        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
+        
+        const whRes = await fetch(`${apiBase}/webhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': instToken },
+          body: JSON.stringify({
+            enabled: true,
+            url: webhookUrl,
+            events: ['messages', 'messages_update', 'connection'],
+            excludeMessages: ['wasSentByApi'],
+          }),
+        });
+        
+        const whBody = await whRes.text();
+        console.log('Webhook setup:', whRes.status, whBody);
+
+        return jsonResponse({ ok: true, status: whRes.status, response: whBody });
       }
 
       default:
