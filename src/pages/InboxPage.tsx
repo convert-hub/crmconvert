@@ -72,10 +72,10 @@ export default function InboxPage() {
     setSending(true);
     try {
       // Save message to DB
-      await supabase.from('messages').insert({
+      const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
         content: newMsg, sender_membership_id: membership.id,
-      });
+      }).select('id').single();
 
       // Update conversation timestamps
       await supabase.from('conversations').update({
@@ -101,6 +101,12 @@ export default function InboxPage() {
           toast.warning('Mensagem salva, mas falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
         } else {
           toast.success('Mensagem enviada via WhatsApp');
+          // Save provider_message_id so status updates (delivered/read) can be matched
+          if (savedMsg?.id && data?.provider_message_id) {
+            await supabase.from('messages').update({
+              provider_message_id: data.provider_message_id,
+            }).eq('id', savedMsg.id);
+          }
         }
       } else {
         toast.success('Mensagem salva');
