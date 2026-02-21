@@ -170,7 +170,15 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Instância:</span><span className="font-mono text-foreground">{instanceName || '—'}</span></div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" className="rounded-xl" onClick={checkStatus}><RefreshCw className="h-4 w-4 mr-1" />Verificar Status</Button>
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={async () => {
+                try {
+                  await callProxy('setup_webhook');
+                  toast.success('Webhook reconfigurado com sucesso');
+                } catch (e: any) {
+                  console.warn('Webhook setup failed:', e.message);
+                }
+                await checkStatus();
+              }}><RefreshCw className="h-4 w-4 mr-1" />Verificar Status</Button>
               <Button variant="outline" size="sm" className="rounded-xl text-destructive" onClick={handleDisconnect}><LogOut className="h-4 w-4 mr-1" />Desconectar</Button>
             </div>
           </div>
