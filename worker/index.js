@@ -239,6 +239,8 @@ const handlers = {
         number: cleanPhone,
         text: message,
         delay: 1000,
+        readchat: true,
+        readmessages: true,
       }),
     });
 
