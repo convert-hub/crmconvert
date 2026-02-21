@@ -144,8 +144,10 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   const mediaType = msg.messageType || msg.media_type || null;
   const mediaUrl = msg.media_url || msg.mediaUrl || msg.fileURL || null;
 
-  // Extract phone from sender/chatid
-  const phone = normalizePhone(sender);
+  // For outbound messages (fromMe), the contact is the chatid (recipient).
+  // For inbound messages, the contact is the sender.
+  const contactIdentifier = fromMe ? chatid : sender;
+  const phone = normalizePhone(contactIdentifier);
   
   if (!phone) {
     console.log('webhook-uazapi: no phone extracted from message');
