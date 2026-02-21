@@ -99,16 +99,18 @@ serve(async (req) => {
         // 2. Set webhook (uses instance token header)
         const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi`;
         try {
-          const whRes = await fetch(`${apiBase}/webhook/set`, {
+          const whRes = await fetch(`${apiBase}/webhook`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'token': instanceToken },
             body: JSON.stringify({
-              webhookUrl,
-              webhookEvents: ['messages.upsert', 'connection.update', 'messages.update'],
-              headers: { 'x-tenant-id': effectiveTenantId },
+              enabled: true,
+              url: webhookUrl,
+              events: ['messages', 'messages_update', 'connection'],
+              excludeMessages: ['wasSentByApi'],
             }),
           });
-          console.log('Webhook setup status:', whRes.status);
+          const whBody = await whRes.text();
+          console.log('Webhook setup status:', whRes.status, whBody);
         } catch (whErr) {
           console.error('Webhook setup failed (non-critical):', whErr);
         }
@@ -133,7 +135,8 @@ serve(async (req) => {
           if (connectRes.ok) {
             const connectData = await connectRes.json();
             console.log('UAZAPI connect response:', JSON.stringify(connectData));
-            qrcode = connectData.qrcode || connectData.base64 || connectData.urlcode || connectData.pairingCode || null;
+            qrcode = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
+            if (qrcode === '') qrcode = null;
           } else {
             const errText = await connectRes.text();
             console.error('UAZAPI connect error:', connectRes.status, errText);
@@ -181,13 +184,16 @@ serve(async (req) => {
         const statusData = await statusRes.json();
         console.log('UAZAPI status response:', JSON.stringify(statusData));
 
-        let qrcode = statusData.qrcode || statusData.base64 || statusData.urlcode || statusData.pairingCode || null;
+        let qrcode = statusData.instance?.qrcode || statusData.qrcode || statusData.base64 || null;
+        if (qrcode === '') qrcode = null; // UAZAPI returns empty string when no QR
+        let paircode = statusData.instance?.paircode || statusData.paircode || null;
+        if (paircode === '') paircode = null;
         let state = statusData.instance?.status || statusData.state || statusData.status || 'disconnected';
         const phoneNumber = statusData.instance?.phone || statusData.phone || instance.phone_number;
 
         // If disconnected and no QR, call POST /instance/connect to initiate connection and get QR
-        if ((state === 'disconnected' || (!qrcode && state !== 'connected')) && action === 'get_qr') {
-          console.log('Instance disconnected, calling POST /instance/connect to generate QR...');
+        if ((state === 'disconnected' || (!qrcode && state !== 'connected'))) {
+          console.log(`Instance state=${state}, triggering POST /instance/connect to generate QR...`);
           try {
             const connectRes = await fetch(`${apiBase}/instance/connect`, {
               method: 'POST',
@@ -197,8 +203,11 @@ serve(async (req) => {
             if (connectRes.ok) {
               const connectData = await connectRes.json();
               console.log('UAZAPI connect response:', JSON.stringify(connectData));
-              qrcode = connectData.qrcode || connectData.base64 || connectData.urlcode || connectData.pairingCode || qrcode;
-              if (qrcode) state = 'connecting';
+              const newQr = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
+              if (newQr && newQr !== '') {
+                qrcode = newQr;
+                state = 'connecting';
+              }
             } else {
               const errText = await connectRes.text();
               console.error('UAZAPI connect error:', connectRes.status, errText);
