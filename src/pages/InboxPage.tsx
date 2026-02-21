@@ -73,7 +73,22 @@ export default function InboxPage() {
 
     const channel = supabase.channel(`inbox-msgs-${selectedConv}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
-        setMessages(prev => [...prev, payload.new as unknown as Message]);
+        const newMsg = payload.new as any;
+        setMessages(prev => {
+          // Deduplicate: skip if already exists (optimistic or duplicate event)
+          if (prev.some(m => m.id === newMsg.id)) return prev;
+          // Also replace optimistic messages with same content/direction/time proximity
+          const isOptimistic = prev.find(m => 
+            m.direction === 'outbound' && 
+            m.content === newMsg.content && 
+            !prev.some(p => p.id === newMsg.id) &&
+            Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 5000
+          );
+          if (isOptimistic) {
+            return prev.map(m => m.id === isOptimistic.id ? (newMsg as unknown as Message) : m);
+          }
+          return [...prev, newMsg as unknown as Message];
+        });
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
         setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
