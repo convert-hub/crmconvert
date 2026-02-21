@@ -193,16 +193,24 @@ const handlers = {
       throw new Error('No active WhatsApp instance for tenant');
     }
 
-    // Send via UAZAPI API
-    const response = await fetch(`${instance.api_url}/send-message`, {
+    const instToken = instance.api_token_encrypted || '';
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+
+    if (!cleanPhone) {
+      throw new Error('No phone number provided');
+    }
+
+    // Send via UAZAPI /send/text with token header
+    const response = await fetch(`${instance.api_url}/send/text`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${instance.api_token_encrypted}`, // In production, decrypt first
+        'token': instToken,
       },
       body: JSON.stringify({
-        phone: phone.replace('+', ''),
-        message: message,
+        number: cleanPhone,
+        text: message,
+        delay: 1000,
       }),
     });
 

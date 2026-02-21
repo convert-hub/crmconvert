@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Conversation, Contact, Message } from '@/types/crm';
@@ -6,25 +7,48 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Clock } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
+import StartConversationDialog from '@/components/crm/StartConversationDialog';
 
 export default function InboxPage() {
   const { tenant, membership } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [conversations, setConversations] = useState<(Conversation & { contact?: Contact })[]>([]);
-  const [selectedConv, setSelectedConv] = useState<string | null>(null);
+  const [selectedConv, setSelectedConv] = useState<string | null>(searchParams.get('conv'));
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [search, setSearch] = useState('');
+  const [showNewConv, setShowNewConv] = useState(false);
+  const [sending, setSending] = useState(false);
 
-  useEffect(() => {
+  const loadConversations = () => {
     if (!tenant) return;
     supabase.from('conversations').select('*, contact:contacts(*)').eq('tenant_id', tenant.id).order('last_message_at', { ascending: false }).limit(100)
-      .then(({ data }) => setConversations((data as unknown as (Conversation & { contact?: Contact })[]) ?? []));
-  }, [tenant]);
+      .then(({ data }) => {
+        const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
+        setConversations(convs);
+        const urlConv = searchParams.get('conv');
+        if (urlConv && convs.some(c => c.id === urlConv)) {
+          setSelectedConv(urlConv);
+          setSearchParams({}, { replace: true });
+        }
+      });
+  };
+
+  useEffect(() => { loadConversations(); }, [tenant]);
+
+  useEffect(() => {
+    const urlConv = searchParams.get('conv');
+    if (urlConv && urlConv !== selectedConv) {
+      setSelectedConv(urlConv);
+      setSearchParams({}, { replace: true });
+      loadConversations();
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!selectedConv) return;
@@ -40,12 +64,54 @@ export default function InboxPage() {
 
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !selectedConv) return;
-    await supabase.from('messages').insert({
-      tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
-      content: newMsg, sender_membership_id: membership.id,
-    });
-    setNewMsg('');
-    toast.success('Mensagem enviada');
+    
+    const selectedData = conversations.find(c => c.id === selectedConv);
+    const contactPhone = selectedData?.contact?.phone;
+    const isWhatsApp = selectedData?.channel === 'whatsapp';
+
+    setSending(true);
+    try {
+      // Save message to DB
+      await supabase.from('messages').insert({
+        tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
+        content: newMsg, sender_membership_id: membership.id,
+      });
+
+      // Update conversation timestamps
+      await supabase.from('conversations').update({
+        last_message_at: new Date().toISOString(),
+        last_agent_message_at: new Date().toISOString(),
+        status: 'waiting_customer',
+      }).eq('id', selectedConv);
+
+      // If WhatsApp channel and contact has phone, send via UAZAPI
+      if (isWhatsApp && contactPhone) {
+        const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+          body: {
+            action: 'send_message',
+            tenant_id: tenant.id,
+            phone: contactPhone,
+            message: newMsg,
+            conversation_id: selectedConv,
+          },
+        });
+
+        if (error || data?.error) {
+          console.error('WhatsApp send error:', error || data?.error);
+          toast.warning('Mensagem salva, mas falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
+        } else {
+          toast.success('Mensagem enviada via WhatsApp');
+        }
+      } else {
+        toast.success('Mensagem salva');
+      }
+
+      setNewMsg('');
+    } catch (err: any) {
+      toast.error('Erro ao enviar: ' + err.message);
+    } finally {
+      setSending(false);
+    }
   };
 
   const filtered = conversations.filter(c =>
@@ -66,7 +132,12 @@ export default function InboxPage() {
       {/* Sidebar */}
       <div className="w-80 border-r border-border/50 flex flex-col bg-card/50">
         <div className="p-4 border-b border-border/50">
-          <h2 className="text-lg font-bold text-foreground mb-3">Conversas</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold text-foreground">Conversas</h2>
+            <Button size="sm" variant="outline" className="rounded-xl h-8" onClick={() => setShowNewConv(true)}>
+              <Plus className="h-4 w-4 mr-1" />Nova
+            </Button>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input className="pl-9 rounded-xl" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
@@ -103,7 +174,7 @@ export default function InboxPage() {
             <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
               <div>
                 <h3 className="font-semibold text-foreground">{selectedData?.contact?.name ?? 'Conversa'}</h3>
-                <span className="text-xs text-muted-foreground">{selectedData?.contact?.phone}</span>
+                <span className="text-xs text-muted-foreground">{selectedData?.contact?.phone} · {selectedData?.channel}</span>
               </div>
               <Badge variant="outline" className={`capitalize rounded-full ${statusColors[selectedData?.status ?? ''] ?? ''}`}>{selectedData?.status?.replace('_', ' ')}</Badge>
             </div>
@@ -123,7 +194,9 @@ export default function InboxPage() {
             <div className="border-t border-border/50 p-4 flex gap-2 bg-card/50">
               <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[50px] resize-none rounded-xl"
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
-              <Button size="icon" onClick={handleSend} className="rounded-xl h-12 w-12"><Send className="h-4 w-4" /></Button>
+              <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()} className="rounded-xl h-12 w-12">
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
             </div>
           </>
         ) : (
@@ -133,9 +206,14 @@ export default function InboxPage() {
             </div>
             <p className="font-medium">Selecione uma conversa</p>
             <p className="text-sm mt-1">Escolha uma conversa da lista para começar</p>
+            <Button variant="outline" className="mt-4 rounded-xl" onClick={() => setShowNewConv(true)}>
+              <Plus className="h-4 w-4 mr-2" />Nova Conversa
+            </Button>
           </div>
         )}
       </div>
+
+      <StartConversationDialog open={showNewConv} onOpenChange={setShowNewConv} />
     </div>
   );
 }
