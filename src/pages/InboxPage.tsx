@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2 } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -179,17 +179,25 @@ export default function InboxPage() {
               <Badge variant="outline" className={`capitalize rounded-full ${statusColors[selectedData?.status ?? ''] ?? ''}`}>{selectedData?.status?.replace('_', ' ')}</Badge>
             </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
-              {messages.map(msg => (
-                <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
-                  <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5 text-sm",
-                    msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
-                    {msg.content}
-                    <div className={cn("text-[10px] mt-1", msg.direction === 'outbound' ? 'text-white/70' : 'text-muted-foreground')}>
-                      {format(new Date(msg.created_at), "HH:mm")}
+              {messages.map(msg => {
+                const status = (msg as any).provider_metadata?.status;
+                return (
+                  <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
+                    <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5 text-sm",
+                      msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
+                      {msg.content}
+                      <div className={cn("text-[10px] mt-1 flex items-center gap-1", msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
+                        {format(new Date(msg.created_at), "HH:mm")}
+                        {msg.direction === 'outbound' && (
+                          status === 'read' ? <CheckCheck className="h-3 w-3 text-blue-300" /> :
+                          status === 'delivered' ? <CheckCheck className="h-3 w-3" /> :
+                          <Check className="h-3 w-3" />
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="border-t border-border/50 p-4 flex gap-2 bg-card/50">
               <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[50px] resize-none rounded-xl"
