@@ -19,12 +19,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const handlers = {
   async process_form_webhook(payload) {
     const { tenant_id, data } = payload;
-    // Normalize phone
     const phone = normalizePhone(data.phone || data.telefone || data.whatsapp);
     const email = data.email || null;
     const name = data.name || data.nome || data.full_name || 'Lead sem nome';
 
-    // Extract UTM
     const utm = {
       utm_source: data.utm_source || null,
       utm_medium: data.utm_medium || null,
@@ -33,7 +31,6 @@ const handlers = {
       utm_term: data.utm_term || null,
     };
 
-    // Dedup by phone or email
     let contact = await findContact(tenant_id, phone, email);
     if (!contact) {
       const { data: c } = await supabase.from('contacts').insert({
@@ -42,11 +39,9 @@ const handlers = {
       }).select().single();
       contact = c;
     } else {
-      // Update UTM (latest)
       await supabase.from('contacts').update({ ...utm, source: 'form_webhook' }).eq('id', contact.id);
     }
 
-    // Create opportunity in first stage of default pipeline
     const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
     if (pipeline) {
       const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
@@ -58,7 +53,6 @@ const handlers = {
       }
     }
 
-    // Log activity
     await supabase.from('activities').insert({
       tenant_id, type: 'note', title: 'Lead via formulário',
       description: `Novo lead recebido via webhook de formulário.`,
@@ -70,7 +64,6 @@ const handlers = {
 
   async process_meta_lead(payload) {
     const { tenant_id, data } = payload;
-    // Facebook Lead Ads payload parsing
     const entry = data.entry?.[0];
     const changes = entry?.changes?.[0];
     const leadData = changes?.value || data;
@@ -97,7 +90,6 @@ const handlers = {
       contact = c;
     }
 
-    // Create opportunity
     const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
     if (pipeline) {
       const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
@@ -113,24 +105,60 @@ const handlers = {
   },
 
   async process_uazapi_message(payload) {
-    const { tenant_id, data } = payload;
-    const msg = data;
-    
-    // Extract phone from UAZAPI payload
-    const remoteJid = msg.key?.remoteJid || msg.from || '';
-    const phone = normalizePhone(remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', ''));
-    const isFromMe = msg.key?.fromMe || false;
-    const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.body || '';
+    const { tenant_id, conversation_id, contact_id, message_text, already_saved, data } = payload;
 
-    if (!phone || !content) {
+    // If the webhook already saved the message (new flow), only handle AI auto-reply
+    if (already_saved) {
+      console.log(`[Worker] Message already saved by webhook, checking AI auto-reply for conv=${conversation_id}`);
+      
+      if (!conversation_id || !contact_id) {
+        return { skipped: true, reason: 'missing conversation_id or contact_id' };
+      }
+
+      // Get conversation and contact
+      const { data: conv } = await supabase.from('conversations').select('*').eq('id', conversation_id).single();
+      const { data: contact } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
+
+      if (!conv || !contact) {
+        return { skipped: true, reason: 'conversation or contact not found' };
+      }
+
+      // Only auto-reply if no human agent assigned
+      if (!conv.assigned_to) {
+        try {
+          await handleAiAutoReply(tenant_id, conv, contact, message_text || '');
+        } catch (err) {
+          console.error('[Worker] AI auto-reply error:', err.message);
+        }
+      }
+
+      return { conversation_id, contact_id, ai_processed: true };
+    }
+
+    // Legacy flow: webhook didn't save the message, process from raw data
+    const msg = data || {};
+    
+    // UAZAPI v2 flat format
+    const chatid = msg.chatid || msg.key?.remoteJid || '';
+    const isGroup = chatid.endsWith('@g.us') || msg.isGroup === true;
+    if (isGroup) return { skipped: true, reason: 'group message' };
+
+    const fromMe = msg.fromMe === true || msg.key?.fromMe === true;
+    const text = msg.text || msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.content?.text || '';
+    const senderName = msg.senderName || msg.pushName || msg.notifyName || '';
+    const messageId = msg.messageid || msg.id || msg.key?.id || '';
+    const sender = msg.sender || msg.chatid || msg.key?.remoteJid || '';
+    
+    const phone = normalizePhone(sender.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, ''));
+
+    if (!phone || !text) {
       return { skipped: true, reason: 'no phone or content' };
     }
 
     // Find or create contact
     let contact = await findContact(tenant_id, phone, null);
-    const isNewContact = !contact;
     if (!contact) {
-      const name = msg.pushName || msg.notifyName || phone;
+      const name = senderName || phone;
       const { data: c } = await supabase.from('contacts').insert({
         tenant_id, name, phone, source: 'whatsapp', status: 'lead',
       }).select().single();
@@ -140,14 +168,15 @@ const handlers = {
     // Find or create conversation
     let conversation;
     const { data: existingConv } = await supabase.from('conversations')
-      .select('*').eq('tenant_id', tenant_id).eq('contact_id', contact.id).eq('channel', 'whatsapp').eq('status', 'open').limit(1);
-    
+      .select('*').eq('tenant_id', tenant_id).eq('contact_id', contact.id)
+      .eq('channel', 'whatsapp').in('status', ['open', 'waiting_customer', 'waiting_agent']).limit(1);
+
     if (existingConv && existingConv.length > 0) {
       conversation = existingConv[0];
     } else {
       const { data: newConv } = await supabase.from('conversations').insert({
         tenant_id, contact_id: contact.id, channel: 'whatsapp', status: 'open',
-        provider_chat_id: remoteJid,
+        provider_chat_id: chatid,
       }).select().single();
       conversation = newConv;
     }
@@ -155,25 +184,26 @@ const handlers = {
     // Save message
     await supabase.from('messages').insert({
       tenant_id, conversation_id: conversation.id,
-      direction: isFromMe ? 'outbound' : 'inbound',
-      content, provider_message_id: msg.key?.id,
+      direction: fromMe ? 'outbound' : 'inbound',
+      content: text, provider_message_id: messageId,
       provider_metadata: msg,
     });
 
     // Update conversation timestamps
     const updates = { last_message_at: new Date().toISOString() };
-    if (!isFromMe) {
+    if (!fromMe) {
       updates.last_customer_message_at = new Date().toISOString();
       updates.unread_count = (conversation.unread_count || 0) + 1;
+      updates.status = 'waiting_agent';
     } else {
       updates.last_agent_message_at = new Date().toISOString();
     }
     await supabase.from('conversations').update(updates).eq('id', conversation.id);
 
-    // AI Auto-reply: only for inbound messages, and only if no human agent is assigned
-    if (!isFromMe && !conversation.assigned_to) {
+    // AI auto-reply for inbound
+    if (!fromMe && !conversation.assigned_to) {
       try {
-        await handleAiAutoReply(tenant_id, conversation, contact, content);
+        await handleAiAutoReply(tenant_id, conversation, contact, text);
       } catch (err) {
         console.error('[Worker] AI auto-reply error:', err.message);
       }
@@ -184,11 +214,10 @@ const handlers = {
 
   async send_whatsapp(payload) {
     const { tenant_id, phone, message, conversation_id } = payload;
-    
-    // Get UAZAPI instance for tenant
+
     const { data: instance } = await supabase.from('whatsapp_instances')
       .select('*').eq('tenant_id', tenant_id).eq('is_active', true).limit(1).single();
-    
+
     if (!instance) {
       throw new Error('No active WhatsApp instance for tenant');
     }
@@ -200,7 +229,6 @@ const handlers = {
       throw new Error('No phone number provided');
     }
 
-    // Send via UAZAPI /send/text with token header
     const response = await fetch(`${instance.api_url}/send/text`, {
       method: 'POST',
       headers: {
@@ -253,7 +281,6 @@ async function getAiConfig(tenantId, taskType) {
     .eq('tenant_id', tenantId).eq('task_type', taskType).limit(1);
   if (!data || data.length === 0) return null;
   const config = data[0];
-  // Check daily/monthly limits
   const now = new Date();
   const resetAt = config.usage_reset_at ? new Date(config.usage_reset_at) : null;
   if (resetAt && now.toDateString() !== resetAt.toDateString()) {
@@ -297,7 +324,6 @@ async function getPromptTemplate(tenantId, taskType) {
 }
 
 async function incrementAiUsage(configId) {
-  // Increment daily and monthly usage
   const { data: config } = await supabase.from('ai_configs').select('daily_usage, monthly_usage').eq('id', configId).single();
   if (config) {
     await supabase.from('ai_configs').update({
@@ -317,7 +343,6 @@ async function logAiCall(tenantId, taskType, model, provider, tokens, duration, 
 }
 
 async function handleAiAutoReply(tenantId, conversation, contact, incomingMessage) {
-  // Get message_generation config
   const config = await getAiConfig(tenantId, 'message_generation');
   if (!config) {
     console.log('[Worker] No AI config for message_generation or limits reached');
@@ -330,10 +355,7 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
     return;
   }
 
-  // Get conversation history
   const history = await getConversationHistory(conversation.id);
-
-  // Get prompt template
   const template = await getPromptTemplate(tenantId, 'message_generation');
   const systemPrompt = template?.content || `Você é um atendente virtual de uma empresa. Seja cordial, objetivo e profissional.
 Responda perguntas sobre a empresa e seus serviços.
@@ -347,7 +369,7 @@ NÃO use emojis em excesso. Mantenha mensagens curtas e claras para WhatsApp.`;
 
   try {
     const result = await callOpenAI(apiKey, config.model || 'gpt-4o-mini', messages);
-    
+
     await incrementAiUsage(config.id);
     await logAiCall(tenantId, 'message_generation', config.model, config.provider, result.tokens, result.duration, { message: incomingMessage }, { reply: result.content }, null);
 
@@ -408,7 +430,7 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
     ]);
 
     await incrementAiUsage(config.id);
-    
+
     let qualification;
     try {
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
@@ -419,24 +441,20 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
 
     if (qualification?.qualified && qualification.confidence >= 0.7) {
       console.log(`[Worker] Lead ${contact.id} QUALIFIED - handing off to human`);
-      
-      // Update contact status
+
       await supabase.from('contacts').update({ status: 'customer' }).eq('id', contact.id);
-      
-      // Update conversation to waiting_agent so a human picks it up
-      await supabase.from('conversations').update({ 
+
+      await supabase.from('conversations').update({
         status: 'waiting_agent',
         metadata: { ...((conversation.metadata || {})), qualification: qualification },
       }).eq('id', conversation.id);
 
-      // Store qualification data on opportunity if exists
       const { data: opps } = await supabase.from('opportunities')
         .select('id').eq('contact_id', contact.id).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
       if (opps && opps.length > 0) {
         await supabase.from('opportunities').update({ qualification_data: qualification }).eq('id', opps[0].id);
       }
 
-      // Create activity noting the handoff
       await supabase.from('activities').insert({
         tenant_id: tenantId,
         type: 'note',
@@ -450,6 +468,9 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
     console.error('[Worker] Qualification error:', err.message);
   }
 }
+
+// Poll loop
+async function pollJobs() {
   try {
     const { data: job } = await supabase.rpc('acquire_next_job', {
       _types: Object.keys(handlers),
@@ -482,11 +503,7 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
 // Listen for NOTIFY and poll
 async function start() {
   console.log('[Worker] Starting job worker...');
-  
-  // Poll loop
   setInterval(pollJobs, POLL_INTERVAL);
-  
-  // Also process immediately
   pollJobs();
 }
 
