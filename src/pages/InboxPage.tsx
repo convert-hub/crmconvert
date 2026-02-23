@@ -19,9 +19,19 @@ import AudioPlayer from '@/components/inbox/AudioPlayer';
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
 
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-200" onClick={onClose}>
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/70 hover:text-white text-3xl font-light z-10">&times;</button>
+      <img src={src} alt="Imagem ampliada" className="max-h-[85vh] max-w-[90vw] rounded-lg shadow-2xl object-contain animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()} />
+    </div>
+  );
+}
+
 function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const mediaType = ((msg as any).media_type || '').toLowerCase();
   const isAudio = mediaType.includes('audio') || mediaType.includes('ptt');
@@ -115,7 +125,10 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
             <Loader2 className="h-6 w-6 animate-spin" />
           </div>
         ) : mediaData ? (
-          <img src={mediaData} alt="Imagem" className="rounded-lg max-h-60 w-auto cursor-pointer" onClick={() => window.open(mediaData, '_blank')} />
+          <>
+            <img src={mediaData} alt="Imagem" className="rounded-lg max-h-60 w-auto cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setLightboxOpen(true)} />
+            {lightboxOpen && <ImageLightbox src={mediaData} onClose={() => setLightboxOpen(false)} />}
+          </>
         ) : (
           <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
             <Image className="h-3 w-3 mr-1" /> Carregar imagem
