@@ -483,9 +483,13 @@ export default function InboxPage() {
     }
   };
 
-  const filtered = conversations.filter(c =>
-    !search || c.contact?.name?.toLowerCase().includes(search.toLowerCase()) || c.contact?.phone?.includes(search)
-  );
+  const filtered = conversations.filter(c => {
+    if (!search) return true;
+    const q = search.toLowerCase().replace(/\D/g, '');
+    const nameMatch = c.contact?.name?.toLowerCase().includes(search.toLowerCase());
+    const phoneMatch = q && c.contact?.phone?.replace(/\D/g, '').includes(q);
+    return nameMatch || phoneMatch;
+  });
 
   const selectedData = conversations.find(c => c.id === selectedConv);
 
