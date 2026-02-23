@@ -485,9 +485,11 @@ export default function InboxPage() {
 
   const filtered = conversations.filter(c => {
     if (!search) return true;
-    const q = search.toLowerCase().replace(/\D/g, '');
-    const nameMatch = c.contact?.name?.toLowerCase().includes(search.toLowerCase());
-    const phoneMatch = q && c.contact?.phone?.replace(/\D/g, '').includes(q);
+    const s = search.toLowerCase();
+    const digitsOnly = s.replace(/\D/g, '');
+    const nameMatch = c.contact?.name?.toLowerCase().includes(s);
+    const phoneRaw = c.contact?.phone || '';
+    const phoneMatch = phoneRaw.includes(s) || (digitsOnly.length >= 3 && phoneRaw.replace(/\D/g, '').includes(digitsOnly));
     return nameMatch || phoneMatch;
   });
 
