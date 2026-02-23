@@ -210,7 +210,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
 
   return (
     <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 group">
         <Avatar className="h-10 w-10">
           {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact?.name ?? ''} />}
           <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{(contact?.name ?? '?').slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -226,15 +226,16 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
               className="h-8 text-base font-semibold rounded-lg w-56"
             />
           ) : (
-            <>
+            <div className="flex items-center gap-1.5">
               <h3 className="font-semibold text-foreground">{contact?.name ?? 'Conversa'}</h3>
               {contact && (
                 <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent" title="Editar nome">
                   <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                 </button>
               )}
-            </>
+            </div>
           )}
+          <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
         </div>
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
         </div>
