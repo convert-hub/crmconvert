@@ -13,6 +13,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
+import AudioRecorder from '@/components/inbox/AudioRecorder';
 
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
@@ -509,6 +510,7 @@ export default function InboxPage() {
               <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending} className="rounded-xl h-12 w-12 shrink-0">
                 <Paperclip className="h-4 w-4" />
               </Button>
+              <AudioRecorder onRecorded={handleSendMedia} disabled={sending} />
               <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[50px] resize-none rounded-xl"
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
               <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()} className="rounded-xl h-12 w-12">

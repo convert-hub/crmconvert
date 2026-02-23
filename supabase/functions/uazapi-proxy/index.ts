@@ -429,6 +429,29 @@ serve(async (req) => {
             body: JSON.stringify({ id: message_id }),
           });
         }
+
+        if (!dlRes.ok) {
+          const errText = await dlRes.text();
+          console.error('UAZAPI download media error:', dlRes.status, errText);
+          return jsonResponse({ error: `Falha ao baixar mídia: ${dlRes.status}` }, 502);
+        }
+
+        // Check if response is JSON (URL/link) or binary (file data)
+        const contentType = dlRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const dlData = await dlRes.json();
+          return jsonResponse({ ok: true, url: dlData.url || dlData.link || dlData.base64 || null, data: dlData });
+        }
+
+        // Binary response - convert to base64
+        const arrayBuffer = await dlRes.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        return jsonResponse({ ok: true, base64, mimetype: contentType });
       }
 
       // ── SEND MEDIA ──
