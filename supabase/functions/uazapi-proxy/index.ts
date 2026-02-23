@@ -408,12 +408,30 @@ serve(async (req) => {
 
         const instToken = instance.api_token_encrypted || '';
 
-        // UAZAPI v2: POST /download/media with messageid
-        const dlRes = await fetch(`${apiBase}/download/media`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'token': instToken },
-          body: JSON.stringify({ messageid: message_id }),
+        // UAZAPI v2: Try GET /message/getlink first, fallback to POST /download/media
+        let dlRes = await fetch(`${apiBase}/message/getlink/${message_id}`, {
+          method: 'GET',
+          headers: { 'token': instToken },
         });
+
+        // Fallback: try POST /message/getlink if GET returned 405
+        if (dlRes.status === 405) {
+          console.log('GET /message/getlink returned 405, trying POST...');
+          dlRes = await fetch(`${apiBase}/message/getlink`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': instToken },
+            body: JSON.stringify({ messageid: message_id }),
+          });
+        }
+
+        // Fallback 2: try GET /download/media
+        if (dlRes.status === 405 || dlRes.status === 404) {
+          console.log('Trying GET /download/media fallback...');
+          dlRes = await fetch(`${apiBase}/download/media/${message_id}`, {
+            method: 'GET',
+            headers: { 'token': instToken },
+          });
+        }
 
         if (!dlRes.ok) {
           const errText = await dlRes.text();
