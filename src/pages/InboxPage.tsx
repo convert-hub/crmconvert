@@ -536,7 +536,10 @@ export default function InboxPage() {
                   <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
                 )}
               </div>
-              <div className="flex items-center justify-between mt-1.5">
+              {conv.contact?.phone && (
+                <span className="text-[11px] text-muted-foreground truncate block">{conv.contact.phone}</span>
+              )}
+              <div className="flex items-center justify-between mt-1">
                 <span className="text-xs text-muted-foreground capitalize">{conv.channel}</span>
                 {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
               </div>
