@@ -1,0 +1,1 @@
+UPDATE contacts SET name = phone WHERE name = 'Bruno Almeida';
