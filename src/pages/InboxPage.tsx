@@ -249,6 +249,7 @@ export default function InboxPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadConversations = () => {
     if (!tenant) return;
@@ -289,7 +290,10 @@ export default function InboxPage() {
   useEffect(() => {
     if (!selectedConv) return;
     supabase.from('messages').select('*').eq('conversation_id', selectedConv).order('created_at')
-      .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
+      .then(({ data }) => {
+        setMessages((data as unknown as Message[]) ?? []);
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }), 50);
+      });
 
     // Reset unread count when opening conversation
     supabase.from('conversations').update({ unread_count: 0 }).eq('id', selectedConv).then(() => {
@@ -312,6 +316,7 @@ export default function InboxPage() {
           }
           return [...prev, newMsg as unknown as Message];
         });
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
         setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
@@ -571,6 +576,7 @@ export default function InboxPage() {
                   </div>
                 );
               })}
+              <div ref={messagesEndRef} />
             </div>
             <div className="border-t border-border/50 p-4 flex gap-2 bg-card/50">
               <input
