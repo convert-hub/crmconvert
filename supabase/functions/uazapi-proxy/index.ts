@@ -408,30 +408,12 @@ serve(async (req) => {
 
         const instToken = instance.api_token_encrypted || '';
 
-        // UAZAPI v2: Try GET /message/getlink first, fallback to POST /download/media
-        let dlRes = await fetch(`${apiBase}/message/getlink/${message_id}`, {
-          method: 'GET',
-          headers: { 'token': instToken },
+        // UAZAPI v2: POST /message/download with { id: messageId }
+        const dlRes = await fetch(`${apiBase}/message/download`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': instToken },
+          body: JSON.stringify({ id: message_id }),
         });
-
-        // Fallback: try POST /message/getlink if GET returned 405
-        if (dlRes.status === 405) {
-          console.log('GET /message/getlink returned 405, trying POST...');
-          dlRes = await fetch(`${apiBase}/message/getlink`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'token': instToken },
-            body: JSON.stringify({ messageid: message_id }),
-          });
-        }
-
-        // Fallback 2: try GET /download/media
-        if (dlRes.status === 405 || dlRes.status === 404) {
-          console.log('Trying GET /download/media fallback...');
-          dlRes = await fetch(`${apiBase}/download/media/${message_id}`, {
-            method: 'GET',
-            headers: { 'token': instToken },
-          });
-        }
 
         if (!dlRes.ok) {
           const errText = await dlRes.text();
@@ -478,29 +460,21 @@ serve(async (req) => {
         const instToken = instance.api_token_encrypted || '';
         const cleanPhone = phone.replace(/\D/g, '');
 
-        // Determine endpoint based on media type
-        let endpoint = '/send/image';
-        const sendBody: any = { number: cleanPhone };
+        // UAZAPI v2: POST /send/media with { number, type, file, caption? }
+        const type = (sendMediaType || 'image').toLowerCase();
+        let uazapiType = 'image';
+        if (type.includes('audio') || type.includes('ptt') || type.includes('ogg')) uazapiType = 'audio';
+        else if (type.includes('video')) uazapiType = 'video';
+        else if (type.includes('document') || type.includes('pdf')) uazapiType = 'document';
 
-        const type = (sendMediaType || '').toLowerCase();
-        if (type.includes('audio') || type.includes('ptt') || type.includes('ogg')) {
-          endpoint = '/send/audio';
-          sendBody.audio = media_base64 || sendMediaUrl;
-        } else if (type.includes('video')) {
-          endpoint = '/send/video';
-          sendBody.video = media_base64 || sendMediaUrl;
-          if (caption) sendBody.caption = caption;
-        } else if (type.includes('document') || type.includes('pdf')) {
-          endpoint = '/send/document';
-          sendBody.document = media_base64 || sendMediaUrl;
-          if (caption) sendBody.caption = caption;
-        } else {
-          // Default to image
-          sendBody.image = media_base64 || sendMediaUrl;
-          if (caption) sendBody.caption = caption;
-        }
+        const sendBody: any = {
+          number: cleanPhone,
+          type: uazapiType,
+          file: media_base64 || sendMediaUrl,
+        };
+        if (caption) sendBody.caption = caption;
 
-        const sendRes = await fetch(`${apiBase}${endpoint}`, {
+        const sendRes = await fetch(`${apiBase}/send/media`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'token': instToken },
           body: JSON.stringify(sendBody),
