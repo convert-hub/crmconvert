@@ -289,21 +289,63 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
       if (inst) {
         const apiBase = inst.api_url.replace(/\/+$/, '');
         const cleanPhone = phone.replace(/\D/g, '');
-        const picRes = await fetch(`${apiBase}/contact/getProfilePicture`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
-          body: JSON.stringify({ number: cleanPhone }),
-        });
+        // Try multiple endpoint formats for profile picture
+        let picRes: Response | null = null;
+        let avatarUrl: string | null = null;
 
-        if (picRes.ok) {
-          const picData = await picRes.json();
-          const avatarUrl = picData.profilePictureUrl || picData.imgUrl || picData.url || picData.picture || null;
-          if (avatarUrl) {
-            await supabase.from('contacts').update({ avatar_url: avatarUrl }).eq('id', contact.id);
-            console.log(`webhook-uazapi: saved avatar for contact ${contact.id}`);
+        // Attempt 1: POST /contact/profilePicture (UAZAPI v2 common format)
+        try {
+          picRes = await fetch(`${apiBase}/contact/profilePicture`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
+            body: JSON.stringify({ number: cleanPhone }),
+          });
+          console.log(`webhook-uazapi: profilePicture attempt1 status=${picRes.status}`);
+        } catch (e) {
+          console.log('webhook-uazapi: profilePicture attempt1 error:', e);
+        }
+
+        // Attempt 2: POST /contact/getprofilepicture (lowercase)
+        if (!picRes || !picRes.ok) {
+          try {
+            picRes = await fetch(`${apiBase}/contact/getprofilepicture`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
+              body: JSON.stringify({ number: cleanPhone }),
+            });
+            console.log(`webhook-uazapi: profilePicture attempt2 status=${picRes.status}`);
+          } catch (e) {
+            console.log('webhook-uazapi: profilePicture attempt2 error:', e);
+          }
+        }
+
+        // Attempt 3: GET /contact/getProfilePicture?number=X
+        if (!picRes || !picRes.ok) {
+          try {
+            picRes = await fetch(`${apiBase}/contact/getProfilePicture?number=${cleanPhone}`, {
+              method: 'GET',
+              headers: { 'token': inst.api_token_encrypted || '' },
+            });
+            console.log(`webhook-uazapi: profilePicture attempt3 status=${picRes.status}`);
+          } catch (e) {
+            console.log('webhook-uazapi: profilePicture attempt3 error:', e);
+          }
+        }
+
+        if (picRes && picRes.ok) {
+          try {
+            const picData = await picRes.json();
+            console.log(`webhook-uazapi: profilePicture response keys: ${Object.keys(picData).join(',')}`);
+            avatarUrl = picData.profilePictureUrl || picData.imgUrl || picData.url || picData.picture || picData.profilePicture || null;
+            if (avatarUrl) {
+              await supabase.from('contacts').update({ avatar_url: avatarUrl }).eq('id', contact.id);
+              console.log(`webhook-uazapi: saved avatar for contact ${contact.id}`);
+            }
+          } catch (e) {
+            console.log('webhook-uazapi: profilePicture parse error:', e);
           }
         } else {
-          console.log(`webhook-uazapi: profile pic fetch failed (${picRes.status}) - user may have privacy settings`);
+          console.log(`webhook-uazapi: all profile pic attempts failed (last status=${picRes?.status})`);
         }
       }
     } catch (e) {
