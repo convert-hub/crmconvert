@@ -78,6 +78,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
 
       if (error || data?.error) {
         console.error('Media download error:', error || data?.error);
+        if (data?.expired) setMediaData('expired');
         return;
       }
 
@@ -119,6 +120,10 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className={cn("text-xs", isOutbound ? "text-white/70" : "text-muted-foreground")}>Carregando áudio...</span>
           </div>
+        ) : mediaData === 'expired' ? (
+          <div className={cn("flex items-center gap-2 text-xs py-1 opacity-60", isOutbound ? "text-white/70" : "text-muted-foreground")}>
+            <Mic className="h-3.5 w-3.5" /> Áudio indisponível
+          </div>
         ) : mediaData ? (
           <AudioPlayer src={mediaData} isOutbound={isOutbound} />
         ) : (
@@ -139,6 +144,10 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
         {loading ? (
           <div className="h-40 w-full flex items-center justify-center bg-muted/20 rounded-lg">
             <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : mediaData === 'expired' ? (
+          <div className="h-20 w-full flex items-center justify-center bg-muted/20 rounded-lg text-xs text-muted-foreground">
+            Imagem indisponível
           </div>
         ) : mediaData ? (
           <>

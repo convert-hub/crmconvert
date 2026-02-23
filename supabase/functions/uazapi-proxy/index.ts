@@ -436,7 +436,12 @@ serve(async (req) => {
         if (!dlRes.ok) {
           const errText = await dlRes.text();
           console.error('UAZAPI download media error:', dlRes.status, errText);
-          return jsonResponse({ error: `Falha ao baixar mídia: ${dlRes.status}` }, 502);
+          // Return 404 with friendly message for expired/unavailable media (upstream 500 = media no longer available)
+          const isExpired = dlRes.status === 500 || errText.includes('download failed');
+          return jsonResponse({ 
+            error: isExpired ? 'Mídia expirada ou indisponível no WhatsApp' : `Falha ao baixar mídia: ${dlRes.status}`,
+            expired: isExpired,
+          }, isExpired ? 404 : 502);
         }
 
         // Check if response is JSON (URL/link) or binary (file data)
