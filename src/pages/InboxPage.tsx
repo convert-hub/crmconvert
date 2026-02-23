@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,12 +7,160 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
+
+// Media cache to avoid re-downloading
+const mediaCache = new Map<string, string>();
+
+function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
+  const [mediaData, setMediaData] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  const mediaType = ((msg as any).media_type || '').toLowerCase();
+  const isAudio = mediaType.includes('audio') || mediaType.includes('ptt');
+  const isImage = mediaType.includes('image');
+  const isVideo = mediaType.includes('video');
+  const isDocument = mediaType.includes('document') || mediaType.includes('pdf');
+  const providerMsgId = (msg as any).provider_message_id;
+
+  const loadMedia = async () => {
+    if (!providerMsgId || loading) return;
+    
+    // Check cache first
+    const cached = mediaCache.get(providerMsgId);
+    if (cached) {
+      setMediaData(cached);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+        body: {
+          action: 'download_media',
+          tenant_id: tenantId,
+          message_id: providerMsgId,
+        },
+      });
+
+      if (error || data?.error) {
+        console.error('Media download error:', error || data?.error);
+        return;
+      }
+
+      let result: string | null = null;
+      if (data?.base64) {
+        const mime = data.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
+        result = `data:${mime};base64,${data.base64}`;
+      } else if (data?.url) {
+        result = data.url;
+      } else if (data?.data?.base64) {
+        const mime = data.data.mimetype || (isAudio ? 'audio/ogg' : 'image/jpeg');
+        result = `data:${mime};base64,${data.data.base64}`;
+      }
+
+      if (result) {
+        mediaCache.set(providerMsgId, result);
+        setMediaData(result);
+      }
+    } catch (e) {
+      console.error('Media load failed:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isImage || isAudio) loadMedia();
+  }, [providerMsgId]);
+
+  const toggleAudio = () => {
+    if (!audioRef.current) return;
+    if (playing) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+    setPlaying(!playing);
+  };
+
+  if (isAudio) {
+    return (
+      <div className="flex items-center gap-2 min-w-[200px]">
+        {loading ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : mediaData ? (
+          <>
+            <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={toggleAudio}>
+              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </Button>
+            <div className="flex-1 h-1 bg-white/30 rounded-full overflow-hidden">
+              <div className="h-full bg-white/70 rounded-full w-0 transition-all" />
+            </div>
+            <audio ref={audioRef} src={mediaData} onEnded={() => setPlaying(false)} />
+          </>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
+            <Mic className="h-3 w-3 mr-1" /> Carregar áudio
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (isImage) {
+    return (
+      <div className="max-w-[280px]">
+        {loading ? (
+          <div className="h-40 w-full flex items-center justify-center bg-muted/20 rounded-lg">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : mediaData ? (
+          <img src={mediaData} alt="Imagem" className="rounded-lg max-h-60 w-auto cursor-pointer" onClick={() => window.open(mediaData, '_blank')} />
+        ) : (
+          <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
+            <Image className="h-3 w-3 mr-1" /> Carregar imagem
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <div className="max-w-[280px]">
+        {mediaData ? (
+          <video src={mediaData} controls className="rounded-lg max-h-60 w-auto" />
+        ) : (
+          <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
+            <Play className="h-3 w-3 mr-1" /> Carregar vídeo
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (isDocument) {
+    return (
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4" />
+        <span className="text-xs">Documento</span>
+        <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
+          <Download className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export default function InboxPage() {
   const { tenant, membership } = useAuth();
@@ -24,6 +172,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
   const [sending, setSending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadConversations = () => {
     if (!tenant) return;
@@ -75,9 +224,7 @@ export default function InboxPage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv}` }, payload => {
         const newMsg = payload.new as any;
         setMessages(prev => {
-          // Deduplicate: skip if already exists (optimistic or duplicate event)
           if (prev.some(m => m.id === newMsg.id)) return prev;
-          // Also replace optimistic messages with same content/direction/time proximity
           const isOptimistic = prev.find(m => 
             m.direction === 'outbound' && 
             m.content === newMsg.content && 
@@ -107,7 +254,6 @@ export default function InboxPage() {
     const msgContent = newMsg;
     setNewMsg('');
 
-    // Optimistic: add message to UI immediately
     const optimisticId = crypto.randomUUID();
     const optimisticMsg: Message = {
       id: optimisticId,
@@ -125,25 +271,21 @@ export default function InboxPage() {
 
     setSending(true);
     try {
-      // Save message to DB
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: selectedConv, direction: 'outbound',
         content: msgContent, sender_membership_id: membership.id,
       }).select('id').single();
 
-      // Replace optimistic ID with real DB ID so realtime UPDATEs (delivered/read) match
       if (savedMsg?.id) {
         setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
       }
 
-      // Update conversation timestamps (fire and forget)
       supabase.from('conversations').update({
         last_message_at: new Date().toISOString(),
         last_agent_message_at: new Date().toISOString(),
         status: 'waiting_customer',
       }).eq('id', selectedConv);
 
-      // If WhatsApp channel and contact has phone, send via UAZAPI
       if (isWhatsApp && contactPhone) {
         const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
           body: {
@@ -162,11 +304,99 @@ export default function InboxPage() {
           await supabase.from('messages').update({
             provider_message_id: data.provider_message_id,
           }).eq('id', savedMsg.id);
-          console.log('Saved provider_message_id:', data.provider_message_id, 'for message:', savedMsg.id);
         }
       }
     } catch (err: any) {
       toast.error('Erro ao enviar: ' + err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendMedia = async (file: File) => {
+    if (!tenant || !membership || !selectedConv) return;
+    
+    const selectedData = conversations.find(c => c.id === selectedConv);
+    const contactPhone = selectedData?.contact?.phone;
+    const isWhatsApp = selectedData?.channel === 'whatsapp';
+
+    if (!isWhatsApp || !contactPhone) {
+      toast.error('Envio de mídia só disponível para WhatsApp');
+      return;
+    }
+
+    setSending(true);
+    try {
+      // Convert file to base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]); // Remove data:xxx;base64, prefix
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      let mediaType = 'image';
+      if (file.type.startsWith('audio/')) mediaType = 'audio';
+      else if (file.type.startsWith('video/')) mediaType = 'video';
+      else if (file.type.includes('pdf') || file.type.includes('document')) mediaType = 'document';
+
+      // Save message to DB first
+      const { data: savedMsg } = await supabase.from('messages').insert({
+        tenant_id: tenant.id,
+        conversation_id: selectedConv,
+        direction: 'outbound',
+        content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`,
+        sender_membership_id: membership.id,
+        media_type: file.type.startsWith('audio/') ? 'AudioMessage' : file.type.startsWith('image/') ? 'ImageMessage' : file.type.startsWith('video/') ? 'VideoMessage' : 'DocumentMessage',
+      }).select('id').single();
+
+      // Add optimistic message
+      const optimisticMsg: Message = {
+        id: savedMsg?.id || crypto.randomUUID(),
+        tenant_id: tenant.id,
+        conversation_id: selectedConv,
+        direction: 'outbound',
+        content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : 'Mídia'}]`,
+        sender_membership_id: membership.id,
+        created_at: new Date().toISOString(),
+        is_ai_generated: false,
+        media_type: file.type.startsWith('audio/') ? 'AudioMessage' : 'ImageMessage',
+        media_url: null,
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      // Send via UAZAPI
+      const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+        body: {
+          action: 'send_media',
+          tenant_id: tenant.id,
+          phone: contactPhone,
+          media_base64: `data:${file.type};base64,${base64}`,
+          media_type: mediaType,
+          caption: '',
+        },
+      });
+
+      if (error || data?.error) {
+        console.error('WhatsApp send media error:', error || data?.error);
+        toast.warning('Falha ao enviar mídia: ' + (data?.error || error?.message));
+      } else if (savedMsg?.id && data?.provider_message_id) {
+        await supabase.from('messages').update({
+          provider_message_id: data.provider_message_id,
+        }).eq('id', savedMsg.id);
+        toast.success('Mídia enviada!');
+      }
+
+      supabase.from('conversations').update({
+        last_message_at: new Date().toISOString(),
+        last_agent_message_at: new Date().toISOString(),
+        status: 'waiting_customer',
+      }).eq('id', selectedConv);
+    } catch (err: any) {
+      toast.error('Erro ao enviar mídia: ' + err.message);
     } finally {
       setSending(false);
     }
@@ -183,6 +413,11 @@ export default function InboxPage() {
     waiting_customer: 'bg-warning/10 text-warning border-warning/20',
     waiting_agent: 'bg-info/10 text-info border-info/20',
     closed: 'bg-muted text-muted-foreground',
+  };
+
+  const hasMedia = (msg: Message) => {
+    const mt = ((msg as any).media_type || '').toLowerCase();
+    return mt.includes('audio') || mt.includes('image') || mt.includes('video') || mt.includes('document') || mt.includes('ptt');
   };
 
   return (
@@ -239,11 +474,13 @@ export default function InboxPage() {
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
               {messages.map(msg => {
                 const status = (msg as any).provider_metadata?.status;
+                const isMedia = hasMedia(msg);
                 return (
                   <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
                     <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5 text-sm",
                       msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
-                      {msg.content}
+                      {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} />}
+                      {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
                       <div className={cn("text-[10px] mt-1 flex items-center gap-1", msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
                         {format(new Date(msg.created_at), "HH:mm")}
                         {msg.direction === 'outbound' && (
@@ -258,6 +495,20 @@ export default function InboxPage() {
               })}
             </div>
             <div className="border-t border-border/50 p-4 flex gap-2 bg-card/50">
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) handleSendMedia(file);
+                  e.target.value = '';
+                }}
+              />
+              <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending} className="rounded-xl h-12 w-12 shrink-0">
+                <Paperclip className="h-4 w-4" />
+              </Button>
               <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[50px] resize-none rounded-xl"
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
               <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()} className="rounded-xl h-12 w-12">

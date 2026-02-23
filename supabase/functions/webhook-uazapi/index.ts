@@ -141,7 +141,9 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   const senderName = msg.senderName || msg.pushName || msg.notifyName || '';
   const messageId = msg.messageid || msg.id || msg.key?.id || '';
   const mediaType = msg.messageType || msg.media_type || null;
-  const mediaUrl = msg.media_url || msg.mediaUrl || msg.fileURL || null;
+  // UAZAPI v2: media URL is in msg.content.URL (encrypted WhatsApp CDN), or msg.content.directPath
+  const mediaUrl = msg.content?.URL || msg.media_url || msg.mediaUrl || msg.fileURL || null;
+  const mediaMimetype = msg.content?.mimetype || null;
 
   // UAZAPI v2 uses LIDs (e.g. 96293317787655@lid) in `sender` field.
   // The real phone number is in `sender_pn` (e.g. 553193089817@s.whatsapp.net) or `chatid`.

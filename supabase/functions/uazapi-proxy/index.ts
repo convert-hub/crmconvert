@@ -388,6 +388,116 @@ serve(async (req) => {
         }
       }
 
+      // ── DOWNLOAD MEDIA ──
+      case 'download_media': {
+        const { message_id } = body;
+        if (!message_id) {
+          return jsonResponse({ error: 'message_id required' }, 400);
+        }
+
+        const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
+          .select('*')
+          .eq('tenant_id', effectiveTenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+
+        if (!instance) {
+          return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
+        }
+
+        const instToken = instance.api_token_encrypted || '';
+
+        // UAZAPI v2: POST /download/media with messageid
+        const dlRes = await fetch(`${apiBase}/download/media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': instToken },
+          body: JSON.stringify({ messageid: message_id }),
+        });
+
+        if (!dlRes.ok) {
+          const errText = await dlRes.text();
+          console.error('UAZAPI download media error:', dlRes.status, errText);
+          return jsonResponse({ error: `Falha ao baixar mídia: ${dlRes.status}` }, 502);
+        }
+
+        // Check if response is JSON (URL) or binary (file data)
+        const contentType = dlRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const dlData = await dlRes.json();
+          return jsonResponse({ ok: true, url: dlData.url || dlData.link || dlData.base64 || null, data: dlData });
+        }
+
+        // Binary response - convert to base64
+        const arrayBuffer = await dlRes.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        return jsonResponse({ ok: true, base64, mimetype: contentType });
+      }
+
+      // ── SEND MEDIA ──
+      case 'send_media': {
+        const { phone, media_base64, media_url: sendMediaUrl, media_type: sendMediaType, caption, conversation_id: convId } = body;
+        if (!phone || (!media_base64 && !sendMediaUrl)) {
+          return jsonResponse({ error: 'phone and media_base64 or media_url required' }, 400);
+        }
+
+        const { data: instance } = await supabaseAdmin.from('whatsapp_instances')
+          .select('*')
+          .eq('tenant_id', effectiveTenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+
+        if (!instance) {
+          return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
+        }
+
+        const instToken = instance.api_token_encrypted || '';
+        const cleanPhone = phone.replace(/\D/g, '');
+
+        // Determine endpoint based on media type
+        let endpoint = '/send/image';
+        const sendBody: any = { number: cleanPhone };
+
+        const type = (sendMediaType || '').toLowerCase();
+        if (type.includes('audio') || type.includes('ptt') || type.includes('ogg')) {
+          endpoint = '/send/audio';
+          sendBody.audio = media_base64 || sendMediaUrl;
+        } else if (type.includes('video')) {
+          endpoint = '/send/video';
+          sendBody.video = media_base64 || sendMediaUrl;
+          if (caption) sendBody.caption = caption;
+        } else if (type.includes('document') || type.includes('pdf')) {
+          endpoint = '/send/document';
+          sendBody.document = media_base64 || sendMediaUrl;
+          if (caption) sendBody.caption = caption;
+        } else {
+          // Default to image
+          sendBody.image = media_base64 || sendMediaUrl;
+          if (caption) sendBody.caption = caption;
+        }
+
+        const sendRes = await fetch(`${apiBase}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': instToken },
+          body: JSON.stringify(sendBody),
+        });
+
+        const sendData = await sendRes.json();
+        console.log('UAZAPI send media response:', sendRes.status, JSON.stringify(sendData));
+
+        if (!sendRes.ok) {
+          return jsonResponse({ error: sendData.error || sendData.message || `Falha ao enviar mídia: ${sendRes.status}`, details: sendData }, 502);
+        }
+
+        return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.messageid || sendData.id || null });
+      }
+
       default:
         return jsonResponse({ error: `Unknown action: ${action}` }, 400);
     }
