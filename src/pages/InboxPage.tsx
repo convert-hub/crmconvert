@@ -20,9 +20,24 @@ import AudioPlayer from '@/components/inbox/AudioPlayer';
 const mediaCache = new Map<string, string>();
 
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  const handleDownload = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = `imagem-${Date.now()}.jpg`;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-200" onClick={onClose}>
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/70 hover:text-white text-3xl font-light z-10">&times;</button>
+      <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
+        <button onClick={handleDownload} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors" title="Baixar imagem">
+          <Download className="h-5 w-5" />
+        </button>
+        <button onClick={onClose} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors text-2xl leading-none" title="Fechar">&times;</button>
+      </div>
       <img src={src} alt="Imagem ampliada" className="max-h-[85vh] max-w-[90vw] rounded-lg shadow-2xl object-contain animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()} />
     </div>
   );
