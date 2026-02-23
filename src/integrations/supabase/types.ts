@@ -375,6 +375,7 @@ export type Database = {
           ad_id: string | null
           adset_id: string | null
           assigned_to: string | null
+          avatar_url: string | null
           campaign_id: string | null
           city: string | null
           company_id: string | null
@@ -403,6 +404,7 @@ export type Database = {
           ad_id?: string | null
           adset_id?: string | null
           assigned_to?: string | null
+          avatar_url?: string | null
           campaign_id?: string | null
           city?: string | null
           company_id?: string | null
@@ -431,6 +433,7 @@ export type Database = {
           ad_id?: string | null
           adset_id?: string | null
           assigned_to?: string | null
+          avatar_url?: string | null
           campaign_id?: string | null
           city?: string | null
           company_id?: string | null
