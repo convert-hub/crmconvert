@@ -407,36 +407,28 @@ serve(async (req) => {
         }
 
         const instToken = instance.api_token_encrypted || '';
+        const instancePhone = (instance.phone_number || '').replace(/\D/g, '');
 
-        // UAZAPI v2: POST /message/download with { id: messageId }
-        const dlRes = await fetch(`${apiBase}/message/download`, {
+        // UAZAPI v2: POST /message/download with { id: "owner:messageId" }
+        // Try full format first (owner:messageId), then short format
+        const fullId = instancePhone ? `${instancePhone}:${message_id}` : message_id;
+        console.log(`download_media: trying full ID: ${fullId}`);
+        
+        let dlRes = await fetch(`${apiBase}/message/download`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'token': instToken },
-          body: JSON.stringify({ id: message_id }),
+          body: JSON.stringify({ id: fullId }),
         });
 
-        if (!dlRes.ok) {
-          const errText = await dlRes.text();
-          console.error('UAZAPI download media error:', dlRes.status, errText);
-          return jsonResponse({ error: `Falha ao baixar mídia: ${dlRes.status}` }, 502);
+        // Fallback: try short ID if full ID failed
+        if (!dlRes.ok && instancePhone) {
+          console.log(`download_media: full ID failed (${dlRes.status}), trying short ID: ${message_id}`);
+          dlRes = await fetch(`${apiBase}/message/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': instToken },
+            body: JSON.stringify({ id: message_id }),
+          });
         }
-
-        // Check if response is JSON (URL) or binary (file data)
-        const contentType = dlRes.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const dlData = await dlRes.json();
-          return jsonResponse({ ok: true, url: dlData.url || dlData.link || dlData.base64 || null, data: dlData });
-        }
-
-        // Binary response - convert to base64
-        const arrayBuffer = await dlRes.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        const base64 = btoa(binary);
-        return jsonResponse({ ok: true, base64, mimetype: contentType });
       }
 
       // ── SEND MEDIA ──
