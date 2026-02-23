@@ -276,6 +276,41 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
 
   console.log(`webhook-uazapi: saved ${fromMe ? 'outbound' : 'inbound'} message for conversation ${conversation.id}`);
 
+  // Fetch profile picture for inbound messages (if contact has no avatar yet)
+  if (!fromMe && !contact.avatar_url) {
+    try {
+      const { data: inst } = await supabase.from('whatsapp_instances')
+        .select('api_url, api_token_encrypted')
+        .eq('tenant_id', tenantId)
+        .eq('is_active', true)
+        .limit(1)
+        .single();
+
+      if (inst) {
+        const apiBase = inst.api_url.replace(/\/+$/, '');
+        const cleanPhone = phone.replace(/\D/g, '');
+        const picRes = await fetch(`${apiBase}/contact/getProfilePicture`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
+          body: JSON.stringify({ number: cleanPhone }),
+        });
+
+        if (picRes.ok) {
+          const picData = await picRes.json();
+          const avatarUrl = picData.profilePictureUrl || picData.imgUrl || picData.url || picData.picture || null;
+          if (avatarUrl) {
+            await supabase.from('contacts').update({ avatar_url: avatarUrl }).eq('id', contact.id);
+            console.log(`webhook-uazapi: saved avatar for contact ${contact.id}`);
+          }
+        } else {
+          console.log(`webhook-uazapi: profile pic fetch failed (${picRes.status}) - user may have privacy settings`);
+        }
+      }
+    } catch (e) {
+      console.log('webhook-uazapi: avatar fetch error (non-critical):', e);
+    }
+  }
+
   // Enqueue AI processing for inbound messages
   if (!fromMe) {
     try {

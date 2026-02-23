@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Conversation, Contact, Message } from '@/types/crm';
 import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
@@ -209,8 +210,12 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
 
   return (
     <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
-      <div>
-        <div className="flex items-center gap-2 group">
+      <div className="flex items-center gap-3">
+        <Avatar className="h-10 w-10">
+          {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact?.name ?? ''} />}
+          <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{(contact?.name ?? '?').slice(0, 2).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <div>
           {editing ? (
             <Input
               ref={inputRef}
@@ -232,7 +237,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
           )}
         </div>
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
-      </div>
+        </div>
       <Badge variant="outline" className={`capitalize rounded-full ${statusColors[status ?? ''] ?? ''}`}>{status?.replace('_', ' ')}</Badge>
     </div>
   );
@@ -530,20 +535,28 @@ export default function InboxPage() {
                 "w-full text-left px-4 py-3.5 border-b border-border/30 hover:bg-accent/50 transition-all duration-150",
                 selectedConv === conv.id && "bg-accent/80 border-l-2 border-l-primary"
               )}>
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-sm truncate text-foreground">{conv.contact?.name ?? 'Desconhecido'}</span>
-                {conv.unread_count > 0 && (
-                  <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
-                )}
+              <div className="flex items-center gap-3">
+                <Avatar className="h-9 w-9 shrink-0">
+                  {(conv.contact as any)?.avatar_url && <AvatarImage src={(conv.contact as any).avatar_url} alt={conv.contact?.name ?? ''} />}
+                  <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">{(conv.contact?.name ?? '?').slice(0, 2).toUpperCase()}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-sm truncate text-foreground">{conv.contact?.name ?? 'Desconhecido'}</span>
+                    {conv.unread_count > 0 && (
+                      <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
+                    )}
+                  </div>
+                  {conv.contact?.phone && (
+                    <span className="text-[11px] text-muted-foreground truncate block">{conv.contact.phone}</span>
+                  )}
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-xs text-muted-foreground capitalize">{conv.channel}</span>
+                    {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
+                  </div>
+                  <Badge variant="outline" className={`text-[10px] mt-1.5 capitalize rounded-full ${statusColors[conv.status] ?? ''}`}>{conv.status.replace('_', ' ')}</Badge>
+                </div>
               </div>
-              {conv.contact?.phone && (
-                <span className="text-[11px] text-muted-foreground truncate block">{conv.contact.phone}</span>
-              )}
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-xs text-muted-foreground capitalize">{conv.channel}</span>
-                {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
-              </div>
-              <Badge variant="outline" className={`text-[10px] mt-1.5 capitalize rounded-full ${statusColors[conv.status] ?? ''}`}>{conv.status.replace('_', ' ')}</Badge>
             </button>
           ))}
           {filtered.length === 0 && <p className="text-center text-sm text-muted-foreground py-8">Nenhuma conversa</p>}
