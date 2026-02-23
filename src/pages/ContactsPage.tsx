@@ -128,8 +128,10 @@ export default function ContactsPage() {
             </TableHeader>
             <TableBody>
               {contacts.map(c => (
-                <TableRow key={c.id} className="group">
-                  <TableCell className="font-medium text-foreground">{c.name}</TableCell>
+                <TableRow key={c.id} className="group cursor-pointer" onClick={() => !isReadonly && openEdit(c)}>
+                  <TableCell className="font-medium text-foreground">
+                    <span className="group-hover:underline">{c.name}</span>
+                  </TableCell>
                   <TableCell>{c.phone && <span className="flex items-center gap-1.5 text-muted-foreground"><Phone className="h-3 w-3" />{c.phone}</span>}</TableCell>
                   <TableCell>{c.email && <span className="flex items-center gap-1.5 text-muted-foreground"><Mail className="h-3 w-3" />{c.email}</span>}</TableCell>
                   <TableCell>
