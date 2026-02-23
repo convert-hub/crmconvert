@@ -289,63 +289,32 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
       if (inst) {
         const apiBase = inst.api_url.replace(/\/+$/, '');
         const cleanPhone = phone.replace(/\D/g, '');
-        // Try multiple endpoint formats for profile picture
-        let picRes: Response | null = null;
-        let avatarUrl: string | null = null;
-
-        // Attempt 1: POST /contact/profilePicture (UAZAPI v2 common format)
+        // Use POST /chat/details to get profile picture (per UAZAPI v2 docs)
         try {
-          picRes = await fetch(`${apiBase}/contact/profilePicture`, {
+          const detailsRes = await fetch(`${apiBase}/chat/details`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
-            body: JSON.stringify({ number: cleanPhone }),
+            body: JSON.stringify({ number: cleanPhone, preview: false }),
           });
-          console.log(`webhook-uazapi: profilePicture attempt1 status=${picRes.status}`);
-        } catch (e) {
-          console.log('webhook-uazapi: profilePicture attempt1 error:', e);
-        }
+          console.log(`webhook-uazapi: /chat/details status=${detailsRes.status}`);
 
-        // Attempt 2: POST /contact/getprofilepicture (lowercase)
-        if (!picRes || !picRes.ok) {
-          try {
-            picRes = await fetch(`${apiBase}/contact/getprofilepicture`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
-              body: JSON.stringify({ number: cleanPhone }),
-            });
-            console.log(`webhook-uazapi: profilePicture attempt2 status=${picRes.status}`);
-          } catch (e) {
-            console.log('webhook-uazapi: profilePicture attempt2 error:', e);
-          }
-        }
-
-        // Attempt 3: GET /contact/getProfilePicture?number=X
-        if (!picRes || !picRes.ok) {
-          try {
-            picRes = await fetch(`${apiBase}/contact/getProfilePicture?number=${cleanPhone}`, {
-              method: 'GET',
-              headers: { 'token': inst.api_token_encrypted || '' },
-            });
-            console.log(`webhook-uazapi: profilePicture attempt3 status=${picRes.status}`);
-          } catch (e) {
-            console.log('webhook-uazapi: profilePicture attempt3 error:', e);
-          }
-        }
-
-        if (picRes && picRes.ok) {
-          try {
-            const picData = await picRes.json();
-            console.log(`webhook-uazapi: profilePicture response keys: ${Object.keys(picData).join(',')}`);
-            avatarUrl = picData.profilePictureUrl || picData.imgUrl || picData.url || picData.picture || picData.profilePicture || null;
+          if (detailsRes.ok) {
+            const details = await detailsRes.json();
+            // Look for image fields in the chat details response
+            const avatarUrl = details.imagePreview || details.image || details.profilePicture || details.wa_profilePicture || details.picture || null;
+            console.log(`webhook-uazapi: chat/details image fields: imagePreview=${!!details.imagePreview}, image=${!!details.image}, profilePicture=${!!details.profilePicture}`);
             if (avatarUrl) {
               await supabase.from('contacts').update({ avatar_url: avatarUrl }).eq('id', contact.id);
               console.log(`webhook-uazapi: saved avatar for contact ${contact.id}`);
+            } else {
+              console.log(`webhook-uazapi: no avatar URL found in chat/details response`);
             }
-          } catch (e) {
-            console.log('webhook-uazapi: profilePicture parse error:', e);
+          } else {
+            const errText = await detailsRes.text();
+            console.log(`webhook-uazapi: /chat/details failed: ${detailsRes.status} ${errText}`);
           }
-        } else {
-          console.log(`webhook-uazapi: all profile pic attempts failed (last status=${picRes?.status})`);
+        } catch (e) {
+          console.log('webhook-uazapi: chat/details avatar fetch error:', e);
         }
       }
     } catch (e) {
