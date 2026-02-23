@@ -187,7 +187,9 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   
   let contact = existingContacts?.[0];
   if (!contact) {
-    const name = senderName || phone;
+    // For outbound (fromMe) messages, senderName is the agent's name, not the contact's.
+    // Use phone as fallback name for outbound; use senderName only for inbound.
+    const name = fromMe ? phone : (senderName || phone);
     const { data: newContact } = await supabase.from('contacts').insert({
       tenant_id: tenantId, name, phone, source: 'whatsapp', status: 'lead',
     }).select().single();
