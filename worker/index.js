@@ -132,6 +132,15 @@ const handlers = {
         }
       }
 
+      // Keyword-based lead creation for inbound messages
+      if (message_text && !data?.fromMe) {
+        try {
+          await checkKeywordLeadCreation(tenant_id, contact_id, conversation_id, message_text);
+        } catch (err) {
+          console.error('[Worker] Keyword lead creation error:', err.message);
+        }
+      }
+
       return { conversation_id, contact_id, ai_processed: true };
     }
 
@@ -209,6 +218,15 @@ const handlers = {
       }
     }
 
+    // Keyword-based lead creation for inbound messages (legacy flow)
+    if (!fromMe && text) {
+      try {
+        await checkKeywordLeadCreation(tenant_id, contact.id, conversation.id, text);
+      } catch (err) {
+        console.error('[Worker] Keyword lead creation error:', err.message);
+      }
+    }
+
     return { contact_id: contact.id, conversation_id: conversation.id };
   },
 
@@ -275,6 +293,71 @@ async function findContact(tenantId, phone, email) {
     if (data && data.length > 0) return data[0];
   }
   return null;
+}
+
+// Keyword Lead Creation
+function removeAccents(str) {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+async function checkKeywordLeadCreation(tenantId, contactId, conversationId, messageText) {
+  // 1. Check contact status
+  const { data: contact } = await supabase.from('contacts').select('id, name, status').eq('id', contactId).single();
+  if (!contact || contact.status !== 'lead') return;
+
+  // 2. Get tenant keywords
+  const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
+  const keywords = tenant?.settings?.lead_keywords || [];
+  if (keywords.length === 0) return;
+
+  // 3. Normalize and match
+  const normalizedMessage = removeAccents(messageText.toLowerCase());
+  const matchedKeyword = keywords.find(k => normalizedMessage.includes(removeAccents(k.toLowerCase())));
+  if (!matchedKeyword) return;
+
+  console.log(`[Worker] Keyword match "${matchedKeyword}" for contact ${contactId}`);
+
+  // 4. Check if open opportunity already exists
+  const { data: existingOpps } = await supabase.from('opportunities')
+    .select('id').eq('contact_id', contactId).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
+  if (existingOpps && existingOpps.length > 0) {
+    console.log(`[Worker] Open opportunity already exists for contact ${contactId}, skipping`);
+    return;
+  }
+
+  // 5. Get default pipeline and first stage
+  const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenantId).eq('is_default', true).single();
+  if (!pipeline) { console.log('[Worker] No default pipeline found'); return; }
+
+  const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
+  if (!stage) { console.log('[Worker] No stages in default pipeline'); return; }
+
+  // 6. Create opportunity with idempotency
+  const idempKey = `kw_opp_${contactId}_${new Date().toISOString().slice(0, 10)}`;
+  const { data: existingByKey } = await supabase.from('opportunities')
+    .select('id').eq('tenant_id', tenantId).eq('contact_id', contactId).eq('source', 'whatsapp_keyword').eq('status', 'open').limit(1);
+  if (existingByKey && existingByKey.length > 0) return;
+
+  await supabase.from('opportunities').insert({
+    tenant_id: tenantId,
+    contact_id: contactId,
+    pipeline_id: pipeline.id,
+    stage_id: stage.id,
+    title: `Lead: ${contact.name}`,
+    source: 'whatsapp_keyword',
+  });
+
+  // 7. Create notification activity
+  await supabase.from('activities').insert({
+    tenant_id: tenantId,
+    type: 'note',
+    title: 'Lead acionado por palavra-chave',
+    description: `Palavra-chave detectada: "${matchedKeyword}". Mensagem: "${messageText.substring(0, 200)}"`,
+    contact_id: contactId,
+    conversation_id: conversationId,
+  });
+
+  console.log(`[Worker] Created opportunity and activity for contact ${contactId} via keyword "${matchedKeyword}"`);
 }
 
 // AI Functions

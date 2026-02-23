@@ -198,6 +198,8 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
 export default function SettingsPage() {
   const { tenant, role } = useAuth();
   const [tenantName, setTenantName] = useState(tenant?.name ?? '');
+  const [leadKeywords, setLeadKeywords] = useState<string[]>([]);
+  const [newKeyword, setNewKeyword] = useState('');
   const [members, setMembers] = useState<Member[]>([]);
   const [stages, setStages] = useState<StageRow[]>([]);
   const [aiConfigs, setAiConfigs] = useState<AiConfig[]>([]);
@@ -214,6 +216,11 @@ export default function SettingsPage() {
 
   const loadAll = async () => {
     if (!tenant) return;
+    // Load keywords from tenant settings
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) {
+      setLeadKeywords((tenantData.settings as Record<string, any>).lead_keywords || []);
+    }
     const { data: mems } = await supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id);
     if (mems) {
       const enriched: Member[] = [];
@@ -233,6 +240,29 @@ export default function SettingsPage() {
   };
 
   const saveTenant = async () => { if (!tenant) return; const { error } = await supabase.from('tenants').update({ name: tenantName }).eq('id', tenant.id); if (error) toast.error(error.message); else toast.success('Salvo!'); };
+
+  const addKeyword = async () => {
+    if (!tenant || !newKeyword.trim()) return;
+    const updated = [...leadKeywords, newKeyword.trim().toLowerCase()];
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, lead_keywords: updated } }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setLeadKeywords(updated);
+    setNewKeyword('');
+    toast.success('Palavra-chave adicionada');
+  };
+
+  const removeKeyword = async (keyword: string) => {
+    if (!tenant) return;
+    const updated = leadKeywords.filter(k => k !== keyword);
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, lead_keywords: updated } }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setLeadKeywords(updated);
+    toast.success('Palavra-chave removida');
+  };
   const updateMemberRole = async (memberId: string, newRole: string) => { await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', memberId); toast.success('Papel atualizado'); loadAll(); };
   const removeMember = async (memberId: string) => { await supabase.from('tenant_memberships').update({ is_active: false }).eq('id', memberId); toast.success('Membro desativado'); loadAll(); };
 
@@ -276,6 +306,40 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2"><Label>Nome da Empresa</Label><Input value={tenantName} onChange={e => setTenantName(e.target.value)} className="rounded-xl" /></div>
               <Button onClick={saveTenant} disabled={!isAdmin} className="rounded-xl">Salvar</Button>
+            </CardContent>
+          </Card>
+
+          <Card className="glass-card rounded-2xl">
+            <CardHeader>
+              <CardTitle>Palavras-chave para Leads</CardTitle>
+              <CardDescription>Mensagens do WhatsApp contendo essas palavras criarão automaticamente uma oportunidade no pipeline para contatos com status "lead"</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {leadKeywords.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma palavra-chave configurada.</p>}
+                {leadKeywords.map(kw => (
+                  <Badge key={kw} variant="secondary" className="rounded-full text-sm gap-1 px-3 py-1">
+                    {kw}
+                    {isAdmin && (
+                      <button onClick={() => removeKeyword(kw)} className="ml-1 hover:text-destructive transition-colors">
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </Badge>
+                ))}
+              </div>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <Input
+                    value={newKeyword}
+                    onChange={e => setNewKeyword(e.target.value)}
+                    placeholder="Ex: preço, orçamento, comprar..."
+                    className="rounded-xl flex-1"
+                    onKeyDown={e => e.key === 'Enter' && addKeyword()}
+                  />
+                  <Button onClick={addKeyword} className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Adicionar</Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
