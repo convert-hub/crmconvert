@@ -62,6 +62,8 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
         result = `data:${mime};base64,${data.base64}`;
       } else if (data?.url) {
         result = data.url;
+      } else if (data?.data?.fileURL) {
+        result = data.data.fileURL;
       } else if (data?.data?.base64) {
         const mime = data.data.mimetype || (isAudio ? 'audio/ogg' : 'image/jpeg');
         result = `data:${mime};base64,${data.data.base64}`;

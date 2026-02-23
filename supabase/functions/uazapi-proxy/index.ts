@@ -412,13 +412,15 @@ serve(async (req) => {
         // UAZAPI v2: POST /message/download with { id: "owner:messageId" }
         // Try full format first (owner:messageId), then short format
         const fullId = instancePhone ? `${instancePhone}:${message_id}` : message_id;
-        console.log(`download_media: trying full ID: ${fullId}`);
+        console.log(`download_media: trying ID: ${fullId}, apiBase: ${apiBase}`);
         
         let dlRes = await fetch(`${apiBase}/message/download`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'token': instToken },
           body: JSON.stringify({ id: fullId }),
         });
+
+        console.log(`download_media: response status=${dlRes.status}, content-type=${dlRes.headers.get('content-type')}`);
 
         // Fallback: try short ID if full ID failed
         if (!dlRes.ok && instancePhone) {
@@ -428,6 +430,7 @@ serve(async (req) => {
             headers: { 'Content-Type': 'application/json', 'token': instToken },
             body: JSON.stringify({ id: message_id }),
           });
+          console.log(`download_media: fallback status=${dlRes.status}`);
         }
 
         if (!dlRes.ok) {
@@ -438,20 +441,32 @@ serve(async (req) => {
 
         // Check if response is JSON (URL/link) or binary (file data)
         const contentType = dlRes.headers.get('content-type') || '';
+        
         if (contentType.includes('application/json')) {
           const dlData = await dlRes.json();
-          return jsonResponse({ ok: true, url: dlData.url || dlData.link || dlData.base64 || null, data: dlData });
+          console.log(`download_media: JSON response keys: ${Object.keys(dlData).join(',')}`);
+          
+          // UAZAPI returns { fileURL: "...", mimetype: "..." } or { base64: "...", mimetype: "..." }
+          if (dlData.base64) {
+            return jsonResponse({ ok: true, base64: dlData.base64, mimetype: dlData.mimetype || 'application/octet-stream' });
+          }
+          if (dlData.fileURL || dlData.url || dlData.link) {
+            return jsonResponse({ ok: true, url: dlData.fileURL || dlData.url || dlData.link, mimetype: dlData.mimetype });
+          }
+          // Return full data for inspection
+          return jsonResponse({ ok: true, data: dlData });
         }
 
         // Binary response - convert to base64
         const arrayBuffer = await dlRes.arrayBuffer();
+        console.log(`download_media: binary response size=${arrayBuffer.byteLength}, type=${contentType}`);
         const bytes = new Uint8Array(arrayBuffer);
         let binary = '';
         for (let i = 0; i < bytes.byteLength; i++) {
           binary += String.fromCharCode(bytes[i]);
         }
-        const base64 = btoa(binary);
-        return jsonResponse({ ok: true, base64, mimetype: contentType });
+        const b64 = btoa(binary);
+        return jsonResponse({ ok: true, base64: b64, mimetype: contentType });
       }
 
       // ── SEND MEDIA ──
