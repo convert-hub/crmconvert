@@ -14,6 +14,7 @@ import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
+import AudioPlayer from '@/components/inbox/AudioPlayer';
 
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
@@ -21,8 +22,6 @@ const mediaCache = new Map<string, string>();
 function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
   const mediaType = ((msg as any).media_type || '').toLowerCase();
   const isAudio = mediaType.includes('audio') || mediaType.includes('ptt');
@@ -84,35 +83,25 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
     if (isImage || isAudio) loadMedia();
   }, [providerMsgId]);
 
-  const toggleAudio = () => {
-    if (!audioRef.current) return;
-    if (playing) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
-    }
-    setPlaying(!playing);
-  };
+  const isOutbound = msg.direction === 'outbound';
 
   if (isAudio) {
     return (
-      <div className="flex items-center gap-2 min-w-[200px]">
+      <div className="min-w-[220px]">
         {loading ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <div className="flex items-center gap-2 py-1">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className={cn("text-xs", isOutbound ? "text-white/70" : "text-muted-foreground")}>Carregando áudio...</span>
+          </div>
         ) : mediaData ? (
-          <>
-            <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={toggleAudio}>
-              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            </Button>
-            <div className="flex-1 h-1 bg-white/30 rounded-full overflow-hidden">
-              <div className="h-full bg-white/70 rounded-full w-0 transition-all" />
-            </div>
-            <audio ref={audioRef} src={mediaData} onEnded={() => setPlaying(false)} />
-          </>
+          <AudioPlayer src={mediaData} isOutbound={isOutbound} />
         ) : (
-          <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs">
-            <Mic className="h-3 w-3 mr-1" /> Carregar áudio
-          </Button>
+          <button onClick={loadMedia} className={cn(
+            "flex items-center gap-2 text-xs py-1 opacity-70 hover:opacity-100 transition-opacity",
+            isOutbound ? "text-white" : "text-foreground"
+          )}>
+            <Mic className="h-3.5 w-3.5" /> Carregar áudio
+          </button>
         )}
       </div>
     );
