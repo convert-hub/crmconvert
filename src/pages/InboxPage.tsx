@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -180,6 +180,62 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   }
 
   return null;
+}
+
+function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
+  contact?: Contact;
+  channel?: string;
+  status?: string;
+  statusColors: Record<string, string>;
+  onNameSaved: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(contact?.name ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setName(contact?.name ?? ''); }, [contact?.name]);
+  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || !contact) { setEditing(false); return; }
+    if (trimmed === contact.name) { setEditing(false); return; }
+    const { error } = await supabase.from('contacts').update({ name: trimmed }).eq('id', contact.id);
+    if (error) { toast.error(error.message); return; }
+    onNameSaved(trimmed);
+    setEditing(false);
+    toast.success('Nome atualizado!');
+  };
+
+  return (
+    <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
+      <div>
+        <div className="flex items-center gap-2 group">
+          {editing ? (
+            <Input
+              ref={inputRef}
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onBlur={save}
+              onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setName(contact?.name ?? ''); setEditing(false); } }}
+              className="h-8 text-base font-semibold rounded-lg w-56"
+            />
+          ) : (
+            <>
+              <h3 className="font-semibold text-foreground">{contact?.name ?? 'Conversa'}</h3>
+              {contact && (
+                <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent" title="Editar nome">
+                  <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
+      </div>
+      <Badge variant="outline" className={`capitalize rounded-full ${statusColors[status ?? ''] ?? ''}`}>{status?.replace('_', ' ')}</Badge>
+    </div>
+  );
 }
 
 export default function InboxPage() {
@@ -484,13 +540,15 @@ export default function InboxPage() {
       <div className="flex-1 flex flex-col">
         {selectedConv ? (
           <>
-            <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
-              <div>
-                <h3 className="font-semibold text-foreground">{selectedData?.contact?.name ?? 'Conversa'}</h3>
-                <span className="text-xs text-muted-foreground">{selectedData?.contact?.phone} · {selectedData?.channel}</span>
-              </div>
-              <Badge variant="outline" className={`capitalize rounded-full ${statusColors[selectedData?.status ?? ''] ?? ''}`}>{selectedData?.status?.replace('_', ' ')}</Badge>
-            </div>
+            <ChatHeader
+              contact={selectedData?.contact}
+              channel={selectedData?.channel}
+              status={selectedData?.status}
+              statusColors={statusColors}
+              onNameSaved={(newName) => {
+                setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
+              }}
+            />
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
               {messages.map(msg => {
                 const status = (msg as any).provider_metadata?.status;
