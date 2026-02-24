@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Pipeline, Stage, Opportunity, Contact, Conversation } from '@/types/crm';
+import type { Pipeline, Stage, Opportunity, Contact, Conversation, Activity } from '@/types/crm';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
@@ -17,11 +17,14 @@ import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
-  DragEndEvent, DragOverEvent, DragStartEvent, DragOverlay,
+  DragEndEvent, DragStartEvent, DragOverlay,
 } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
+
+// Card status type based on scheduled activities
+type CardAlertStatus = 'overdue' | 'soon' | 'scheduled' | 'inactive' | 'normal';
 
 function DroppableColumn({ stage, children, count, total, onAdd }: {
   stage: Stage; children: React.ReactNode; count: number; total: number;
@@ -53,16 +56,29 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick, onWhatsApp, isInactive, unreadCount }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void; isInactive: boolean; unreadCount: number }) {
+function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount }: {
+  opp: Opportunity & { contact?: Contact };
+  onClick: () => void;
+  onWhatsApp: (e: React.MouseEvent) => void;
+  alertStatus: CardAlertStatus;
+  unreadCount: number;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
   };
+
+  const borderClass =
+    alertStatus === 'overdue' ? 'border-destructive/60 ring-1 ring-destructive/30' :
+    alertStatus === 'soon' ? 'border-warning/60 ring-1 ring-warning/30' :
+    alertStatus === 'inactive' ? 'border-destructive/60 ring-1 ring-destructive/30' :
+    'border-border/50';
+
   return (
     <Card ref={setNodeRef} style={style}
-      className={`cursor-pointer p-3.5 hover-lift border bg-card rounded-xl group ${isInactive ? 'border-destructive/60 ring-1 ring-destructive/30' : 'border-border/50'}`}
+      className={`cursor-pointer p-3.5 hover-lift border bg-card rounded-xl group ${borderClass}`}
       onClick={onClick}>
       <div className="space-y-2.5">
         <div className="flex items-start gap-2">
@@ -70,9 +86,19 @@ function SortableOppCard({ opp, onClick, onWhatsApp, isInactive, unreadCount }: 
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="text-sm font-medium leading-tight flex-1 text-foreground">{opp.title}</p>
-          {isInactive && (
+          {alertStatus === 'inactive' && (
             <div className="shrink-0" title="Oportunidade inativa — necessita follow-up">
               <AlertTriangle className="h-4 w-4 text-destructive animate-pulse" />
+            </div>
+          )}
+          {alertStatus === 'overdue' && (
+            <div className="shrink-0" title="Atividade vencida">
+              <CalendarClock className="h-4 w-4 text-destructive animate-pulse" />
+            </div>
+          )}
+          {alertStatus === 'soon' && (
+            <div className="shrink-0" title="Atividade próxima (< 2h)">
+              <CalendarClock className="h-4 w-4 text-warning animate-pulse" />
             </div>
           )}
           {opp.contact?.phone && (
@@ -102,7 +128,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, isInactive, unreadCount }: 
               R$ {Number(opp.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
           )}
-          <div className={`flex items-center gap-1 text-[10px] ml-auto ${isInactive ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+          <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
             <Clock className="h-3 w-3" />
             {formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
           </div>
@@ -133,10 +159,12 @@ export default function PipelinePage() {
   const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [chatConvStatus, setChatConvStatus] = useState<string>('open');
   const [unreadByContact, setUnreadByContact] = useState<Record<string, number>>({});
+  // Pending (non-completed) activities per opportunity: oppId -> Activity[]
+  const [activitiesByOpp, setActivitiesByOpp] = useState<Record<string, Activity[]>>({});
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
-  // Tick every 60s to refresh inactivity calculations
+  // Tick every 60s to refresh inactivity/due calculations
   const [, setTick] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => setTick(t => t + 1), 60_000);
@@ -178,7 +206,6 @@ export default function PipelinePage() {
       setChatOpp(opp);
       resetUnreadForContact(opp.contact_id);
     } else {
-      // Create new conversation
       const { data: newConv, error } = await supabase.from('conversations').insert({
         tenant_id: tenant.id,
         contact_id: opp.contact_id,
@@ -215,12 +242,35 @@ export default function PipelinePage() {
       .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
   }, [selectedPipeline, tenant]);
 
+  // Load pending activities for all opportunities in the pipeline
+  const loadActivities = useCallback(() => {
+    if (!selectedPipeline || !tenant) return;
+    supabase.from('activities')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .eq('is_completed', false)
+      .not('due_date', 'is', null)
+      .not('opportunity_id', 'is', null)
+      .in('type', ['task', 'call', 'meeting', 'email', 'follow_up'])
+      .then(({ data }) => {
+        const map: Record<string, Activity[]> = {};
+        for (const a of (data ?? []) as unknown as Activity[]) {
+          if (a.opportunity_id) {
+            if (!map[a.opportunity_id]) map[a.opportunity_id] = [];
+            map[a.opportunity_id].push(a);
+          }
+        }
+        setActivitiesByOpp(map);
+      });
+  }, [selectedPipeline, tenant]);
+
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
     supabase.from('stages').select('*').eq('pipeline_id', selectedPipeline).order('position')
       .then(({ data }) => setStages((data as unknown as Stage[]) ?? []));
     loadOpps();
-  }, [selectedPipeline, tenant, loadOpps]);
+    loadActivities();
+  }, [selectedPipeline, tenant, loadOpps, loadActivities]);
 
   // Load unread counts per contact
   const loadUnreads = useCallback(() => {
@@ -247,9 +297,10 @@ export default function PipelinePage() {
       .channel('pipeline-updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => loadOpps())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => loadUnreads())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [selectedPipeline, tenant, loadOpps, loadUnreads]);
+  }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
     const stage = stages.find(s => s.id === newStageId);
@@ -268,15 +319,12 @@ export default function PipelinePage() {
     const activeOpp = opportunities.find(o => o.id === active.id);
     if (!activeOpp) return;
 
-    // Dropped on a stage column
     if (overId.startsWith('stage-')) {
       const stageId = overId.replace('stage-', '');
       if (stageId !== activeOpp.stage_id) {
         moveOpportunity(activeOpp.id, stageId);
       }
-    }
-    // Dropped on another opportunity
-    else {
+    } else {
       const overOpp = opportunities.find(o => o.id === overId);
       if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
         moveOpportunity(activeOpp.id, overOpp.stage_id);
@@ -286,12 +334,37 @@ export default function PipelinePage() {
 
   const oppsByStage = (stageId: string) => opportunities.filter(o => o.stage_id === stageId);
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
-  const isOppInactive = (opp: Opportunity) => {
+
+  // Determine the alert status for each card
+  const getOppAlertStatus = (opp: Opportunity): CardAlertStatus => {
+    if (opp.status !== 'open') return 'normal';
+
+    const pendingActivities = activitiesByOpp[opp.id];
+    if (pendingActivities && pendingActivities.length > 0) {
+      // Has scheduled activities — check earliest due_date
+      const now = Date.now();
+      let hasOverdue = false;
+      let hasSoon = false;
+      for (const a of pendingActivities) {
+        if (!a.due_date) continue;
+        const due = new Date(a.due_date).getTime();
+        if (now >= due) hasOverdue = true;
+        else if (due - now <= 2 * 60 * 60 * 1000) hasSoon = true;
+      }
+      if (hasOverdue) return 'overdue';
+      if (hasSoon) return 'soon';
+      return 'scheduled'; // has future activity, suppress inactivity
+    }
+
+    // No scheduled activities — fall back to inactivity check
     const stage = stages.find(s => s.id === opp.stage_id);
-    if (!stage || !stage.inactivity_minutes || stage.inactivity_minutes <= 0) return false;
+    if (!stage || !stage.inactivity_minutes || stage.inactivity_minutes <= 0) return 'normal';
     const threshold = Date.now() - stage.inactivity_minutes * 60 * 1000;
-    return new Date(opp.updated_at).getTime() < threshold;
+    if (new Date(opp.updated_at).getTime() < threshold) return 'inactive';
+
+    return 'normal';
   };
+
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
 
   return (
@@ -325,7 +398,7 @@ export default function PipelinePage() {
                   {oppsByStage(stage.id).map(opp => (
                     <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
-                      isInactive={opp.status === 'open' && isOppInactive(opp)}
+                      alertStatus={getOppAlertStatus(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0} />
                   ))}
                 </SortableContext>
@@ -348,7 +421,8 @@ export default function PipelinePage() {
         <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
           <SheetHeader><SheetTitle>Detalhes da Oportunidade</SheetTitle></SheetHeader>
           {selectedOpp && (
-            <OpportunityDetail opportunityId={selectedOpp} stages={stages} onMoveStage={moveOpportunity} onClose={() => setSelectedOpp(null)} />
+            <OpportunityDetail opportunityId={selectedOpp} stages={stages} onMoveStage={moveOpportunity}
+              onClose={() => setSelectedOpp(null)} onActivityChange={loadActivities} />
           )}
         </SheetContent>
       </Sheet>
@@ -358,7 +432,6 @@ export default function PipelinePage() {
 
       {/* WhatsApp Chat Dialog */}
       <Dialog open={!!chatOpp} onOpenChange={(open) => { if (!open) {
-        // Optimistically reset inactivity for the opportunity that was chatted with
         if (chatOpp) {
           setOpportunities(prev => prev.map(o => o.id === chatOpp.id ? { ...o, updated_at: new Date().toISOString() } : o));
         }

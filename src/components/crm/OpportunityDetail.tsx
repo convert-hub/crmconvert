@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save } from 'lucide-react';
+import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -20,9 +20,10 @@ interface Props {
   stages: Stage[];
   onMoveStage: (oppId: string, stageId: string) => void;
   onClose: () => void;
+  onActivityChange?: () => void;
 }
 
-export default function OpportunityDetail({ opportunityId, stages, onMoveStage, onClose }: Props) {
+export default function OpportunityDetail({ opportunityId, stages, onMoveStage, onClose, onActivityChange }: Props) {
   const { tenant, membership } = useAuth();
   const [opp, setOpp] = useState<Opportunity & { contact?: Contact } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -30,6 +31,13 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const [newMessage, setNewMessage] = useState('');
   const [newNote, setNewNote] = useState('');
   const [sending, setSending] = useState(false);
+
+  // New activity form
+  const [showNewActivity, setShowNewActivity] = useState(false);
+  const [actTitle, setActTitle] = useState('');
+  const [actDescription, setActDescription] = useState('');
+  const [actDueDate, setActDueDate] = useState('');
+  const [actType, setActType] = useState<string>('task');
 
   // Edit state
   const [editTitle, setEditTitle] = useState('');
@@ -59,9 +67,13 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
 
+    loadActivities();
+  }, [opportunityId]);
+
+  const loadActivities = () => {
     supabase.from('activities').select('*').eq('opportunity_id', opportunityId).order('created_at', { ascending: false })
       .then(({ data }) => setActivities((data as unknown as Activity[]) ?? []));
-  }, [opportunityId]);
+  };
 
   useEffect(() => {
     const channel = supabase.channel(`opp-messages-${opportunityId}`)
@@ -122,10 +134,56 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
     setNewNote(''); toast.success('Nota adicionada');
   };
 
+  const handleCreateActivity = async () => {
+    if (!actTitle.trim() || !actDueDate || !tenant) return;
+    const { error } = await supabase.from('activities').insert({
+      tenant_id: tenant.id,
+      type: actType as any,
+      title: actTitle,
+      description: actDescription || null,
+      opportunity_id: opportunityId,
+      contact_id: opp?.contact_id,
+      assigned_to: membership?.id,
+      due_date: new Date(actDueDate).toISOString(),
+    });
+    if (error) { toast.error(error.message); return; }
+    toast.success('Atividade agendada');
+    setActTitle(''); setActDescription(''); setActDueDate(''); setActType('task'); setShowNewActivity(false);
+    loadActivities();
+    onActivityChange?.();
+  };
+
+  const handleCompleteActivity = async (activityId: string) => {
+    const { error } = await supabase.from('activities').update({
+      is_completed: true,
+      completed_at: new Date().toISOString(),
+    }).eq('id', activityId);
+    if (error) { toast.error(error.message); return; }
+    setActivities(prev => prev.map(a => a.id === activityId ? { ...a, is_completed: true } : a));
+    toast.success('Atividade concluída');
+    onActivityChange?.();
+  };
+
   if (!opp) return <div className="p-6 text-center text-muted-foreground">Carregando...</div>;
 
   const priorityColors: Record<string, string> = {
     low: 'bg-muted text-muted-foreground', medium: 'bg-info/10 text-info', high: 'bg-warning/10 text-warning', urgent: 'bg-destructive/10 text-destructive',
+  };
+
+  const getActivityDueStatus = (a: Activity) => {
+    if (a.is_completed || !a.due_date) return 'none';
+    const now = Date.now();
+    const due = new Date(a.due_date).getTime();
+    if (now >= due) return 'overdue';
+    if (due - now <= 2 * 60 * 60 * 1000) return 'soon';
+    return 'normal';
+  };
+
+  const dueStatusColors: Record<string, string> = {
+    overdue: 'border-destructive/60 bg-destructive/5',
+    soon: 'border-warning/60 bg-warning/5',
+    normal: 'border-border/50 bg-card/50',
+    none: 'border-border/50 bg-card/50',
   };
 
   return (
@@ -192,7 +250,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         <TabsList className="rounded-xl bg-muted/50 p-1">
           <TabsTrigger value="chat" className="rounded-lg"><MessageSquare className="h-4 w-4 mr-1" />Chat</TabsTrigger>
           <TabsTrigger value="notes" className="rounded-lg">Notas</TabsTrigger>
-          <TabsTrigger value="activities" className="rounded-lg">Atividades</TabsTrigger>
+          <TabsTrigger value="activities" className="rounded-lg"><CalendarClock className="h-4 w-4 mr-1" />Atividades</TabsTrigger>
         </TabsList>
 
         <TabsContent value="chat" className="space-y-4">
@@ -234,19 +292,87 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           </div>
         </TabsContent>
 
-        <TabsContent value="activities" className="space-y-2">
-          {activities.filter(a => a.type !== 'note').map(a => (
-            <div key={a.id} className="rounded-2xl border border-border/50 p-3 text-sm flex items-center gap-3 bg-card/50">
-              <Badge variant="outline" className="text-xs capitalize rounded-full">{a.type}</Badge>
-              <div className="flex-1">
-                <p className="font-medium text-foreground">{a.title}</p>
-                {a.description && <p className="text-muted-foreground text-xs">{a.description}</p>}
+        <TabsContent value="activities" className="space-y-3">
+          {/* New Activity Button / Form */}
+          {showNewActivity ? (
+            <div className="rounded-2xl border border-primary/30 p-4 space-y-3 bg-card/50">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Tipo</Label>
+                  <Select value={actType} onValueChange={setActType}>
+                    <SelectTrigger className="rounded-xl h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="task">Tarefa</SelectItem>
+                      <SelectItem value="call">Ligação</SelectItem>
+                      <SelectItem value="meeting">Reunião</SelectItem>
+                      <SelectItem value="email">E-mail</SelectItem>
+                      <SelectItem value="follow_up">Follow-up</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Data/Hora</Label>
+                  <Input type="datetime-local" value={actDueDate} onChange={e => setActDueDate(e.target.value)} className="rounded-xl h-9" />
+                </div>
               </div>
-              <span className="text-xs text-muted-foreground">{format(new Date(a.created_at), "dd/MM HH:mm")}</span>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Título</Label>
+                <Input value={actTitle} onChange={e => setActTitle(e.target.value)} placeholder="Ex: Ligar para confirmar proposta" className="rounded-xl h-9" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Descrição (opcional)</Label>
+                <Input value={actDescription} onChange={e => setActDescription(e.target.value)} placeholder="Detalhes adicionais..." className="rounded-xl h-9" />
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleCreateActivity} disabled={!actTitle.trim() || !actDueDate} className="rounded-xl">
+                  <CalendarClock className="h-3.5 w-3.5 mr-1" />Agendar
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setShowNewActivity(false)} className="rounded-xl">Cancelar</Button>
+              </div>
             </div>
-          ))}
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setShowNewActivity(true)} className="rounded-xl w-full">
+              <Plus className="h-4 w-4 mr-1" />Agendar Atividade
+            </Button>
+          )}
+
+          {/* Activity list */}
+          {activities.filter(a => a.type !== 'note').map(a => {
+            const dueStatus = getActivityDueStatus(a);
+            return (
+              <div key={a.id} className={cn("rounded-2xl border p-3 text-sm flex items-start gap-3 transition-colors", dueStatusColors[dueStatus], a.is_completed && 'opacity-50')}>
+                {!a.is_completed && a.due_date && (
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-full hover:bg-primary/10"
+                    onClick={() => handleCompleteActivity(a.id)} title="Concluir atividade">
+                    <Check className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                )}
+                {a.is_completed && <CheckCircle2 className="h-4 w-4 text-primary shrink-0 mt-0.5" />}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[10px] capitalize rounded-full shrink-0">{a.type}</Badge>
+                    <p className={cn("font-medium text-foreground truncate", a.is_completed && 'line-through')}>{a.title}</p>
+                  </div>
+                  {a.description && <p className="text-muted-foreground text-xs mt-0.5">{a.description}</p>}
+                  {a.due_date && (
+                    <p className={cn("text-xs mt-1",
+                      dueStatus === 'overdue' ? 'text-destructive font-semibold' :
+                      dueStatus === 'soon' ? 'text-warning font-semibold' :
+                      'text-muted-foreground'
+                    )}>
+                      <CalendarClock className="h-3 w-3 inline mr-1" />
+                      {format(new Date(a.due_date), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                      {dueStatus === 'overdue' && ' — Vencida'}
+                      {dueStatus === 'soon' && ' — Em breve'}
+                    </p>
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0">{format(new Date(a.created_at), "dd/MM HH:mm")}</span>
+              </div>
+            );
+          })}
           {activities.filter(a => a.type !== 'note').length === 0 && (
-            <p className="text-sm text-muted-foreground text-center py-4">Nenhuma atividade</p>
+            <p className="text-sm text-muted-foreground text-center py-4">Nenhuma atividade agendada</p>
           )}
         </TabsContent>
       </Tabs>
