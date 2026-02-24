@@ -9,25 +9,73 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
-import { Plus, Zap, Trash2, Edit } from 'lucide-react';
+import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquare, Move } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
-const TRIGGER_LABELS: Record<string, string> = {
-  lead_created: 'Lead criado',
-  opportunity_stage_changed: 'Oportunidade mudou de etapa',
-  conversation_no_customer_reply: 'Sem resposta do cliente',
-  conversation_no_agent_reply: 'Sem resposta do atendente',
-  conversation_closed: 'Conversa encerrada',
-  tag_added: 'Tag adicionada',
-  tag_removed: 'Tag removida',
-};
-const TRIGGER_VALUES = Object.keys(TRIGGER_LABELS);
+// ---- Trigger definitions ----
+const TRIGGERS = [
+  { value: 'lead_created', label: 'Lead criado', icon: UserPlus, description: 'Quando um novo lead é criado no sistema' },
+  { value: 'opportunity_stage_changed', label: 'Oportunidade mudou de etapa', icon: Move, description: 'Quando um card muda de coluna no kanban' },
+  { value: 'conversation_no_customer_reply', label: 'Sem resposta do cliente', icon: Clock, description: 'Quando o cliente não responde há X horas' },
+  { value: 'conversation_no_agent_reply', label: 'Sem resposta do atendente', icon: Clock, description: 'Quando o atendente não responde há X horas' },
+  { value: 'conversation_closed', label: 'Conversa encerrada', icon: MessageSquare, description: 'Quando uma conversa é encerrada' },
+  { value: 'tag_added', label: 'Tag adicionada', icon: Tag, description: 'Quando uma tag é adicionada ao contato' },
+  { value: 'tag_removed', label: 'Tag removida', icon: Tag, description: 'Quando uma tag é removida do contato' },
+];
+
+// ---- Action definitions ----
+const ACTION_TYPES = [
+  { value: 'move_to_stage', label: 'Mover para etapa', icon: Move },
+  { value: 'add_tag', label: 'Adicionar tag', icon: Tag },
+  { value: 'remove_tag', label: 'Remover tag', icon: Tag },
+  { value: 'create_activity', label: 'Criar atividade', icon: Clock },
+  { value: 'change_contact_status', label: 'Mudar status do contato', icon: UserPlus },
+  { value: 'send_whatsapp', label: 'Enviar WhatsApp', icon: MessageSquare },
+  { value: 'assign_round_robin', label: 'Atribuir (round-robin)', icon: UserPlus },
+];
+
+const CONTACT_STATUSES = [
+  { value: 'lead', label: 'Lead' },
+  { value: 'customer', label: 'Cliente' },
+  { value: 'churned', label: 'Churned' },
+  { value: 'inactive', label: 'Inativo' },
+];
+
+const ACTIVITY_TYPES = [
+  { value: 'call', label: 'Ligação' },
+  { value: 'task', label: 'Tarefa' },
+  { value: 'meeting', label: 'Reunião' },
+  { value: 'follow_up', label: 'Follow-up' },
+  { value: 'email', label: 'E-mail' },
+];
+
+interface Stage { id: string; name: string; pipeline_id: string; }
+interface Pipeline { id: string; name: string; }
+
+interface ActionConfig {
+  type: string;
+  stage_id?: string;
+  tag?: string;
+  activity_type?: string;
+  activity_title?: string;
+  activity_due_hours?: number;
+  contact_status?: string;
+  whatsapp_message?: string;
+}
+
+interface ConditionConfig {
+  from_stage_id?: string;
+  to_stage_id?: string;
+  tag?: string;
+  hours?: number;
+  min_value?: number;
+  source?: string;
+}
 
 interface Automation {
-  id: string; name: string; trigger_type: string; conditions: Record<string, unknown>;
-  actions: unknown[]; is_active: boolean; created_at: string;
+  id: string; name: string; trigger_type: string; conditions: ConditionConfig;
+  actions: ActionConfig[]; is_active: boolean; created_at: string;
 }
 
 export default function AutomationsPage() {
@@ -35,37 +83,58 @@ export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+
+  // Form state
   const [name, setName] = useState('');
-  const [triggerType, setTriggerType] = useState(TRIGGER_VALUES[0]);
-  const [conditionsJson, setConditionsJson] = useState('{}');
-  const [actionsJson, setActionsJson] = useState('[]');
+  const [triggerType, setTriggerType] = useState(TRIGGERS[0].value);
+  const [conditions, setConditions] = useState<ConditionConfig>({});
+  const [actions, setActions] = useState<ActionConfig[]>([{ type: 'move_to_stage' }]);
+
+  // Reference data
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
 
   const load = () => {
     if (!tenant) return;
     supabase.from('automations').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false })
       .then(({ data }) => setAutomations((data as unknown as Automation[]) ?? []));
   };
-  useEffect(() => { load(); }, [tenant]);
 
-  const resetForm = () => { setName(''); setTriggerType(TRIGGER_VALUES[0]); setConditionsJson('{}'); setActionsJson('[]'); setEditId(null); };
+  const loadRefs = () => {
+    if (!tenant) return;
+    supabase.from('pipelines').select('id, name').eq('tenant_id', tenant.id).then(({ data }) => setPipelines(data ?? []));
+    supabase.from('stages').select('id, name, pipeline_id').eq('tenant_id', tenant.id).order('position').then(({ data }) => setStages(data ?? []));
+  };
+
+  useEffect(() => { load(); loadRefs(); }, [tenant]);
+
+  const resetForm = () => {
+    setName(''); setTriggerType(TRIGGERS[0].value);
+    setConditions({}); setActions([{ type: 'move_to_stage' }]); setEditId(null);
+  };
 
   const openEdit = (a: Automation) => {
     setEditId(a.id); setName(a.name); setTriggerType(a.trigger_type);
-    setConditionsJson(JSON.stringify(a.conditions, null, 2)); setActionsJson(JSON.stringify(a.actions, null, 2));
+    setConditions(a.conditions || {});
+    setActions(Array.isArray(a.actions) && a.actions.length > 0 ? a.actions : [{ type: 'move_to_stage' }]);
     setDialogOpen(true);
   };
 
   const handleSave = async () => {
-    if (!tenant || !name.trim()) return;
-    let conditions: Record<string, unknown>, actions: unknown[];
-    try { conditions = JSON.parse(conditionsJson); } catch { toast.error('JSON de condições inválido'); return; }
-    try { actions = JSON.parse(actionsJson); } catch { toast.error('JSON de ações inválido'); return; }
+    if (!tenant || !name.trim()) { toast.error('Preencha o nome da automação'); return; }
+
+    const payload = {
+      name,
+      trigger_type: triggerType as any,
+      conditions: conditions as any,
+      actions: actions as any,
+    };
 
     if (editId) {
-      const { error } = await supabase.from('automations').update({ name, trigger_type: triggerType as any, conditions: conditions as any, actions: actions as any }).eq('id', editId);
+      const { error } = await supabase.from('automations').update(payload).eq('id', editId);
       if (error) toast.error(error.message); else toast.success('Automação atualizada');
     } else {
-      const { error } = await supabase.from('automations').insert({ tenant_id: tenant.id, name, trigger_type: triggerType as any, conditions: conditions as any, actions: actions as any });
+      const { error } = await supabase.from('automations').insert({ tenant_id: tenant.id, ...payload });
       if (error) toast.error(error.message); else toast.success('Automação criada');
     }
     setDialogOpen(false); resetForm(); load();
@@ -80,64 +149,291 @@ export default function AutomationsPage() {
     await supabase.from('automations').delete().eq('id', id); toast.success('Automação removida'); load();
   };
 
+  const updateAction = (index: number, updates: Partial<ActionConfig>) => {
+    setActions(prev => prev.map((a, i) => i === index ? { ...a, ...updates } : a));
+  };
+
+  const addAction = () => setActions(prev => [...prev, { type: 'move_to_stage' }]);
+  const removeAction = (index: number) => setActions(prev => prev.filter((_, i) => i !== index));
+
+  const triggerInfo = TRIGGERS.find(t => t.value === triggerType);
+
+  // ---- Condition Fields based on trigger ----
+  const renderConditions = () => {
+    switch (triggerType) {
+      case 'opportunity_stage_changed':
+        return (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">De etapa (opcional)</Label>
+              <Select value={conditions.from_stage_id || '_any'} onValueChange={v => setConditions(c => ({ ...c, from_stage_id: v === '_any' ? undefined : v }))}>
+                <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Qualquer" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_any">Qualquer etapa</SelectItem>
+                  {stages.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Para etapa (opcional)</Label>
+              <Select value={conditions.to_stage_id || '_any'} onValueChange={v => setConditions(c => ({ ...c, to_stage_id: v === '_any' ? undefined : v }))}>
+                <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Qualquer" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_any">Qualquer etapa</SelectItem>
+                  {stages.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        );
+      case 'conversation_no_customer_reply':
+      case 'conversation_no_agent_reply':
+        return (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Horas sem resposta</Label>
+            <Input type="number" min={1} value={conditions.hours || ''} onChange={e => setConditions(c => ({ ...c, hours: Number(e.target.value) }))} placeholder="Ex: 24" className="h-9 text-xs" />
+          </div>
+        );
+      case 'tag_added':
+      case 'tag_removed':
+        return (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Nome da tag</Label>
+            <Input value={conditions.tag || ''} onChange={e => setConditions(c => ({ ...c, tag: e.target.value }))} placeholder="Ex: qualificado" className="h-9 text-xs" />
+          </div>
+        );
+      case 'lead_created':
+        return (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Origem do lead (opcional)</Label>
+            <Input value={conditions.source || ''} onChange={e => setConditions(c => ({ ...c, source: e.target.value }))} placeholder="Ex: facebook_lead_ads" className="h-9 text-xs" />
+          </div>
+        );
+      default:
+        return <p className="text-xs text-muted-foreground">Nenhuma condição necessária para este trigger.</p>;
+    }
+  };
+
+  // ---- Action Fields ----
+  const renderActionFields = (action: ActionConfig, index: number) => {
+    switch (action.type) {
+      case 'move_to_stage':
+        return (
+          <Select value={action.stage_id || ''} onValueChange={v => updateAction(index, { stage_id: v })}>
+            <SelectTrigger className="h-9 text-xs flex-1"><SelectValue placeholder="Selecione a etapa" /></SelectTrigger>
+            <SelectContent>
+              {stages.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        );
+      case 'add_tag':
+      case 'remove_tag':
+        return <Input value={action.tag || ''} onChange={e => updateAction(index, { tag: e.target.value })} placeholder="Nome da tag" className="h-9 text-xs flex-1" />;
+      case 'create_activity':
+        return (
+          <div className="flex-1 space-y-2">
+            <div className="flex gap-2">
+              <Select value={action.activity_type || 'follow_up'} onValueChange={v => updateAction(index, { activity_type: v })}>
+                <SelectTrigger className="h-9 text-xs w-32"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ACTIVITY_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input value={action.activity_title || ''} onChange={e => updateAction(index, { activity_title: e.target.value })} placeholder="Título da atividade" className="h-9 text-xs flex-1" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs whitespace-nowrap">Prazo em horas:</Label>
+              <Input type="number" min={1} value={action.activity_due_hours || ''} onChange={e => updateAction(index, { activity_due_hours: Number(e.target.value) })} placeholder="24" className="h-9 text-xs w-20" />
+            </div>
+          </div>
+        );
+      case 'change_contact_status':
+        return (
+          <Select value={action.contact_status || 'customer'} onValueChange={v => updateAction(index, { contact_status: v })}>
+            <SelectTrigger className="h-9 text-xs flex-1"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {CONTACT_STATUSES.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        );
+      case 'send_whatsapp':
+        return <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar" className="h-9 text-xs flex-1" />;
+      case 'assign_round_robin':
+        return <span className="text-xs text-muted-foreground">Atribui automaticamente ao atendente com menos leads abertos</span>;
+      default:
+        return null;
+    }
+  };
+
+  const getActionSummary = (action: ActionConfig): string => {
+    const actionDef = ACTION_TYPES.find(a => a.value === action.type);
+    switch (action.type) {
+      case 'move_to_stage': {
+        const stage = stages.find(s => s.id === action.stage_id);
+        return `Mover para "${stage?.name || '?'}"`;
+      }
+      case 'add_tag': return `Adicionar tag "${action.tag || '?'}"`;
+      case 'remove_tag': return `Remover tag "${action.tag || '?'}"`;
+      case 'create_activity': return `Criar ${action.activity_type || 'atividade'}: "${action.activity_title || '?'}"`;
+      case 'change_contact_status': {
+        const st = CONTACT_STATUSES.find(s => s.value === action.contact_status);
+        return `Status → ${st?.label || '?'}`;
+      }
+      case 'send_whatsapp': return `Enviar WhatsApp`;
+      case 'assign_round_robin': return `Atribuir round-robin`;
+      default: return actionDef?.label || action.type;
+    }
+  };
+
   return (
-    <div className="p-6 max-w-5xl space-y-6 bg-background">
+    <div className="p-6 max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Automações</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Motor de regras event-driven por tenant</p>
+          <h1 className="text-lg font-semibold text-foreground">Automações</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">Configure regras automáticas para seus leads</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={v => { if (!v) resetForm(); setDialogOpen(v); }}>
           <DialogTrigger asChild>
-            <Button className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Nova Automação</Button>
+            <Button size="sm" className="h-9 text-xs"><Plus className="h-3.5 w-3.5 mr-1.5" />Nova Automação</Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg rounded-2xl">
-            <DialogHeader><DialogTitle>{editId ? 'Editar' : 'Nova'} Automação</DialogTitle></DialogHeader>
-            <div className="space-y-4 pt-2">
-              <div className="space-y-2"><Label>Nome</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Follow-up automático" className="rounded-xl" /></div>
-              <div className="space-y-2">
-                <Label>Trigger</Label>
-                <Select value={triggerType} onValueChange={setTriggerType}>
-                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                  <SelectContent>{TRIGGER_VALUES.map(t => <SelectItem key={t} value={t}>{TRIGGER_LABELS[t]}</SelectItem>)}</SelectContent>
-                </Select>
+          <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader><DialogTitle className="text-base">{editId ? 'Editar' : 'Nova'} Automação</DialogTitle></DialogHeader>
+            <div className="space-y-5 pt-2">
+              {/* Name */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Nome</Label>
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Follow-up automático 24h" className="h-9 text-sm" />
               </div>
-              <div className="space-y-2"><Label>Condições (JSON)</Label><Textarea value={conditionsJson} onChange={e => setConditionsJson(e.target.value)} className="font-mono text-xs min-h-[80px] rounded-xl" /></div>
-              <div className="space-y-2"><Label>Ações (JSON array)</Label><Textarea value={actionsJson} onChange={e => setActionsJson(e.target.value)} className="font-mono text-xs min-h-[80px] rounded-xl" /></div>
-              <Button className="w-full rounded-xl" onClick={handleSave}>Salvar</Button>
+
+              {/* Trigger */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Quando isso acontecer</Label>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {TRIGGERS.map(t => {
+                    const Icon = t.icon;
+                    const isSelected = triggerType === t.value;
+                    return (
+                      <button
+                        key={t.value}
+                        onClick={() => { setTriggerType(t.value); setConditions({}); }}
+                        className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all ${
+                          isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-border hover:border-primary/30 hover:bg-accent/50'
+                        }`}
+                      >
+                        <Icon className={`h-4 w-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} strokeWidth={1.75} />
+                        <div className="min-w-0">
+                          <p className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-foreground/80'}`}>{t.label}</p>
+                          <p className="text-[11px] text-muted-foreground truncate">{t.description}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Conditions */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Condições</Label>
+                <div className="rounded-lg border border-border bg-accent/30 p-3">
+                  {renderConditions()}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium">Então faça isso</Label>
+                  <Button variant="ghost" size="sm" onClick={addAction} className="h-7 text-xs text-primary">
+                    <Plus className="h-3 w-3 mr-1" />Adicionar ação
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {actions.map((action, i) => {
+                    const actionDef = ACTION_TYPES.find(a => a.value === action.type);
+                    const Icon = actionDef?.icon || Zap;
+                    return (
+                      <div key={i} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" strokeWidth={1.75} />
+                            <Select value={action.type} onValueChange={v => updateAction(i, { type: v, stage_id: undefined, tag: undefined, activity_type: undefined, activity_title: undefined, activity_due_hours: undefined, contact_status: undefined, whatsapp_message: undefined })}>
+                              <SelectTrigger className="h-8 text-xs w-48"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {ACTION_TYPES.map(a => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {actions.length > 1 && (
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeAction(i)}>
+                              <Trash2 className="h-3 w-3 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex items-start gap-2">
+                          {renderActionFields(action, i)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Button className="w-full h-9 text-sm" onClick={handleSave}>Salvar automação</Button>
             </div>
           </DialogContent>
         </Dialog>
       </div>
 
-      <div className="space-y-3">
-        {automations.map(a => (
-          <Card key={a.id} className="glass-card rounded-2xl hover-lift">
-            <CardContent className="flex items-center justify-between py-4 px-5">
-              <div className="flex items-center gap-4">
-                <div className="h-10 w-10 rounded-xl bg-warning/10 flex items-center justify-center">
-                  <Zap className="h-5 w-5 text-warning" />
-                </div>
-                <div>
-                  <p className="font-semibold text-foreground">{a.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="outline" className="text-xs rounded-full">{TRIGGER_LABELS[a.trigger_type] ?? a.trigger_type}</Badge>
-                    <span className="text-xs text-muted-foreground">{format(new Date(a.created_at), 'dd/MM/yyyy')}</span>
+      {/* List */}
+      <div className="space-y-2">
+        {automations.map(a => {
+          const trigger = TRIGGERS.find(t => t.value === a.trigger_type);
+          const TriggerIcon = trigger?.icon || Zap;
+          const actionsList = Array.isArray(a.actions) ? a.actions as ActionConfig[] : [];
+          return (
+            <Card key={a.id} className="hover-lift">
+              <CardContent className="flex items-center justify-between py-3.5 px-4">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="h-9 w-9 rounded-lg bg-accent flex items-center justify-center shrink-0">
+                    <TriggerIcon className="h-4 w-4 text-primary" strokeWidth={1.75} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{a.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <Badge variant="outline" className="text-[10px] h-5 rounded-md font-normal">{trigger?.label ?? a.trigger_type}</Badge>
+                      {actionsList.length > 0 && (
+                        <>
+                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          {actionsList.slice(0, 2).map((act, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px] h-5 rounded-md font-normal">
+                              {getActionSummary(act)}
+                            </Badge>
+                          ))}
+                          {actionsList.length > 2 && (
+                            <span className="text-[10px] text-muted-foreground">+{actionsList.length - 2}</span>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch checked={a.is_active} onCheckedChange={v => toggleActive(a.id, v)} />
-                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => openEdit(a)}><Edit className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="rounded-lg" onClick={() => handleDelete(a.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                <div className="flex items-center gap-2 shrink-0 ml-3">
+                  <span className="text-[10px] text-muted-foreground hidden sm:inline">{format(new Date(a.created_at), 'dd/MM/yyyy')}</span>
+                  <Switch checked={a.is_active} onCheckedChange={v => toggleActive(a.id, v)} />
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(a)}><Edit className="h-3.5 w-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleDelete(a.id)}><Trash2 className="h-3.5 w-3.5 text-destructive" /></Button>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
         {automations.length === 0 && (
           <div className="text-center py-16">
-            <div className="h-16 w-16 rounded-2xl bg-warning/10 flex items-center justify-center mx-auto mb-4"><Zap className="h-8 w-8 text-warning" /></div>
-            <p className="text-muted-foreground font-medium">Nenhuma automação configurada</p>
+            <div className="h-12 w-12 rounded-xl bg-accent flex items-center justify-center mx-auto mb-3">
+              <Zap className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <p className="text-sm text-muted-foreground font-medium">Nenhuma automação configurada</p>
+            <p className="text-xs text-muted-foreground mt-1">Crie sua primeira automação para automatizar seus processos</p>
           </div>
         )}
       </div>

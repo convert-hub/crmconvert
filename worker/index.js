@@ -3,6 +3,7 @@
 // Run via: docker-compose up worker
 
 const { createClient } = require('@supabase/supabase-js');
+const { executeAutomations } = require('./automation-handler');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -59,6 +60,11 @@ const handlers = {
       contact_id: contact.id,
     });
 
+    // Trigger automations
+    await executeAutomations(supabase, tenant_id, 'lead_created', {
+      contact_id: contact.id, source: 'form_webhook',
+    });
+
     return { contact_id: contact.id };
   },
 
@@ -100,6 +106,11 @@ const handlers = {
         });
       }
     }
+
+    // Trigger automations
+    await executeAutomations(supabase, tenant_id, 'lead_created', {
+      contact_id: contact.id, source: 'facebook_lead_ads',
+    });
 
     return { contact_id: contact.id };
   },
@@ -268,6 +279,12 @@ const handlers = {
     }
 
     return await response.json();
+  },
+  async run_automations(payload) {
+    const { tenant_id, trigger_type, context } = payload;
+    if (!tenant_id || !trigger_type) throw new Error('Missing tenant_id or trigger_type');
+    await executeAutomations(supabase, tenant_id, trigger_type, context || {});
+    return { trigger_type, executed: true };
   },
 };
 
