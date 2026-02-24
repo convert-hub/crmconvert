@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, ChevronDown, Shield
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -31,15 +31,33 @@ export default function AppSidebar() {
     item => role && (item.roles as readonly string[]).includes(role)
   );
 
+  const NavButton = ({ item }: { item: typeof navItems[0] }) => {
+    const isActive = location.pathname === item.path;
+    return (
+      <button
+        onClick={() => navigate(item.path)}
+        className={cn(
+          "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-200",
+          isActive
+            ? "bg-primary text-primary-foreground shadow-sm"
+            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+        )}
+      >
+        <item.icon className="h-4 w-4" strokeWidth={1.75} />
+        {item.label}
+      </button>
+    );
+  };
+
   return (
-    <aside className="flex h-screen w-64 flex-col bg-sidebar text-sidebar-foreground">
+    <aside className="flex h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-6">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-white font-bold text-sm shadow-lg shadow-primary/30">
+      <div className="flex items-center gap-3 px-5 py-5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
           CR
         </div>
         <div className="flex flex-col flex-1 min-w-0">
-          <span className="text-sm font-bold truncate">
+          <span className="text-sm font-semibold truncate text-sidebar-foreground">
             {tenant?.name ?? 'CRM'}
           </span>
           <span className="text-[11px] text-sidebar-muted">Workspace</span>
@@ -47,56 +65,22 @@ export default function AppSidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-2 space-y-1">
-        <div className="px-3 pb-2">
-          <span className="text-[10px] uppercase tracking-widest text-sidebar-muted font-semibold">
+      <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-1 space-y-0.5">
+        <div className="px-3 pb-1.5 pt-1">
+          <span className="text-[10px] uppercase tracking-wider text-sidebar-muted font-medium">
             Geral
           </span>
         </div>
-        {navItems.map(item => {
-          const isActive = location.pathname === item.path;
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150",
-                isActive
-                  ? "gradient-primary text-white shadow-md shadow-primary/25"
-                  : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              )}
-            >
-              <item.icon className="h-[18px] w-[18px]" />
-              {item.label}
-            </button>
-          );
-        })}
+        {navItems.map(item => <NavButton key={item.path} item={item} />)}
 
         {filteredAdminItems.length > 0 && (
           <>
-            <div className="pt-6 pb-2 px-3">
-              <span className="text-[10px] uppercase tracking-widest text-sidebar-muted font-semibold">
+            <div className="pt-5 pb-1.5 px-3">
+              <span className="text-[10px] uppercase tracking-wider text-sidebar-muted font-medium">
                 Administração
               </span>
             </div>
-            {filteredAdminItems.map(item => {
-              const isActive = location.pathname === item.path;
-              return (
-                <button
-                  key={item.path}
-                  onClick={() => navigate(item.path)}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150",
-                    isActive
-                      ? "gradient-primary text-white shadow-md shadow-primary/25"
-                      : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                  )}
-                >
-                  <item.icon className="h-[18px] w-[18px]" />
-                  {item.label}
-                </button>
-              );
-            })}
+            {filteredAdminItems.map(item => <NavButton key={item.path} item={item} />)}
           </>
         )}
       </nav>
@@ -106,26 +90,26 @@ export default function AppSidebar() {
         <div className="px-3 pb-1">
           <button
             onClick={() => navigate('/admin')}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground transition-all border border-dashed border-sidebar-border"
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-all border border-dashed border-border"
           >
-            <Shield className="h-[18px] w-[18px]" />
+            <Shield className="h-4 w-4" strokeWidth={1.75} />
             Painel SaaS Admin
           </button>
         </div>
       )}
 
       {/* User */}
-      <div className="p-3">
-        <div className="flex items-center gap-3 rounded-xl bg-sidebar-accent px-3 py-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full gradient-warm text-white text-xs font-bold shadow-sm">
+      <div className="p-3 border-t border-sidebar-border">
+        <div className="flex items-center gap-3 px-2 py-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-semibold">
             {profile?.full_name?.[0]?.toUpperCase() ?? 'U'}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate">{profile?.full_name ?? 'Usuário'}</p>
-            <p className="text-[11px] text-sidebar-muted capitalize">{role ?? ''}</p>
+            <p className="text-[13px] font-medium truncate">{profile?.full_name ?? 'Usuário'}</p>
+            <p className="text-[11px] text-muted-foreground capitalize">{role ?? ''}</p>
           </div>
-          <button onClick={signOut} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors p-1 rounded-lg hover:bg-sidebar-accent">
-            <LogOut className="h-4 w-4" />
+          <button onClick={signOut} className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-lg hover:bg-accent">
+            <LogOut className="h-3.5 w-3.5" strokeWidth={1.75} />
           </button>
         </div>
       </div>

@@ -90,10 +90,10 @@ export default function ContactsPage() {
   };
 
   const statusColors: Record<string, string> = {
-    lead: 'bg-warning/10 text-warning border-warning/20',
-    customer: 'bg-success/10 text-success border-success/20',
-    churned: 'bg-destructive/10 text-destructive border-destructive/20',
-    inactive: 'bg-muted text-muted-foreground',
+    lead: 'bg-warning/8 text-warning border-warning/15',
+    customer: 'bg-success/8 text-success border-success/15',
+    churned: 'bg-destructive/8 text-destructive border-destructive/15',
+    inactive: 'bg-muted text-muted-foreground border-border',
   };
 
   const isReadonly = role === 'readonly';
@@ -102,12 +102,12 @@ export default function ContactsPage() {
     <div className="flex flex-col h-full bg-background">
       <header className="flex items-center justify-between px-6 py-5">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Contatos</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{contacts.length} contato{contacts.length !== 1 ? 's' : ''}</p>
+          <h1 className="text-lg font-semibold text-foreground">Contatos</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">{contacts.length} contato{contacts.length !== 1 ? 's' : ''}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-36 rounded-xl">
+            <SelectTrigger className="w-32 h-9 text-[13px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -119,47 +119,45 @@ export default function ContactsPage() {
             </SelectContent>
           </Select>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input className="pl-9 w-64 rounded-xl" placeholder="Buscar contatos..." value={search} onChange={e => setSearch(e.target.value)} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input className="pl-9 w-56 h-9 text-[13px]" placeholder="Buscar contatos..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <Button variant="outline" size="sm" onClick={exportCSV} className="rounded-xl"><Download className="h-4 w-4 mr-1" />CSV</Button>
+          <Button variant="outline" size="sm" onClick={exportCSV} className="h-9 text-[13px]"><Download className="h-3.5 w-3.5 mr-1.5" />CSV</Button>
           {!isReadonly && (
-            <Button size="sm" onClick={openCreate} className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Novo Contato</Button>
+            <Button size="sm" onClick={openCreate} className="h-9 text-[13px]"><Plus className="h-3.5 w-3.5 mr-1.5" />Novo Contato</Button>
           )}
         </div>
       </header>
 
       <div className="flex-1 overflow-auto px-6 pb-6">
-        <div className="glass-card rounded-2xl overflow-hidden">
+        <div className="bg-card border border-border/60 rounded-lg overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="font-semibold">Nome</TableHead>
-                <TableHead className="font-semibold">Telefone</TableHead>
-                <TableHead className="font-semibold">Email</TableHead>
-                <TableHead className="font-semibold">Status</TableHead>
-                <TableHead className="font-semibold">Tags</TableHead>
-                <TableHead className="font-semibold">Nascimento</TableHead>
-                <TableHead className="font-semibold">Origem</TableHead>
-                <TableHead className="font-semibold">Criado</TableHead>
+              <TableRow className="hover:bg-transparent border-b border-border/60">
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nome</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Telefone</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Email</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tags</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nascimento</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Origem</TableHead>
+                <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Criado</TableHead>
                 {!isReadonly && <TableHead className="w-10" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {contacts.map(c => (
-                <TableRow key={c.id} className="group cursor-pointer" onClick={() => !isReadonly && openEdit(c)}>
-                  <TableCell className="font-medium text-foreground">
-                    <span className="group-hover:underline">{c.name}</span>
-                  </TableCell>
-                  <TableCell>{c.phone && <span className="flex items-center gap-1.5 text-muted-foreground"><Phone className="h-3 w-3" />{c.phone}</span>}</TableCell>
-                  <TableCell>{c.email && <span className="flex items-center gap-1.5 text-muted-foreground"><Mail className="h-3 w-3" />{c.email}</span>}</TableCell>
+                <TableRow key={c.id} className="group cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => !isReadonly && openEdit(c)}>
+                  <TableCell className="text-[13px] font-medium text-foreground">{c.name}</TableCell>
+                  <TableCell className="text-[13px]">{c.phone && <span className="flex items-center gap-1.5 text-muted-foreground"><Phone className="h-3 w-3" strokeWidth={1.5} />{c.phone}</span>}</TableCell>
+                  <TableCell className="text-[13px]">{c.email && <span className="flex items-center gap-1.5 text-muted-foreground"><Mail className="h-3 w-3" strokeWidth={1.5} />{c.email}</span>}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs capitalize rounded-full ${statusColors[c.status] ?? ''}`}>{c.status}</Badge>
+                    <Badge variant="outline" className={`text-[11px] capitalize rounded-full font-normal ${statusColors[c.status] ?? ''}`}>{c.status}</Badge>
                   </TableCell>
-                  <TableCell><div className="flex gap-1 flex-wrap">{c.tags?.slice(0, 3).map(t => <Badge key={t} variant="outline" className="text-[10px] rounded-full">{t}</Badge>)}</div></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{c.birth_date ? format(new Date(c.birth_date + 'T00:00:00'), 'dd/MM/yyyy') : '-'}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{c.source ?? '-'}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{format(new Date(c.created_at), 'dd/MM/yy')}</TableCell>
+                  <TableCell><div className="flex gap-1 flex-wrap">{c.tags?.slice(0, 3).map(t => <Badge key={t} variant="outline" className="text-[10px] rounded-full font-normal">{t}</Badge>)}</div></TableCell>
+                  <TableCell className="text-[12px] text-muted-foreground">{c.birth_date ? format(new Date(c.birth_date + 'T00:00:00'), 'dd/MM/yyyy') : '-'}</TableCell>
+                  <TableCell className="text-[12px] text-muted-foreground">{c.source ?? '-'}</TableCell>
+                  <TableCell className="text-[12px] text-muted-foreground">{format(new Date(c.created_at), 'dd/MM/yy')}</TableCell>
                   {!isReadonly && (
                     <TableCell>
                       <DropdownMenu>
@@ -179,23 +177,23 @@ export default function ContactsPage() {
               ))}
             </TableBody>
           </Table>
-          {contacts.length === 0 && <p className="text-center text-muted-foreground py-12">Nenhum contato encontrado</p>}
+          {contacts.length === 0 && <p className="text-center text-muted-foreground text-sm py-12">Nenhum contato encontrado</p>}
         </div>
       </div>
 
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="rounded-2xl">
-          <DialogHeader><DialogTitle>{editingContact ? 'Editar Contato' : 'Novo Contato'}</DialogTitle></DialogHeader>
+        <DialogContent>
+          <DialogHeader><DialogTitle className="text-base font-semibold">{editingContact ? 'Editar Contato' : 'Novo Contato'}</DialogTitle></DialogHeader>
           <form onSubmit={handleSave} className="space-y-4">
-            <div className="space-y-2"><Label>Nome *</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="rounded-xl" /></div>
+            <div className="space-y-1.5"><Label className="text-[13px]">Nome *</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required /></div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Telefone</Label><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+5511999999999" className="rounded-xl" /></div>
-              <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="rounded-xl" /></div>
+              <div className="space-y-1.5"><Label className="text-[13px]">Telefone</Label><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+5511999999999" /></div>
+              <div className="space-y-1.5"><Label className="text-[13px]">Email</Label><Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
             </div>
-            <div className="space-y-2">
-              <Label>Status</Label>
+            <div className="space-y-1.5">
+              <Label className="text-[13px]">Status</Label>
               <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v as any }))}>
-                <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="lead">Lead</SelectItem>
                   <SelectItem value="customer">Cliente</SelectItem>
@@ -204,12 +202,12 @@ export default function ContactsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Data de Nascimento</Label>
+            <div className="space-y-1.5">
+              <Label className="text-[13px]">Data de Nascimento</Label>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className={cn("w-full justify-start text-left font-normal rounded-xl", !form.birth_date && "text-muted-foreground")}>
-                    <CalendarIcon className="mr-2 h-4 w-4" />
+                  <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !form.birth_date && "text-muted-foreground")}>
+                    <CalendarIcon className="mr-2 h-3.5 w-3.5" />
                     {form.birth_date ? format(form.birth_date, 'dd/MM/yyyy') : 'Selecionar data'}
                   </Button>
                 </PopoverTrigger>
@@ -218,8 +216,8 @@ export default function ContactsPage() {
                 </PopoverContent>
               </Popover>
             </div>
-            <div className="space-y-2"><Label>Tags (separadas por vírgula)</Label><Input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))} placeholder="tag1, tag2" className="rounded-xl" /></div>
-            <Button type="submit" className="w-full rounded-xl">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>
+            <div className="space-y-1.5"><Label className="text-[13px]">Tags (separadas por vírgula)</Label><Input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))} placeholder="tag1, tag2" /></div>
+            <Button type="submit" className="w-full">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>
           </form>
         </DialogContent>
       </Dialog>
