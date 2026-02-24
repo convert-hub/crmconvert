@@ -5,7 +5,8 @@ import {
   Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import logo from '@/assets/logo.png';
+import { getTenantBranding } from '@/hooks/useTenantBranding';
+import defaultLogo from '@/assets/logo.png';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -27,6 +28,8 @@ export default function AppSidebar() {
   const { tenant, role, profile, signOut, isSaasAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const branding = getTenantBranding(tenant);
+  const logoSrc = branding.logo_url || defaultLogo;
 
   const filteredAdminItems = adminItems.filter(
     item => role && (item.roles as readonly string[]).includes(role)
@@ -54,7 +57,7 @@ export default function AppSidebar() {
     <aside className="flex h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
       <div className="flex items-center justify-center px-3 py-6">
-        <img src={logo} alt="Esther Bertoldo Joias" className="h-28 w-auto object-contain" />
+        <img src={logoSrc} alt={tenant?.name ?? 'Logo'} className="h-28 w-auto object-contain" />
       </div>
 
       {/* Nav */}
