@@ -357,7 +357,13 @@ export default function PipelinePage() {
         pipelineId={selectedPipeline} onCreated={loadOpps} />
 
       {/* WhatsApp Chat Dialog */}
-      <Dialog open={!!chatOpp} onOpenChange={(open) => { if (!open) { setChatOpp(null); setChatConvId(null); } }}>
+      <Dialog open={!!chatOpp} onOpenChange={(open) => { if (!open) {
+        // Optimistically reset inactivity for the opportunity that was chatted with
+        if (chatOpp) {
+          setOpportunities(prev => prev.map(o => o.id === chatOpp.id ? { ...o, updated_at: new Date().toISOString() } : o));
+        }
+        setChatOpp(null); setChatConvId(null);
+      } }}>
         <DialogContent className="max-w-2xl h-[80vh] p-0 rounded-2xl overflow-hidden flex flex-col">
           <DialogHeader className="px-4 pt-4 pb-0">
             <DialogTitle className="text-base">
