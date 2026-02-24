@@ -1,137 +1,59 @@
 
 
-# Lembretes automaticos de follow-up por inatividade
+## Campos Personalizados para Oportunidades
 
-## Resumo
+### Objetivo
+Permitir que cada empresa (tenant) configure seus proprios campos extras para os cards de oportunidade no pipeline. Os campos sao definidos nas Configuracoes e exibidos tanto nos cards do Kanban quanto no detalhe da oportunidade.
 
-Sistema de lembretes automaticos que detecta oportunidades inativas em cada estagio do pipeline e cria atividades de follow-up para a equipe. O tempo de inatividade e configuravel por estagio (coluna) diretamente na tela de Configuracoes > Pipeline.
+### Como vai funcionar
 
----
+1. **Nas Configuracoes**, uma nova aba "Campos Personalizados" permite que o admin crie campos com nome, tipo (texto, numero, selecao, data, sim/nao) e opcoes (para campos de selecao).
 
-## Arquitetura
+2. **Nos cards do Kanban**, os campos preenchidos aparecem como badges ou linhas de informacao abaixo do contato.
 
-### 1. Armazenamento: campo `inactivity_hours` na tabela `stages`
-
-Adicionar uma coluna `inactivity_hours` (integer, nullable, default null) na tabela `stages`. Quando null ou 0, o lembrete esta desativado para aquele estagio. Isso garante que a configuracao acompanha o ciclo de vida do estagio (renomear, reordenar, deletar).
-
-**Migracao SQL:**
-```text
-ALTER TABLE stages ADD COLUMN inactivity_hours integer DEFAULT NULL;
-```
-
-### 2. Edge Function cron: `check-inactivity`
-
-Uma nova Edge Function executada periodicamente (a cada 30 minutos via pg_cron) que:
-
-1. Busca todos os tenants ativos
-2. Para cada tenant, busca estagios com `inactivity_hours > 0`
-3. Para cada estagio, busca oportunidades com `status = 'open'` e `updated_at` mais antigo que o threshold
-4. Para cada oportunidade inativa, verifica se ja existe atividade de follow-up nao concluida (evita duplicatas)
-5. Se nao existe, cria atividade tipo `follow_up` vinculada a oportunidade e ao contato
-
-**Logica de inatividade:**
-```text
-oportunidade.updated_at < NOW() - (stage.inactivity_hours * interval '1 hour')
-```
-
-**Prevencao de duplicatas:**
-Antes de criar o follow-up, verifica se ja existe atividade com:
-- `opportunity_id` = oportunidade
-- `type` = 'follow_up'
-- `is_completed` = false
-- `title` contendo 'Lembrete de follow-up'
-
-### 3. UI de configuracao em Configuracoes > Pipeline
-
-Na aba Pipeline da pagina de Settings, adicionar na tabela de estagios uma nova coluna "Inatividade" com:
-- Um input numerico (horas) ao lado de cada estagio
-- Valor 0 ou vazio = desativado
-- Botao salvar por linha ou auto-save ao perder foco
-- Texto auxiliar explicando que a primeira coluna normalmente nao precisa (leads novos)
+3. **No detalhe da oportunidade**, os campos aparecem em uma secao editavel.
 
 ---
 
-## Fluxo de execucao
+### Detalhes Tecnicos
 
+**1. Migracao de banco de dados**
+- Adicionar coluna `custom_fields jsonb DEFAULT '{}'` na tabela `opportunities` (similar ao que ja existe em `contacts`).
+
+**2. Armazenamento das definicoes de campo**
+- As definicoes ficam em `tenants.settings.custom_opportunity_fields` como um array JSON:
 ```text
-pg_cron (a cada 30 min)
-      |
-      v
-Edge Function: check-inactivity
-      |
-      +-- Para cada tenant:
-            +-- Busca stages com inactivity_hours > 0
-            +-- Para cada stage:
-                  +-- Busca opportunities com status='open' 
-                  |   e updated_at < (now - inactivity_hours)
-                  +-- Para cada opp inativa:
-                        +-- Verifica se ja tem follow_up pendente
-                        +-- Se NAO: cria atividade follow_up
+[
+  { "key": "produto", "label": "Produto", "type": "text" },
+  { "key": "urgencia", "label": "Urgencia", "type": "select", "options": ["Baixa","Media","Alta"] },
+  { "key": "tem_orcamento", "label": "Tem Orcamento?", "type": "boolean" },
+  { "key": "data_reuniao", "label": "Data Reuniao", "type": "date" },
+  { "key": "quantidade", "label": "Quantidade", "type": "number" }
+]
 ```
+- Tipos suportados: `text`, `number`, `select`, `date`, `boolean`
 
----
+**3. SettingsPage.tsx - Nova aba "Campos Personalizados"**
+- Formulario para adicionar campos: nome, chave (slug auto-gerado), tipo, opcoes (se select)
+- Lista dos campos existentes com botao de remover
+- Salva em `tenants.settings.custom_opportunity_fields`
 
-## Detalhes tecnicos
+**4. PipelinePage.tsx - Exibicao nos cards**
+- Ler as definicoes do tenant (carregadas uma vez)
+- Para cada oportunidade, exibir os `custom_fields` preenchidos como badges/texto compacto abaixo das tags do contato
+- Limitar a 2-3 campos visiveis no card para nao poluir
 
-### Migracao de banco
-- Adicionar coluna `inactivity_hours` (integer, nullable) na tabela `stages`
-- Nenhuma nova tabela necessaria
+**5. OpportunityDetail.tsx - Edicao dos campos**
+- Renderizar inputs dinamicos conforme o tipo de cada campo definido
+- Salvar no `opportunities.custom_fields`
 
-### Edge Function `check-inactivity`
+**6. types/crm.ts**
+- Adicionar `custom_fields?: Record<string, unknown>` ao tipo `Opportunity` (se nao existir apos migracao)
 
-Arquivo: `supabase/functions/check-inactivity/index.ts`
-
-- Usa `SUPABASE_SERVICE_ROLE_KEY` para acessar todos os tenants
-- Busca estagios com `inactivity_hours > 0` (join com pipelines para ter tenant_id)
-- Para cada estagio, busca oportunidades inativas usando comparacao de timestamps
-- Cria atividades de follow-up com:
-  - `type`: 'follow_up'
-  - `title`: 'Lembrete de follow-up'
-  - `description`: inclui nome do estagio e tempo de inatividade
-  - `due_date`: now (ja esta atrasado)
-  - `opportunity_id`: vinculado
-  - `contact_id`: vinculado
-  - `assigned_to`: herda da oportunidade (se tiver)
-- Responde 200 sempre (cron nao deve falhar)
-
-### Configuracao no `supabase/config.toml`
-
-```text
-[functions.check-inactivity]
-verify_jwt = false
-```
-
-### Agendamento via pg_cron
-
-SQL para agendar (executado via insert tool, nao migracao):
-```text
-SELECT cron.schedule(
-  'check-inactivity-every-30min',
-  '*/30 * * * *',
-  $$ SELECT net.http_post(
-    url:='https://zhywwrhzaqfcjcwywkwf.supabase.co/functions/v1/check-inactivity',
-    headers:='{"Content-Type":"application/json","Authorization":"Bearer <ANON_KEY>"}'::jsonb,
-    body:='{}'::jsonb
-  ) as request_id; $$
-);
-```
-
-### UI: `src/pages/SettingsPage.tsx`
-
-Na aba Pipeline, modificar a tabela de estagios para incluir:
-- Nova coluna "Inatividade (horas)" com input numerico
-- Funcao `updateStageInactivity(stageId, hours)` que faz update no campo `inactivity_hours`
-- Texto explicativo abaixo da tabela
-
----
-
-## Arquivos a serem criados/modificados
-
-| Arquivo | Alteracao |
-|---------|-----------|
-| Migracao SQL | Adicionar coluna `inactivity_hours` em `stages` |
-| `supabase/functions/check-inactivity/index.ts` | Nova edge function para verificar inatividade |
-| `supabase/config.toml` | Adicionar config da nova function |
-| `src/pages/SettingsPage.tsx` | Adicionar input de horas por estagio na aba Pipeline |
-| pg_cron (via insert tool) | Agendar execucao a cada 30 minutos |
+### Arquivos afetados
+- `supabase/migrations/` — nova migracao para coluna `custom_fields`
+- `src/pages/SettingsPage.tsx` — nova aba de campos personalizados
+- `src/pages/PipelinePage.tsx` — exibir campos nos cards
+- `src/components/crm/OpportunityDetail.tsx` — edicao dos campos
+- `src/types/crm.ts` — atualizar tipo Opportunity
 
