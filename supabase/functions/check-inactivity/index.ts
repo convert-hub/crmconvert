@@ -31,6 +31,19 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true, created: 0, message: 'No stages with inactivity configured' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
+    // Pre-fetch all opportunity IDs that have pending scheduled activities
+    const { data: pendingActivities } = await supabase
+      .from('activities')
+      .select('opportunity_id')
+      .eq('is_completed', false)
+      .not('due_date', 'is', null)
+      .not('opportunity_id', 'is', null)
+      .in('type', ['task', 'call', 'meeting', 'email', 'follow_up'])
+
+    const oppsWithScheduledActivity = new Set(
+      (pendingActivities ?? []).map((a: { opportunity_id: string | null }) => a.opportunity_id).filter(Boolean)
+    )
+
     let totalCreated = 0
 
     for (const stage of stages) {
@@ -52,6 +65,9 @@ Deno.serve(async (req) => {
       if (!opportunities || opportunities.length === 0) continue
 
       for (const opp of opportunities) {
+        // Skip if opportunity has a pending scheduled activity
+        if (oppsWithScheduledActivity.has(opp.id)) continue
+
         // Check for existing pending follow-up
         const { data: existing } = await supabase
           .from('activities')
