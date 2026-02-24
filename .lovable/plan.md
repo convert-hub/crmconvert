@@ -1,35 +1,22 @@
 
 
-## Exibir Data de Nascimento no Card do Pipeline
+## Remover o Modulo de Empresas
 
 ### Objetivo
-Mostrar a data de nascimento do contato diretamente nos cards de oportunidade do Kanban, quando preenchida.
+Eliminar completamente a pagina de Empresas e seu item no menu lateral, simplificando a interface do CRM.
 
-### O que sera feito
+### Alteracoes
 
-No componente `SortableOppCard` em `src/pages/PipelinePage.tsx`, adicionar uma linha abaixo do nome do contato exibindo a data de nascimento formatada (dd/MM/yyyy) com um icone de bolo (Cake).
+**1. Remover rota do App (`src/App.tsx`)**
+- Remover o import de `CompaniesPage`
+- Remover a linha `<Route path="companies" element={<CompaniesPage />} />`
 
-O campo so aparece quando o contato tem `birth_date` preenchido, mantendo o card limpo nos demais casos.
+**2. Remover item do menu lateral (`src/components/layout/AppSidebar.tsx`)**
+- Remover o import do icone `Building2` (se nao usado em outro lugar)
+- Remover o item `{ icon: Building2, label: 'Empresas', path: '/companies' }` do array `navItems`
 
-### Detalhes Tecnicos
+**3. Excluir o arquivo da pagina**
+- Deletar `src/pages/CompaniesPage.tsx`
 
-**Arquivo**: `src/pages/PipelinePage.tsx`
-
-- Importar o icone `Cake` do `lucide-react`
-- Importar `format` do `date-fns` (ja usado no arquivo)
-- Dentro do `SortableOppCard`, logo apos o bloco que exibe o nome do contato (icone User + nome), adicionar:
-
-```text
-{opp.contact?.birth_date && (
-  <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
-    <Cake className="h-3 w-3" />
-    <span>{format(new Date(opp.contact.birth_date + 'T00:00:00'), 'dd/MM/yyyy')}</span>
-  </div>
-)}
-```
-
-- Nenhuma outra alteracao necessaria pois os dados do contato ja sao carregados com `select('*, contact:contacts(*)')`.
-
-### Arquivos afetados
-- `src/pages/PipelinePage.tsx` -- adicionar exibicao do birth_date no card
-
+### Resultado
+O menu lateral nao exibira mais o link "Empresas" e a rota `/companies` deixara de existir. Se futuramente precisar de empresas, o campo personalizado nos contatos sera suficiente.
