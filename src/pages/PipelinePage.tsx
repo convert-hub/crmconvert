@@ -6,13 +6,13 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import {
@@ -127,6 +127,12 @@ function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, c
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
             <User className="h-3 w-3" />
             <span className="truncate">{opp.contact.name}</span>
+          </div>
+        )}
+        {opp.contact?.birth_date && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
+            <Cake className="h-3 w-3" />
+            <span>{format(new Date(opp.contact.birth_date + 'T00:00:00'), 'dd/MM/yyyy')}</span>
           </div>
         )}
         <div className="flex items-center justify-between pl-5">
