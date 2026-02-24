@@ -52,7 +52,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm border-border/60">
         <CardHeader className="text-center pb-4">
-          <img src={logo} alt="Esther Bertoldo Joias" className="mx-auto mb-3 h-12 w-auto object-contain" />
+          <img src={logo} alt="Esther Bertoldo Joias" className="mx-auto mb-4 h-20 w-auto object-contain" />
           <CardDescription className="text-[13px]">Gerencie seus leads e conversas</CardDescription>
         </CardHeader>
         <CardContent>
