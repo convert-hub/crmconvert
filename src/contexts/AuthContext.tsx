@@ -13,11 +13,12 @@ interface AuthState {
   isSaasAdmin: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
+  refreshTenant: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
   session: null, user: null, profile: null, membership: null,
-  tenant: null, role: null, isSaasAdmin: false, loading: true, signOut: async () => {},
+  tenant: null, role: null, isSaasAdmin: false, loading: true, signOut: async () => {}, refreshTenant: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -129,10 +130,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsSaasAdmin(false);
   };
 
+  const refreshTenant = async () => {
+    if (!membership) return;
+    const { data: t } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('id', membership.tenant_id)
+      .single();
+    if (t) setTenant(t as unknown as Tenant);
+  };
+
   return (
     <AuthContext.Provider value={{
       session, user, profile, membership, tenant,
-      role: membership?.role ?? null, isSaasAdmin, loading, signOut,
+      role: membership?.role ?? null, isSaasAdmin, loading, signOut, refreshTenant,
     }}>
       {children}
     </AuthContext.Provider>
