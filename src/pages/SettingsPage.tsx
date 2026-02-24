@@ -14,7 +14,7 @@ import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut } from 
 import { toast } from 'sonner';
 
 interface Member { id: string; user_id: string; role: string; is_active: boolean; profile?: { full_name: string | null; phone: string | null }; }
-interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_hours: number | null; }
+interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_minutes: number | null; }
 interface AiConfig { id: string; task_type: string; provider: string; model: string; daily_limit: number; monthly_limit: number; daily_usage: number; monthly_usage: number; }
 
 const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qa_review: 'QA / Review', qualification: 'Qualificação', stage_classifier: 'Classificador de Etapa' };
@@ -350,44 +350,58 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <Table>
                 <TableHeader><TableRow className="hover:bg-transparent">
-                  <TableHead>Pos.</TableHead><TableHead>Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (horas)</TableHead><TableHead></TableHead>
+                  <TableHead>Pos.</TableHead><TableHead>Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (HH:MM)</TableHead><TableHead></TableHead>
                 </TableRow></TableHeader>
                 <TableBody>
-                  {stages.map((s, i) => (
-                    <TableRow key={s.id}>
-                      <TableCell>{i + 1}</TableCell>
-                      <TableCell><div className="h-4 w-4 rounded-full" style={{ backgroundColor: s.color }} /></TableCell>
-                      <TableCell className="font-medium text-foreground">{s.name}</TableCell>
-                      <TableCell>
-                        {s.is_won && <Badge className="rounded-full">Ganho</Badge>}
-                        {s.is_lost && <Badge variant="destructive" className="rounded-full">Perdido</Badge>}
-                        {!s.is_won && !s.is_lost && <Badge variant="secondary" className="rounded-full">Normal</Badge>}
-                      </TableCell>
-                      <TableCell>
-                        {isAdmin && !s.is_won && !s.is_lost ? (
-                          <Input
-                            type="number"
-                            min={0}
-                            className="w-20 rounded-xl"
-                            placeholder="0"
-                            defaultValue={s.inactivity_hours ?? ''}
-                            onBlur={async (e) => {
-                              const val = e.target.value ? parseInt(e.target.value) : null;
-                              const { error } = await supabase.from('stages').update({ inactivity_hours: val } as any).eq('id', s.id);
-                              if (error) toast.error(error.message);
-                              else toast.success('Inatividade atualizada');
-                            }}
-                          />
-                        ) : (
-                          <span className="text-muted-foreground text-sm">{s.inactivity_hours ? `${s.inactivity_hours}h` : '—'}</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{isAdmin && !s.is_won && !s.is_lost && <Button variant="ghost" size="icon" onClick={() => deleteStage(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                    </TableRow>
-                  ))}
+                  {stages.map((s, i) => {
+                    const totalMin = s.inactivity_minutes ?? 0;
+                    const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+                    const mm = String(totalMin % 60).padStart(2, '0');
+                    return (
+                      <TableRow key={s.id}>
+                        <TableCell>{i + 1}</TableCell>
+                        <TableCell><div className="h-4 w-4 rounded-full" style={{ backgroundColor: s.color }} /></TableCell>
+                        <TableCell className="font-medium text-foreground">{s.name}</TableCell>
+                        <TableCell>
+                          {s.is_won && <Badge className="rounded-full">Ganho</Badge>}
+                          {s.is_lost && <Badge variant="destructive" className="rounded-full">Perdido</Badge>}
+                          {!s.is_won && !s.is_lost && <Badge variant="secondary" className="rounded-full">Normal</Badge>}
+                        </TableCell>
+                        <TableCell>
+                          {isAdmin && !s.is_won && !s.is_lost ? (
+                            <Input
+                              type="text"
+                              className="w-24 rounded-xl font-mono text-center"
+                              placeholder="00:00"
+                              defaultValue={totalMin > 0 ? `${hh}:${mm}` : ''}
+                              onBlur={async (e) => {
+                                const raw = e.target.value.trim();
+                                if (!raw || raw === '00:00') {
+                                  const { error } = await supabase.from('stages').update({ inactivity_minutes: null } as any).eq('id', s.id);
+                                  if (error) toast.error(error.message);
+                                  else toast.success('Inatividade desativada');
+                                  return;
+                                }
+                                const match = raw.match(/^(\d{1,3}):(\d{2})$/);
+                                if (!match) { toast.error('Formato inválido. Use HH:MM (ex: 01:30)'); return; }
+                                const minutes = parseInt(match[1]) * 60 + parseInt(match[2]);
+                                if (minutes <= 0) { toast.error('Valor deve ser maior que 00:00'); return; }
+                                const { error } = await supabase.from('stages').update({ inactivity_minutes: minutes } as any).eq('id', s.id);
+                                if (error) toast.error(error.message);
+                                else toast.success('Inatividade atualizada');
+                              }}
+                            />
+                          ) : (
+                            <span className="text-muted-foreground text-sm">{totalMin > 0 ? `${hh}:${mm}` : '—'}</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{isAdmin && !s.is_won && !s.is_lost && <Button variant="ghost" size="icon" onClick={() => deleteStage(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
-              <p className="text-xs text-muted-foreground">💡 Defina horas de inatividade por etapa para criar lembretes automáticos de follow-up. Valor 0 ou vazio = desativado.</p>
+              <p className="text-xs text-muted-foreground">💡 Defina o tempo de inatividade por etapa no formato HH:MM para criar lembretes automáticos de follow-up. Ex: 01:30 = 1h30min. Vazio ou 00:00 = desativado.</p>
               {isAdmin && (
                 <div className="flex gap-2 items-end">
                   <div className="space-y-1 flex-1"><Label>Nova etapa</Label><Input value={newStageName} onChange={e => setNewStageName(e.target.value)} placeholder="Nome da etapa" className="rounded-xl" /></div>

@@ -80,7 +80,7 @@ export interface Stage {
   color: string;
   is_won: boolean;
   is_lost: boolean;
-  inactivity_hours: number | null;
+  inactivity_minutes: number | null;
 }
 
 export interface Opportunity {

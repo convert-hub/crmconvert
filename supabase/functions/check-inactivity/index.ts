@@ -16,11 +16,11 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     )
 
-    // Get all stages with inactivity_hours configured
+    // Get all stages with inactivity_minutes configured
     const { data: stages, error: stagesErr } = await supabase
       .from('stages')
-      .select('id, name, pipeline_id, tenant_id, inactivity_hours')
-      .gt('inactivity_hours', 0)
+      .select('id, name, pipeline_id, tenant_id, inactivity_minutes')
+      .gt('inactivity_minutes', 0)
 
     if (stagesErr) {
       console.error('Error fetching stages:', stagesErr)
@@ -34,7 +34,7 @@ Deno.serve(async (req) => {
     let totalCreated = 0
 
     for (const stage of stages) {
-      const threshold = new Date(Date.now() - stage.inactivity_hours * 60 * 60 * 1000).toISOString()
+      const threshold = new Date(Date.now() - stage.inactivity_minutes * 60 * 1000).toISOString()
 
       // Find inactive open opportunities in this stage
       const { data: opportunities, error: oppErr } = await supabase
@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
             tenant_id: opp.tenant_id,
             type: 'follow_up',
             title: `Lembrete de follow-up — ${stage.name}`,
-            description: `Oportunidade "${opp.title}" está sem atualização há mais de ${stage.inactivity_hours}h na etapa "${stage.name}".`,
+            description: `Oportunidade "${opp.title}" está sem atualização há mais de ${Math.floor(stage.inactivity_minutes / 60)}h${stage.inactivity_minutes % 60 > 0 ? `${stage.inactivity_minutes % 60}min` : ''} na etapa "${stage.name}".`,
             opportunity_id: opp.id,
             contact_id: opp.contact_id,
             assigned_to: opp.assigned_to,

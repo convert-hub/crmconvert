@@ -2,26 +2,38 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Users, Target, MessageSquare, TrendingUp, ArrowUpRight, ArrowDownRight, Calendar, BarChart3 } from 'lucide-react';
+import { Users, Target, MessageSquare, TrendingUp, ArrowUpRight, ArrowDownRight, Calendar, BarChart3, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export default function DashboardPage() {
   const { tenant, profile } = useAuth();
-  const [stats, setStats] = useState({ contacts: 0, opportunities: 0, conversations: 0, totalValue: 0 });
+  const [stats, setStats] = useState({ contacts: 0, opportunities: 0, conversations: 0, totalValue: 0, inactive: 0 });
 
   useEffect(() => {
     if (!tenant) return;
     Promise.all([
       supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id),
-      supabase.from('opportunities').select('id, value').eq('tenant_id', tenant.id).eq('status', 'open'),
+      supabase.from('opportunities').select('id, value, stage_id, updated_at').eq('tenant_id', tenant.id).eq('status', 'open'),
       supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id).eq('status', 'open'),
-    ]).then(([cRes, oRes, convRes]) => {
-      const opps = (oRes.data ?? []) as unknown as { id: string; value: number }[];
+      supabase.from('stages').select('id, inactivity_minutes').eq('tenant_id', tenant.id).gt('inactivity_minutes', 0),
+    ]).then(([cRes, oRes, convRes, stagesRes]) => {
+      const opps = (oRes.data ?? []) as unknown as { id: string; value: number; stage_id: string; updated_at: string }[];
+      const stagesMap = new Map<string, number>();
+      for (const s of (stagesRes.data ?? []) as unknown as { id: string; inactivity_minutes: number }[]) {
+        stagesMap.set(s.id, s.inactivity_minutes);
+      }
+      const now = Date.now();
+      const inactiveCount = opps.filter(o => {
+        const mins = stagesMap.get(o.stage_id);
+        if (!mins) return false;
+        return new Date(o.updated_at).getTime() < now - mins * 60 * 1000;
+      }).length;
       setStats({
         contacts: cRes.count ?? 0,
         opportunities: opps.length,
         conversations: convRes.count ?? 0,
         totalValue: opps.reduce((s, o) => s + (o.value || 0), 0),
+        inactive: inactiveCount,
       });
     });
   }, [tenant]);
@@ -33,6 +45,7 @@ export default function DashboardPage() {
     { title: 'Oportunidades', value: stats.opportunities, icon: Target, trend: '+8%', up: true },
     { title: 'Conversas Abertas', value: stats.conversations, icon: MessageSquare, trend: '-3%', up: false },
     { title: 'Pipeline', value: `R$ ${stats.totalValue.toLocaleString('pt-BR')}`, icon: TrendingUp, trend: '+22%', up: true },
+    { title: 'Oport. Inativas', value: stats.inactive, icon: AlertTriangle, trend: stats.inactive > 0 ? `${stats.inactive} pendente${stats.inactive !== 1 ? 's' : ''}` : 'Nenhuma', up: false, isAlert: stats.inactive > 0 },
   ];
 
   return (
@@ -48,30 +61,32 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map(c => (
-          <Card key={c.title} className="hover-lift border-border/50 shadow-sm">
+          <Card key={c.title} className={cn("hover-lift border-border/50 shadow-sm", (c as any).isAlert && "border-destructive/50 bg-destructive/5")}>
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <CardTitle className="text-sm font-medium text-muted-foreground">{c.title}</CardTitle>
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent">
-                <c.icon className="h-[18px] w-[18px] text-accent-foreground" />
+              <div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", (c as any).isAlert ? "bg-destructive/10" : "bg-accent")}>
+                <c.icon className={cn("h-[18px] w-[18px]", (c as any).isAlert ? "text-destructive" : "text-accent-foreground")} />
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-extrabold">{c.value}</div>
+              <div className={cn("text-2xl font-extrabold", (c as any).isAlert && "text-destructive")}>{c.value}</div>
               <div className="flex items-center gap-1 mt-1">
-                {c.up ? (
+                {(c as any).isAlert ? (
+                  <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                ) : c.up ? (
                   <ArrowUpRight className="h-3.5 w-3.5 text-success" />
                 ) : (
                   <ArrowDownRight className="h-3.5 w-3.5 text-destructive" />
                 )}
                 <span className={cn(
                   "text-xs font-semibold",
-                  c.up ? "text-success" : "text-destructive"
+                  (c as any).isAlert ? "text-destructive" : c.up ? "text-success" : "text-destructive"
                 )}>
                   {c.trend}
                 </span>
-                <span className="text-xs text-muted-foreground ml-1">vs semana anterior</span>
+                {!(c as any).isAlert && <span className="text-xs text-muted-foreground ml-1">vs semana anterior</span>}
               </div>
             </CardContent>
           </Card>
