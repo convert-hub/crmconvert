@@ -24,8 +24,6 @@ export default function Login() {
     setLoading(false);
     if (error) {
       toast.error(error.message);
-    } else {
-      navigate('/pipeline');
     }
   };
 
