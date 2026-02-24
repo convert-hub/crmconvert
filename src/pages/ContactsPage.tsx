@@ -200,7 +200,7 @@ export default function ContactsPage() {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={form.birth_date} onSelect={d => setForm(f => ({ ...f, birth_date: d }))} initialFocus className="p-3 pointer-events-auto" captionLayout="dropdown-buttons" fromYear={1920} toYear={new Date().getFullYear()} />
+                  <Calendar mode="single" selected={form.birth_date} onSelect={d => setForm(f => ({ ...f, birth_date: d }))} initialFocus className="p-3 pointer-events-auto" />
                 </PopoverContent>
               </Popover>
             </div>
