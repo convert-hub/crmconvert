@@ -5,6 +5,7 @@ import {
   Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import logo from '@/assets/logo.png';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -52,16 +53,8 @@ export default function AppSidebar() {
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
-          CR
-        </div>
-        <div className="flex flex-col flex-1 min-w-0">
-          <span className="text-sm font-semibold truncate text-sidebar-foreground">
-            {tenant?.name ?? 'CRM'}
-          </span>
-          <span className="text-[11px] text-sidebar-muted">Workspace</span>
-        </div>
+      <div className="flex items-center justify-center px-5 py-5">
+        <img src={logo} alt="Esther Bertoldo Joias" className="h-10 w-auto object-contain" />
       </div>
 
       {/* Nav */}

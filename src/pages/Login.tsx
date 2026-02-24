@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
+import logo from '@/assets/logo.png';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -51,10 +52,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm border-border/60">
         <CardHeader className="text-center pb-4">
-          <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-sm">
-            CR
-          </div>
-          <CardTitle className="text-lg font-semibold">CRM Pipeline</CardTitle>
+          <img src={logo} alt="Esther Bertoldo Joias" className="mx-auto mb-3 h-12 w-auto object-contain" />
           <CardDescription className="text-[13px]">Gerencie seus leads e conversas</CardDescription>
         </CardHeader>
         <CardContent>
