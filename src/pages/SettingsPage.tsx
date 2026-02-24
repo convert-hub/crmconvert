@@ -10,8 +10,9 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette } from 'lucide-react';
 import { toast } from 'sonner';
+import BrandingSettings from '@/components/settings/BrandingSettings';
 
 interface CustomFieldDef {
   key: string;
@@ -342,12 +343,17 @@ export default function SettingsPage() {
       <Tabs defaultValue="general">
         <TabsList className="flex-wrap rounded-xl bg-muted/50 p-1">
           <TabsTrigger value="general" className="rounded-lg">Geral</TabsTrigger>
+          <TabsTrigger value="branding" className="rounded-lg"><Palette className="h-3.5 w-3.5 mr-1" />Marca</TabsTrigger>
           <TabsTrigger value="pipeline" className="rounded-lg">Pipeline</TabsTrigger>
           <TabsTrigger value="custom_fields" className="rounded-lg"><Settings2 className="h-3.5 w-3.5 mr-1" />Campos Personalizados</TabsTrigger>
           <TabsTrigger value="team" className="rounded-lg">Equipe</TabsTrigger>
           <TabsTrigger value="ai" className="rounded-lg">IA</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="branding" className="space-y-4 pt-4">
+          <BrandingSettings />
+        </TabsContent>
 
         <TabsContent value="general" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">
