@@ -1,37 +1,35 @@
 
 
-## Campo Data de Nascimento (fixo) nos Contatos
+## Exibir Data de Nascimento no Card do Pipeline
 
 ### Objetivo
-Adicionar o campo "Data de Nascimento" como campo fixo do sistema na entidade Contato. Nao obrigatorio, mas sempre presente na interface.
+Mostrar a data de nascimento do contato diretamente nos cards de oportunidade do Kanban, quando preenchida.
 
-### Alteracoes
+### O que sera feito
 
-**1. Migracao de banco de dados**
-- Adicionar coluna `birth_date date NULL` na tabela `contacts`.
+No componente `SortableOppCard` em `src/pages/PipelinePage.tsx`, adicionar uma linha abaixo do nome do contato exibindo a data de nascimento formatada (dd/MM/yyyy) com um icone de bolo (Cake).
 
-**2. Tipo TypeScript (`src/types/crm.ts`)**
-- Adicionar `birth_date: string | null` ao tipo `Contact`.
-
-**3. Pagina de Contatos (`src/pages/ContactsPage.tsx`)**
-- Adicionar campo de data de nascimento no formulario de criacao/edicao (usando DatePicker com Popover + Calendar).
-- Incluir o campo no estado do formulario e no payload de salvamento.
-- Exibir a data de nascimento na tabela de listagem (coluna extra).
-- Incluir no export CSV.
-
-**4. Detalhe da Oportunidade (`src/components/crm/OpportunityDetail.tsx`)**
-- Se o contato vinculado tiver `birth_date` preenchido, exibir a informacao na area de dados do contato (somente leitura).
+O campo so aparece quando o contato tem `birth_date` preenchido, mantendo o card limpo nos demais casos.
 
 ### Detalhes Tecnicos
 
-- A coluna sera `birth_date date NULL` (tipo date do Postgres, sem horario).
-- No formulario, sera usado o componente Calendar dentro de um Popover (padrao Shadcn DatePicker).
-- O campo aparecera abaixo do email no formulario de contato.
-- Na tabela, a data sera formatada com `format(date, 'dd/MM/yyyy')`.
+**Arquivo**: `src/pages/PipelinePage.tsx`
+
+- Importar o icone `Cake` do `lucide-react`
+- Importar `format` do `date-fns` (ja usado no arquivo)
+- Dentro do `SortableOppCard`, logo apos o bloco que exibe o nome do contato (icone User + nome), adicionar:
+
+```text
+{opp.contact?.birth_date && (
+  <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
+    <Cake className="h-3 w-3" />
+    <span>{format(new Date(opp.contact.birth_date + 'T00:00:00'), 'dd/MM/yyyy')}</span>
+  </div>
+)}
+```
+
+- Nenhuma outra alteracao necessaria pois os dados do contato ja sao carregados com `select('*, contact:contacts(*)')`.
 
 ### Arquivos afetados
-- `supabase/migrations/` -- nova migracao
-- `src/types/crm.ts` -- adicionar campo ao tipo Contact
-- `src/pages/ContactsPage.tsx` -- formulario e tabela
-- `src/components/crm/OpportunityDetail.tsx` -- exibicao no detalhe
+- `src/pages/PipelinePage.tsx` -- adicionar exibicao do birth_date no card
 
