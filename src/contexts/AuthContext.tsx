@@ -98,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(sess);
         setUser(sess?.user ?? null);
         if (sess?.user) {
-          // Use setTimeout to avoid Supabase auth deadlock, then load data
+          setLoading(true);
           setTimeout(async () => {
             if (!mounted) return;
             await loadUserData(sess.user.id);
