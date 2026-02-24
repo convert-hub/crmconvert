@@ -100,28 +100,39 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !tenant || !membership) return;
     setSending(true);
-    let convId: string;
-    const { data: existingConv } = await supabase.from('conversations').select('id').eq('opportunity_id', opportunityId).limit(1);
-    if (existingConv && existingConv.length > 0) {
-      convId = existingConv[0].id;
-    } else {
-      const { data: newConv } = await supabase.from('conversations').insert({
-        tenant_id: tenant.id, contact_id: opp?.contact_id, opportunity_id: opportunityId,
-        channel: 'whatsapp', status: 'open', assigned_to: membership.id,
-      }).select().single();
-      convId = newConv!.id;
+    try {
+      let convId: string;
+      const { data: existingConv } = await supabase.from('conversations').select('id').eq('opportunity_id', opportunityId).limit(1);
+      if (existingConv && existingConv.length > 0) {
+        convId = existingConv[0].id;
+      } else {
+        const { data: newConv } = await supabase.from('conversations').insert({
+          tenant_id: tenant.id, contact_id: opp?.contact_id, opportunity_id: opportunityId,
+          channel: 'whatsapp', status: 'open', assigned_to: membership.id,
+        }).select().single();
+        convId = newConv!.id;
+      }
+      const { data: savedMsg } = await supabase.from('messages').insert({
+        tenant_id: tenant.id, conversation_id: convId, direction: 'outbound',
+        content: newMessage, sender_membership_id: membership.id,
+      }).select('id').single();
+
+      if (opp?.contact?.phone) {
+        const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+          body: { action: 'send_message', tenant_id: tenant.id, phone: opp.contact.phone, message: newMessage, conversation_id: convId },
+        });
+        if (error || data?.error) {
+          toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
+        } else if (savedMsg?.id && data?.provider_message_id) {
+          await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+        }
+      }
+      setNewMessage(''); toast.success('Mensagem enviada');
+    } catch (err: any) {
+      toast.error('Erro ao enviar: ' + err.message);
+    } finally {
+      setSending(false);
     }
-    await supabase.from('messages').insert({
-      tenant_id: tenant.id, conversation_id: convId, direction: 'outbound',
-      content: newMessage, sender_membership_id: membership.id,
-    });
-    if (opp?.contact?.phone) {
-      await supabase.rpc('enqueue_job', {
-        _type: 'send_whatsapp', _payload: JSON.stringify({ phone: opp.contact.phone, message: newMessage, conversation_id: convId }),
-        _tenant_id: tenant.id, _idempotency_key: `wha-${convId}-${Date.now()}`,
-      });
-    }
-    setNewMessage(''); setSending(false); toast.success('Mensagem enviada');
   };
 
   const handleAddNote = async () => {
