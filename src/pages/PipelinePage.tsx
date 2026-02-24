@@ -128,6 +128,13 @@ export default function PipelinePage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
+  // Tick every 60s to refresh inactivity calculations
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
   const openChat = async (opp: Opportunity & { contact?: Contact }) => {
     if (!tenant || !opp.contact_id) return;
     // Find or create conversation for this contact
