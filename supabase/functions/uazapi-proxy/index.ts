@@ -321,6 +321,26 @@ serve(async (req) => {
           return jsonResponse({ error: errMsg, details: sendData }, isClientError ? 400 : 502);
         }
 
+        // Reset inactivity: update opportunities linked to this contact
+        if (conversation_id) {
+          try {
+            const { data: conv } = await supabaseAdmin.from('conversations')
+              .select('contact_id')
+              .eq('id', conversation_id)
+              .single();
+            if (conv?.contact_id) {
+              await supabaseAdmin.from('opportunities')
+                .update({ updated_at: new Date().toISOString() })
+                .eq('contact_id', conv.contact_id)
+                .eq('tenant_id', effectiveTenantId)
+                .eq('status', 'open');
+              console.log(`uazapi-proxy: reset inactivity for contact ${conv.contact_id}`);
+            }
+          } catch (e) {
+            console.error('uazapi-proxy: failed to reset inactivity:', e);
+          }
+        }
+
         return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.messageid || sendData.id || null });
       }
 

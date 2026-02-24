@@ -276,6 +276,18 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
 
   console.log(`webhook-uazapi: saved ${fromMe ? 'outbound' : 'inbound'} message for conversation ${conversation.id}`);
 
+  // Reset inactivity on any open opportunity for this contact
+  try {
+    await supabase.from('opportunities')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('contact_id', contact.id)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'open');
+    console.log(`webhook-uazapi: reset inactivity for contact ${contact.id} opportunities`);
+  } catch (e) {
+    console.error('webhook-uazapi: failed to reset opportunity inactivity:', e);
+  }
+
   // Fetch profile picture for inbound messages (if contact has no avatar yet)
   if (!fromMe && !contact.avatar_url) {
     try {
