@@ -17,7 +17,7 @@ import JobsPage from "@/pages/JobsPage";
 import AutomationsPage from "@/pages/AutomationsPage";
 import PromptStudioPage from "@/pages/PromptStudioPage";
 import ReportsPage from "@/pages/ReportsPage";
-import CompaniesPage from "@/pages/CompaniesPage";
+
 import ActivitiesPage from "@/pages/ActivitiesPage";
 import AdminLayout from "@/pages/admin/AdminLayout";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
@@ -62,7 +62,7 @@ function AppRoutes() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="pipeline" element={<PipelinePage />} />
         <Route path="contacts" element={<ContactsPage />} />
-        <Route path="companies" element={<CompaniesPage />} />
+        
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="automations" element={<AutomationsPage />} />

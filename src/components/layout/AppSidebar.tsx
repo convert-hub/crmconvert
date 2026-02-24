@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Building2, ChevronDown, Shield
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, ChevronDown, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -10,7 +10,6 @@ const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
   { icon: Kanban, label: 'Pipeline', path: '/pipeline' },
   { icon: Users, label: 'Contatos', path: '/contacts' },
-  { icon: Building2, label: 'Empresas', path: '/companies' },
   { icon: Activity, label: 'Atividades', path: '/activities' },
 ];
 
