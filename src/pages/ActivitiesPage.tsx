@@ -51,6 +51,8 @@ export default function ActivitiesPage() {
       .from('activities')
       .select('*, contact:contacts(id, name), opportunity:opportunities(id, title)')
       .eq('tenant_id', tenant.id)
+      .not('due_date', 'is', null)
+      .in('type', ['call', 'task', 'meeting', 'follow_up', 'email'])
       .order('due_date', { ascending: true, nullsFirst: false });
     setActivities((data as ActivityWithRelations[]) ?? []);
     setLoading(false);
@@ -71,14 +73,14 @@ export default function ActivitiesPage() {
   const overdue = pending.filter(a => a.due_date && isPast(new Date(a.due_date)));
   const soon = pending.filter(a => a.due_date && !isPast(new Date(a.due_date)) && differenceInHours(new Date(a.due_date), new Date()) <= 2);
   const scheduled = pending.filter(a => a.due_date && !isPast(new Date(a.due_date)) && differenceInHours(new Date(a.due_date), new Date()) > 2);
-  const noDue = pending.filter(a => !a.due_date);
+  // noDue removed - we only show scheduled activities with due_date
 
   const getStatusBadge = (act: ActivityWithRelations) => {
-    if (act.is_completed) return <Badge variant="outline" className="text-emerald-500 border-emerald-500/30">Concluída</Badge>;
+    if (act.is_completed) return <Badge variant="outline" className="text-success border-success/30">Concluída</Badge>;
     if (!act.due_date) return <Badge variant="outline" className="text-muted-foreground">Sem prazo</Badge>;
-    if (isPast(new Date(act.due_date))) return <Badge variant="destructive">Vencida</Badge>;
-    if (differenceInHours(new Date(act.due_date), new Date()) <= 2) return <Badge className="bg-yellow-500/20 text-yellow-600 border-yellow-500/30">Em breve</Badge>;
-    return <Badge variant="outline" className="text-primary">Agendada</Badge>;
+    if (isPast(new Date(act.due_date))) return <Badge variant="outline" className="text-destructive border-destructive/30">Vencida</Badge>;
+    if (differenceInHours(new Date(act.due_date), new Date()) <= 2) return <Badge variant="outline" className="text-warning border-warning/30">Em breve</Badge>;
+    return <Badge variant="outline" className="text-primary border-primary/30">Agendada</Badge>;
   };
 
   const renderList = (list: ActivityWithRelations[]) => {
@@ -93,9 +95,9 @@ export default function ActivitiesPage() {
             <Card
               key={act.id}
               className={cn(
-                "flex items-center gap-3 p-3 transition-colors",
-                isOverdue && "border-destructive/50 bg-destructive/5",
-                isSoon && "border-yellow-500/50 bg-yellow-500/5",
+                "flex items-center gap-3 p-3 transition-colors border-border/60",
+                isOverdue && "border-destructive/30",
+                isSoon && "border-warning/30",
                 act.is_completed && "opacity-60"
               )}
             >
@@ -105,7 +107,7 @@ export default function ActivitiesPage() {
                 className="h-8 w-8 shrink-0"
                 onClick={() => toggleComplete(act)}
               >
-                <CheckCircle2 className={cn("h-5 w-5", act.is_completed ? "text-emerald-500" : "text-muted-foreground")} />
+                <CheckCircle2 className={cn("h-5 w-5", act.is_completed ? "text-success" : "text-muted-foreground")} />
               </Button>
 
               <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -145,11 +147,11 @@ export default function ActivitiesPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Atividades</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <h1 className="text-lg font-semibold text-foreground">Atividades</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
             {overdue.length > 0 && <span className="text-destructive font-medium">{overdue.length} vencida{overdue.length > 1 ? 's' : ''}</span>}
             {overdue.length > 0 && soon.length > 0 && ' · '}
-            {soon.length > 0 && <span className="text-yellow-600 font-medium">{soon.length} em breve</span>}
+            {soon.length > 0 && <span className="text-warning font-medium">{soon.length} em breve</span>}
             {(overdue.length > 0 || soon.length > 0) && ' · '}
             {pending.length} pendente{pending.length !== 1 ? 's' : ''} · {completed.length} concluída{completed.length !== 1 ? 's' : ''}
           </p>
@@ -171,26 +173,20 @@ export default function ActivitiesPage() {
         <TabsContent value="pending" className="mt-4 space-y-4">
           {overdue.length > 0 && (
             <div>
-              <h3 className="text-xs uppercase tracking-wider text-destructive font-semibold mb-2">Vencidas</h3>
+              <h3 className="text-xs uppercase tracking-wider text-destructive font-medium mb-2">Vencidas</h3>
               {renderList(overdue)}
             </div>
           )}
           {soon.length > 0 && (
             <div>
-              <h3 className="text-xs uppercase tracking-wider text-yellow-600 font-semibold mb-2">Em breve (próximas 2h)</h3>
+              <h3 className="text-xs uppercase tracking-wider text-warning font-medium mb-2">Em breve (próximas 2h)</h3>
               {renderList(soon)}
             </div>
           )}
           {scheduled.length > 0 && (
             <div>
-              <h3 className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-2">Agendadas</h3>
+              <h3 className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-2">Agendadas</h3>
               {renderList(scheduled)}
-            </div>
-          )}
-          {noDue.length > 0 && (
-            <div>
-              <h3 className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-2">Sem prazo</h3>
-              {renderList(noDue)}
             </div>
           )}
           {pending.length === 0 && <p className="text-sm text-muted-foreground py-8 text-center">Nenhuma atividade pendente 🎉</p>}
