@@ -49,29 +49,29 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground font-bold text-lg">
+      <Card className="w-full max-w-sm border-border/60">
+        <CardHeader className="text-center pb-4">
+          <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-sm">
             CR
           </div>
-          <CardTitle className="text-2xl">CRM Pipeline</CardTitle>
-          <CardDescription>Gerencie seus leads e conversas</CardDescription>
+          <CardTitle className="text-lg font-semibold">CRM Pipeline</CardTitle>
+          <CardDescription className="text-[13px]">Gerencie seus leads e conversas</CardDescription>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="login">
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="login">Entrar</TabsTrigger>
-              <TabsTrigger value="signup">Criar Conta</TabsTrigger>
+              <TabsTrigger value="login" className="text-[13px]">Entrar</TabsTrigger>
+              <TabsTrigger value="signup" className="text-[13px]">Criar Conta</TabsTrigger>
             </TabsList>
 
             <TabsContent value="login">
-              <form onSubmit={handleLogin} className="space-y-4 pt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-email">Email</Label>
+              <form onSubmit={handleLogin} className="space-y-3 pt-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="login-email" className="text-[13px]">Email</Label>
                   <Input id="login-email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="login-password">Senha</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="login-password" className="text-[13px]">Senha</Label>
                   <Input id="login-password" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
@@ -82,17 +82,17 @@ export default function Login() {
             </TabsContent>
 
             <TabsContent value="signup">
-              <form onSubmit={handleSignup} className="space-y-4 pt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-name">Nome completo</Label>
+              <form onSubmit={handleSignup} className="space-y-3 pt-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="signup-name" className="text-[13px]">Nome completo</Label>
                   <Input id="signup-name" value={fullName} onChange={e => setFullName(e.target.value)} required />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="signup-email" className="text-[13px]">Email</Label>
                   <Input id="signup-email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Senha</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="signup-password" className="text-[13px]">Senha</Label>
                   <Input id="signup-password" type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
