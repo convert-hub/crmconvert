@@ -21,6 +21,7 @@ export default function ContactsPage() {
   const { tenant, role } = useAuth();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showDialog, setShowDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: '', birth_date: undefined as Date | undefined });
@@ -29,10 +30,11 @@ export default function ContactsPage() {
     if (!tenant) return;
     let query = supabase.from('contacts').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false }).limit(200);
     if (search) query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
+    if (statusFilter !== 'all') query = query.eq('status', statusFilter as any);
     query.then(({ data }) => setContacts((data as unknown as Contact[]) ?? []));
   };
 
-  useEffect(() => { loadContacts(); }, [tenant, search]);
+  useEffect(() => { loadContacts(); }, [tenant, search, statusFilter]);
 
   const openCreate = () => {
     setEditingContact(null);
@@ -104,6 +106,18 @@ export default function ContactsPage() {
           <p className="text-sm text-muted-foreground mt-0.5">{contacts.length} contato{contacts.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex items-center gap-3">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-36 rounded-xl">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="lead">Lead</SelectItem>
+              <SelectItem value="customer">Cliente</SelectItem>
+              <SelectItem value="churned">Churned</SelectItem>
+              <SelectItem value="inactive">Inativo</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input className="pl-9 w-64 rounded-xl" placeholder="Buscar contatos..." value={search} onChange={e => setSearch(e.target.value)} />
