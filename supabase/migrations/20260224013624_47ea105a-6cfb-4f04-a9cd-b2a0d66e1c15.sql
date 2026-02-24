@@ -1,0 +1,1 @@
+ALTER TABLE public.stages ADD COLUMN inactivity_hours integer DEFAULT NULL;
