@@ -53,8 +53,8 @@ export default function AppSidebar() {
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
-      <div className="flex items-center justify-center px-4 py-6">
-        <img src={logo} alt="Esther Bertoldo Joias" className="h-16 w-auto object-contain" />
+      <div className="flex items-center justify-center px-3 py-6">
+        <img src={logo} alt="Esther Bertoldo Joias" className="h-28 w-auto object-contain" />
       </div>
 
       {/* Nav */}
