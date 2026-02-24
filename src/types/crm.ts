@@ -57,6 +57,7 @@ export interface Contact {
   utm_source: string | null;
   utm_medium: string | null;
   utm_campaign: string | null;
+  birth_date: string | null;
   company_id: string | null;
   assigned_to: string | null;
   created_at: string;
