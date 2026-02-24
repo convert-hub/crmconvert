@@ -10,8 +10,15 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
+
+interface CustomFieldDef {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select' | 'date' | 'boolean';
+  options?: string[];
+}
 
 interface Member { id: string; user_id: string; role: string; is_active: boolean; profile?: { full_name: string | null; phone: string | null }; }
 interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_minutes: number | null; }
@@ -212,6 +219,12 @@ export default function SettingsPage() {
   const [aiDailyLimit, setAiDailyLimit] = useState('100');
   const [aiMonthlyLimit, setAiMonthlyLimit] = useState('3000');
 
+  // Custom fields state
+  const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
+  const [cfLabel, setCfLabel] = useState('');
+  const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
+  const [cfOptions, setCfOptions] = useState('');
+
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
 
   const loadAll = async () => {
@@ -219,7 +232,9 @@ export default function SettingsPage() {
     // Load keywords from tenant settings
     const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
     if (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) {
-      setLeadKeywords((tenantData.settings as Record<string, any>).lead_keywords || []);
+      const s = tenantData.settings as Record<string, any>;
+      setLeadKeywords(s.lead_keywords || []);
+      setCustomFields(s.custom_opportunity_fields || []);
     }
     const { data: mems } = await supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id);
     if (mems) {
@@ -288,6 +303,39 @@ export default function SettingsPage() {
 
   const isAdmin = role === 'admin';
 
+  const slugify = (text: string) => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+  const addCustomField = async () => {
+    if (!tenant || !cfLabel.trim()) return;
+    const key = slugify(cfLabel);
+    if (customFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
+    const newField: CustomFieldDef = { key, label: cfLabel.trim(), type: cfType };
+    if (cfType === 'select' && cfOptions.trim()) {
+      newField.options = cfOptions.split(',').map(o => o.trim()).filter(Boolean);
+    }
+    const updated = [...customFields, newField];
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setCustomFields(updated);
+    setCfLabel(''); setCfType('text'); setCfOptions('');
+    toast.success('Campo adicionado');
+  };
+
+  const removeCustomField = async (key: string) => {
+    if (!tenant) return;
+    const updated = customFields.filter(f => f.key !== key);
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setCustomFields(updated);
+    toast.success('Campo removido');
+  };
+
+  const CF_TYPE_LABELS: Record<string, string> = { text: 'Texto', number: 'Número', select: 'Seleção', date: 'Data', boolean: 'Sim/Não' };
+
   return (
     <div className="p-6 max-w-5xl bg-background">
       <h1 className="text-xl font-bold mb-6 text-foreground">Configurações</h1>
@@ -295,6 +343,7 @@ export default function SettingsPage() {
         <TabsList className="flex-wrap rounded-xl bg-muted/50 p-1">
           <TabsTrigger value="general" className="rounded-lg">Geral</TabsTrigger>
           <TabsTrigger value="pipeline" className="rounded-lg">Pipeline</TabsTrigger>
+          <TabsTrigger value="custom_fields" className="rounded-lg"><Settings2 className="h-3.5 w-3.5 mr-1" />Campos Personalizados</TabsTrigger>
           <TabsTrigger value="team" className="rounded-lg">Equipe</TabsTrigger>
           <TabsTrigger value="ai" className="rounded-lg">IA</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
@@ -407,6 +456,69 @@ export default function SettingsPage() {
                   <div className="space-y-1 flex-1"><Label>Nova etapa</Label><Input value={newStageName} onChange={e => setNewStageName(e.target.value)} placeholder="Nome da etapa" className="rounded-xl" /></div>
                   <Input type="color" value={newStageColor} onChange={e => setNewStageColor(e.target.value)} className="w-14 h-10 p-1 rounded-xl" />
                   <Button onClick={addStage} className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Adicionar</Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="custom_fields" className="space-y-4 pt-4">
+          <Card className="glass-card rounded-2xl">
+            <CardHeader>
+              <CardTitle>Campos Personalizados de Oportunidade</CardTitle>
+              <CardDescription>Defina campos extras que aparecerão nos cards do pipeline e no detalhe da oportunidade</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {customFields.length > 0 ? (
+                <Table>
+                  <TableHeader><TableRow className="hover:bg-transparent">
+                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {customFields.map(f => (
+                      <TableRow key={f.key}>
+                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
+                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
+                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado definido.</p>}
+
+              {isAdmin && (
+                <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
+                  <p className="text-sm font-medium text-foreground">Novo campo</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Nome do campo</Label>
+                      <Input value={cfLabel} onChange={e => setCfLabel(e.target.value)} placeholder="Ex: Produto" className="rounded-xl" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Tipo</Label>
+                      <Select value={cfType} onValueChange={v => setCfType(v as CustomFieldDef['type'])}>
+                        <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Texto</SelectItem>
+                          <SelectItem value="number">Número</SelectItem>
+                          <SelectItem value="select">Seleção</SelectItem>
+                          <SelectItem value="date">Data</SelectItem>
+                          <SelectItem value="boolean">Sim/Não</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  {cfType === 'select' && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Opções (separadas por vírgula)</Label>
+                      <Input value={cfOptions} onChange={e => setCfOptions(e.target.value)} placeholder="Ex: Baixa, Média, Alta" className="rounded-xl" />
+                    </div>
+                  )}
+                  <Button onClick={addCustomField} disabled={!cfLabel.trim()} className="rounded-xl">
+                    <Plus className="h-4 w-4 mr-1" />Adicionar Campo
+                  </Button>
                 </div>
               )}
             </CardContent>

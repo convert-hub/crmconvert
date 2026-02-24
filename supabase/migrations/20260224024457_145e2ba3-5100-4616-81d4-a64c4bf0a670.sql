@@ -1,0 +1,1 @@
+ALTER TABLE public.opportunities ADD COLUMN IF NOT EXISTS custom_fields jsonb DEFAULT '{}'::jsonb;

@@ -26,6 +26,13 @@ import { useDroppable } from '@dnd-kit/core';
 // Card status type based on scheduled activities
 type CardAlertStatus = 'overdue' | 'soon' | 'scheduled' | 'inactive' | 'normal';
 
+interface CustomFieldDef {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select' | 'date' | 'boolean';
+  options?: string[];
+}
+
 function DroppableColumn({ stage, children, count, total, onAdd }: {
   stage: Stage; children: React.ReactNode; count: number; total: number;
   onAdd: () => void;
@@ -56,12 +63,13 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount }: {
+function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, customFieldDefs }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
   alertStatus: CardAlertStatus;
   unreadCount: number;
+  customFieldDefs: CustomFieldDef[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
@@ -140,6 +148,21 @@ function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount }:
             ))}
           </div>
         )}
+        {/* Custom fields */}
+        {customFieldDefs.length > 0 && (opp as any).custom_fields && Object.keys((opp as any).custom_fields).length > 0 && (
+          <div className="flex flex-wrap gap-1 pl-5">
+            {customFieldDefs.slice(0, 3).map(fd => {
+              const val = (opp as any).custom_fields?.[fd.key];
+              if (val === undefined || val === null || val === '') return null;
+              const display = fd.type === 'boolean' ? (val ? '✓' : '✗') : fd.type === 'date' ? String(val).substring(0, 10) : String(val);
+              return (
+                <Badge key={fd.key} variant="secondary" className="text-[10px] px-1.5 py-0 rounded-full">
+                  {fd.label}: {display}
+                </Badge>
+              );
+            })}
+          </div>
+        )}
       </div>
     </Card>
   );
@@ -159,8 +182,8 @@ export default function PipelinePage() {
   const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [chatConvStatus, setChatConvStatus] = useState<string>('open');
   const [unreadByContact, setUnreadByContact] = useState<Record<string, number>>({});
-  // Pending (non-completed) activities per opportunity: oppId -> Activity[]
   const [activitiesByOpp, setActivitiesByOpp] = useState<Record<string, Activity[]>>({});
+  const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDef[]>([]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -225,6 +248,13 @@ export default function PipelinePage() {
 
   useEffect(() => {
     if (!tenant) return;
+    // Load custom field definitions from tenant settings
+    supabase.from('tenants').select('settings').eq('id', tenant.id).single()
+      .then(({ data }) => {
+        if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+          setCustomFieldDefs((data.settings as Record<string, any>).custom_opportunity_fields || []);
+        }
+      });
     supabase.from('pipelines').select('*').eq('tenant_id', tenant.id).order('position')
       .then(({ data }) => {
         if (data && data.length > 0) {
@@ -399,7 +429,8 @@ export default function PipelinePage() {
                     <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
                       alertStatus={getOppAlertStatus(opp)}
-                      unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0} />
+                      unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
+                      customFieldDefs={customFieldDefs} />
                   ))}
                 </SortableContext>
               </DroppableColumn>
