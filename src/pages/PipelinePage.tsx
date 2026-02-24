@@ -143,9 +143,27 @@ export default function PipelinePage() {
     return () => clearInterval(interval);
   }, []);
 
+  const resetUnreadForContact = useCallback(async (contactId: string | null) => {
+    if (!tenant || !contactId) return;
+    const { data: convs } = await supabase.from('conversations')
+      .select('id')
+      .eq('tenant_id', tenant.id)
+      .eq('contact_id', contactId)
+      .gt('unread_count', 0);
+    if (convs && convs.length > 0) {
+      for (const c of convs) {
+        await supabase.from('conversations').update({ unread_count: 0 }).eq('id', c.id);
+      }
+    }
+    setUnreadByContact(prev => {
+      const next = { ...prev };
+      delete next[contactId];
+      return next;
+    });
+  }, [tenant]);
+
   const openChat = async (opp: Opportunity & { contact?: Contact }) => {
     if (!tenant || !opp.contact_id) return;
-    // Find or create conversation for this contact
     const { data: convs } = await supabase.from('conversations')
       .select('id, status, channel')
       .eq('tenant_id', tenant.id)
@@ -158,13 +176,7 @@ export default function PipelinePage() {
       setChatConvId(convs[0].id);
       setChatConvStatus(convs[0].status);
       setChatOpp(opp);
-      // Reset unread count
-      await supabase.from('conversations').update({ unread_count: 0 }).eq('id', convs[0].id);
-      setUnreadByContact(prev => {
-        const next = { ...prev };
-        if (opp.contact_id) delete next[opp.contact_id];
-        return next;
-      });
+      resetUnreadForContact(opp.contact_id);
     } else {
       // Create new conversation
       const { data: newConv, error } = await supabase.from('conversations').insert({
@@ -311,7 +323,7 @@ export default function PipelinePage() {
                 total={stageTotal(stage.id)} onAdd={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
                 <SortableContext items={oppsByStage(stage.id).map(o => o.id)} strategy={verticalListSortingStrategy}>
                   {oppsByStage(stage.id).map(opp => (
-                    <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)}
+                    <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
                       isInactive={opp.status === 'open' && isOppInactive(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0} />
