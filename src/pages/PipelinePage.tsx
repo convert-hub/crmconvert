@@ -1,17 +1,20 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Pipeline, Stage, Opportunity, Contact } from '@/types/crm';
+import type { Pipeline, Stage, Opportunity, Contact, Conversation } from '@/types/crm';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock, GripVertical } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
+import ChatPanel from '@/components/inbox/ChatPanel';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { toast } from 'sonner';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragOverEvent, DragStartEvent, DragOverlay,
@@ -50,7 +53,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick }: { opp: Opportunity & { contact?: Contact }; onClick: () => void }) {
+function SortableOppCard({ opp, onClick, onWhatsApp }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -67,6 +70,12 @@ function SortableOppCard({ opp, onClick }: { opp: Opportunity & { contact?: Cont
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="text-sm font-medium leading-tight flex-1 text-foreground">{opp.title}</p>
+          {opp.contact?.phone && (
+            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+              onClick={onWhatsApp} title="Conversar no WhatsApp">
+              <MessageCircle className="h-3.5 w-3.5 text-emerald-500" />
+            </Button>
+          )}
         </div>
         {opp.contact && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
@@ -108,8 +117,45 @@ export default function PipelinePage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createStageId, setCreateStageId] = useState<string>('');
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [chatOpp, setChatOpp] = useState<(Opportunity & { contact?: Contact }) | null>(null);
+  const [chatConvId, setChatConvId] = useState<string | null>(null);
+  const [chatConvStatus, setChatConvStatus] = useState<string>('open');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  const openChat = async (opp: Opportunity & { contact?: Contact }) => {
+    if (!tenant || !opp.contact_id) return;
+    // Find or create conversation for this contact
+    const { data: convs } = await supabase.from('conversations')
+      .select('id, status, channel')
+      .eq('tenant_id', tenant.id)
+      .eq('contact_id', opp.contact_id)
+      .in('status', ['open', 'waiting_customer', 'waiting_agent'])
+      .order('last_message_at', { ascending: false })
+      .limit(1);
+
+    if (convs && convs.length > 0) {
+      setChatConvId(convs[0].id);
+      setChatConvStatus(convs[0].status);
+      setChatOpp(opp);
+    } else {
+      // Create new conversation
+      const { data: newConv, error } = await supabase.from('conversations').insert({
+        tenant_id: tenant.id,
+        contact_id: opp.contact_id,
+        opportunity_id: opp.id,
+        channel: 'whatsapp',
+        status: 'open',
+      }).select('id, status').single();
+
+      if (error) { toast.error('Erro ao criar conversa: ' + error.message); return; }
+      if (newConv) {
+        setChatConvId(newConv.id);
+        setChatConvStatus(newConv.status);
+        setChatOpp(opp);
+      }
+    }
+  };
 
   useEffect(() => {
     if (!tenant) return;
@@ -212,7 +258,8 @@ export default function PipelinePage() {
                 total={stageTotal(stage.id)} onAdd={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
                 <SortableContext items={oppsByStage(stage.id).map(o => o.id)} strategy={verticalListSortingStrategy}>
                   {oppsByStage(stage.id).map(opp => (
-                    <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)} />
+                    <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)}
+                      onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }} />
                   ))}
                 </SortableContext>
               </DroppableColumn>
@@ -241,6 +288,27 @@ export default function PipelinePage() {
 
       <CreateOpportunityDialog open={showCreate} onOpenChange={setShowCreate} stageId={createStageId}
         pipelineId={selectedPipeline} onCreated={loadOpps} />
+
+      {/* WhatsApp Chat Dialog */}
+      <Dialog open={!!chatOpp} onOpenChange={(open) => { if (!open) { setChatOpp(null); setChatConvId(null); } }}>
+        <DialogContent className="max-w-2xl h-[80vh] p-0 rounded-2xl overflow-hidden flex flex-col">
+          <DialogHeader className="px-4 pt-4 pb-0">
+            <DialogTitle className="text-base">
+              Conversa com {chatOpp?.contact?.name ?? 'Contato'}
+            </DialogTitle>
+          </DialogHeader>
+          {chatConvId && chatOpp && (
+            <ChatPanel
+              conversationId={chatConvId}
+              contact={chatOpp.contact}
+              channel="whatsapp"
+              status={chatConvStatus}
+              showHeader={false}
+              className="flex-1 min-h-0"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
