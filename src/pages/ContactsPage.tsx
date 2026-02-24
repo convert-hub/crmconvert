@@ -9,10 +9,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Phone, Mail, Edit, Trash2, MoreHorizontal } from 'lucide-react';
+import { Plus, Search, Download, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
+import { cn } from '@/lib/utils';
 
 export default function ContactsPage() {
   const { tenant, role } = useAuth();
@@ -20,7 +23,7 @@ export default function ContactsPage() {
   const [search, setSearch] = useState('');
   const [showDialog, setShowDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: '' });
+  const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: '', birth_date: undefined as Date | undefined });
 
   const loadContacts = () => {
     if (!tenant) return;
@@ -33,13 +36,13 @@ export default function ContactsPage() {
 
   const openCreate = () => {
     setEditingContact(null);
-    setForm({ name: '', phone: '', email: '', status: 'lead', tags: '' });
+    setForm({ name: '', phone: '', email: '', status: 'lead', tags: '', birth_date: undefined });
     setShowDialog(true);
   };
 
   const openEdit = (c: Contact) => {
     setEditingContact(c);
-    setForm({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', status: c.status as any, tags: c.tags?.join(', ') ?? '' });
+    setForm({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', status: c.status as any, tags: c.tags?.join(', ') ?? '', birth_date: c.birth_date ? new Date(c.birth_date + 'T00:00:00') : undefined });
     setShowDialog(true);
   };
 
@@ -52,6 +55,7 @@ export default function ContactsPage() {
       email: form.email || null,
       status: form.status,
       tags: form.tags ? form.tags.split(',').map(t => t.trim()) : [],
+      birth_date: form.birth_date ? format(form.birth_date, 'yyyy-MM-dd') : null,
     };
 
     if (editingContact) {
@@ -75,8 +79,8 @@ export default function ContactsPage() {
   };
 
   const exportCSV = () => {
-    const headers = 'Nome,Telefone,Email,Status,Tags,Criado em\n';
-    const rows = contacts.map(c => `"${c.name}","${c.phone ?? ''}","${c.email ?? ''}","${c.status}","${c.tags?.join(';') ?? ''}","${c.created_at}"`).join('\n');
+    const headers = 'Nome,Telefone,Email,Status,Tags,Data Nascimento,Criado em\n';
+    const rows = contacts.map(c => `"${c.name}","${c.phone ?? ''}","${c.email ?? ''}","${c.status}","${c.tags?.join(';') ?? ''}","${c.birth_date ? format(new Date(c.birth_date + 'T00:00:00'), 'dd/MM/yyyy') : ''}","${c.created_at}"`).join('\n');
     const blob = new Blob([headers + rows], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -121,6 +125,7 @@ export default function ContactsPage() {
                 <TableHead className="font-semibold">Email</TableHead>
                 <TableHead className="font-semibold">Status</TableHead>
                 <TableHead className="font-semibold">Tags</TableHead>
+                <TableHead className="font-semibold">Nascimento</TableHead>
                 <TableHead className="font-semibold">Origem</TableHead>
                 <TableHead className="font-semibold">Criado</TableHead>
                 {!isReadonly && <TableHead className="w-10" />}
@@ -138,6 +143,7 @@ export default function ContactsPage() {
                     <Badge variant="outline" className={`text-xs capitalize rounded-full ${statusColors[c.status] ?? ''}`}>{c.status}</Badge>
                   </TableCell>
                   <TableCell><div className="flex gap-1 flex-wrap">{c.tags?.slice(0, 3).map(t => <Badge key={t} variant="outline" className="text-[10px] rounded-full">{t}</Badge>)}</div></TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{c.birth_date ? format(new Date(c.birth_date + 'T00:00:00'), 'dd/MM/yyyy') : '-'}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{c.source ?? '-'}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{format(new Date(c.created_at), 'dd/MM/yy')}</TableCell>
                   {!isReadonly && (
@@ -183,6 +189,20 @@ export default function ContactsPage() {
                   <SelectItem value="inactive">Inativo</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Data de Nascimento</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn("w-full justify-start text-left font-normal rounded-xl", !form.birth_date && "text-muted-foreground")}>
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {form.birth_date ? format(form.birth_date, 'dd/MM/yyyy') : 'Selecionar data'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={form.birth_date} onSelect={d => setForm(f => ({ ...f, birth_date: d }))} initialFocus className="p-3 pointer-events-auto" captionLayout="dropdown-buttons" fromYear={1920} toYear={new Date().getFullYear()} />
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="space-y-2"><Label>Tags (separadas por vírgula)</Label><Input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))} placeholder="tag1, tag2" className="rounded-xl" /></div>
             <Button type="submit" className="w-full rounded-xl">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>

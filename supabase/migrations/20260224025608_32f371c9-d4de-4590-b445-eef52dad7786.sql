@@ -1,0 +1,1 @@
+ALTER TABLE public.contacts ADD COLUMN birth_date date NULL;
