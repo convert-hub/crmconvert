@@ -339,10 +339,29 @@ export default function PipelinePage() {
   }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
+    const opp = opportunities.find(o => o.id === oppId);
+    if (!opp || !tenant) return;
+    const fromStageId = opp.stage_id;
     const stage = stages.find(s => s.id === newStageId);
     const newStatus = stage?.is_won ? 'won' : stage?.is_lost ? 'lost' : 'open';
     setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any } : o));
     await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
+
+    // Enqueue automation trigger for stage change
+    await supabase.rpc('enqueue_job', {
+      _type: 'run_automations',
+      _payload: JSON.stringify({
+        tenant_id: tenant.id,
+        trigger_type: 'opportunity_stage_changed',
+        context: {
+          opportunity_id: oppId,
+          contact_id: opp.contact_id,
+          from_stage_id: fromStageId,
+          to_stage_id: newStageId,
+        },
+      }),
+      _tenant_id: tenant.id,
+    });
   };
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string);
