@@ -158,6 +158,13 @@ export default function PipelinePage() {
       setChatConvId(convs[0].id);
       setChatConvStatus(convs[0].status);
       setChatOpp(opp);
+      // Reset unread count
+      await supabase.from('conversations').update({ unread_count: 0 }).eq('id', convs[0].id);
+      setUnreadByContact(prev => {
+        const next = { ...prev };
+        if (opp.contact_id) delete next[opp.contact_id];
+        return next;
+      });
     } else {
       // Create new conversation
       const { data: newConv, error } = await supabase.from('conversations').insert({
