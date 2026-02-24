@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { getTenantBranding, type BrandingConfig } from '@/hooks/useTenantBranding';
 
 export default function BrandingSettings() {
-  const { tenant, role } = useAuth();
+  const { tenant, role, refreshTenant } = useAuth();
   const isAdmin = role === 'admin';
   const [branding, setBranding] = useState<BrandingConfig>({});
   const [uploading, setUploading] = useState(false);
@@ -33,6 +33,7 @@ export default function BrandingSettings() {
     }).eq('id', tenant.id);
     if (error) { toast.error(error.message); setSaving(false); return; }
     setBranding(updated);
+    await refreshTenant();
     toast.success('Marca atualizada!');
     setSaving(false);
   };
