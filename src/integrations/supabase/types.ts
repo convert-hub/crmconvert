@@ -1129,7 +1129,7 @@ export type Database = {
           color: string | null
           created_at: string
           id: string
-          inactivity_hours: number | null
+          inactivity_minutes: number | null
           is_lost: boolean | null
           is_won: boolean | null
           name: string
@@ -1142,7 +1142,7 @@ export type Database = {
           color?: string | null
           created_at?: string
           id?: string
-          inactivity_hours?: number | null
+          inactivity_minutes?: number | null
           is_lost?: boolean | null
           is_won?: boolean | null
           name: string
@@ -1155,7 +1155,7 @@ export type Database = {
           color?: string | null
           created_at?: string
           id?: string
-          inactivity_hours?: number | null
+          inactivity_minutes?: number | null
           is_lost?: boolean | null
           is_won?: boolean | null
           name?: string

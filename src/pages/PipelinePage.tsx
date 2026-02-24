@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
@@ -53,7 +53,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick, onWhatsApp }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void }) {
+function SortableOppCard({ opp, onClick, onWhatsApp, isInactive }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void; isInactive: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -62,7 +62,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp }: { opp: Opportunity & { co
   };
   return (
     <Card ref={setNodeRef} style={style}
-      className="cursor-pointer p-3.5 hover-lift border border-border/50 bg-card rounded-xl group"
+      className={`cursor-pointer p-3.5 hover-lift border bg-card rounded-xl group ${isInactive ? 'border-destructive/60 ring-1 ring-destructive/30' : 'border-border/50'}`}
       onClick={onClick}>
       <div className="space-y-2.5">
         <div className="flex items-start gap-2">
@@ -70,6 +70,11 @@ function SortableOppCard({ opp, onClick, onWhatsApp }: { opp: Opportunity & { co
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="text-sm font-medium leading-tight flex-1 text-foreground">{opp.title}</p>
+          {isInactive && (
+            <div className="shrink-0" title="Oportunidade inativa — necessita follow-up">
+              <AlertTriangle className="h-4 w-4 text-destructive animate-pulse" />
+            </div>
+          )}
           {opp.contact?.phone && (
             <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
               onClick={onWhatsApp} title="Conversar no WhatsApp">
@@ -90,9 +95,9 @@ function SortableOppCard({ opp, onClick, onWhatsApp }: { opp: Opportunity & { co
               R$ {Number(opp.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
           )}
-          <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto">
+          <div className={`flex items-center gap-1 text-[10px] ml-auto ${isInactive ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
             <Clock className="h-3 w-3" />
-            {formatDistanceToNow(new Date(opp.created_at), { locale: ptBR, addSuffix: true })}
+            {formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
           </div>
         </div>
         {opp.contact?.tags && opp.contact.tags.length > 0 && (
@@ -227,6 +232,12 @@ export default function PipelinePage() {
 
   const oppsByStage = (stageId: string) => opportunities.filter(o => o.stage_id === stageId);
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
+  const isOppInactive = (opp: Opportunity) => {
+    const stage = stages.find(s => s.id === opp.stage_id);
+    if (!stage || !stage.inactivity_minutes || stage.inactivity_minutes <= 0) return false;
+    const threshold = Date.now() - stage.inactivity_minutes * 60 * 1000;
+    return new Date(opp.updated_at).getTime() < threshold;
+  };
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
 
   return (
@@ -259,7 +270,8 @@ export default function PipelinePage() {
                 <SortableContext items={oppsByStage(stage.id).map(o => o.id)} strategy={verticalListSortingStrategy}>
                   {oppsByStage(stage.id).map(opp => (
                     <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)}
-                      onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }} />
+                      onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
+                      isInactive={opp.status === 'open' && isOppInactive(opp)} />
                   ))}
                 </SortableContext>
               </DroppableColumn>
