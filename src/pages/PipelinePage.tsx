@@ -75,10 +75,10 @@ function SortableOppCard({ opp, onClick }: { opp: Opportunity & { contact?: Cont
           </div>
         )}
         <div className="flex items-center justify-between pl-5">
-          {(opp.value ?? 0) > 0 && (
+          {Number(opp.value ?? 0) > 0 && (
             <div className="flex items-center gap-1 text-xs font-semibold text-success">
               <DollarSign className="h-3 w-3" />
-              R$ {opp.value.toLocaleString('pt-BR')}
+              R$ {Number(opp.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
           )}
           <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto">
@@ -180,7 +180,7 @@ export default function PipelinePage() {
   };
 
   const oppsByStage = (stageId: string) => opportunities.filter(o => o.stage_id === stageId);
-  const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + (o.value || 0), 0);
+  const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
 
   return (
