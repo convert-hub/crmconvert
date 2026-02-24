@@ -53,7 +53,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick, onWhatsApp, isInactive }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void; isInactive: boolean }) {
+function SortableOppCard({ opp, onClick, onWhatsApp, isInactive, unreadCount }: { opp: Opportunity & { contact?: Contact }; onClick: () => void; onWhatsApp: (e: React.MouseEvent) => void; isInactive: boolean; unreadCount: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -76,10 +76,17 @@ function SortableOppCard({ opp, onClick, onWhatsApp, isInactive }: { opp: Opport
             </div>
           )}
           {opp.contact?.phone && (
-            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-              onClick={onWhatsApp} title="Conversar no WhatsApp">
-              <MessageCircle className="h-3.5 w-3.5 text-emerald-500" />
-            </Button>
+            <div className="relative shrink-0">
+              <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={onWhatsApp} title="Conversar no WhatsApp">
+                <MessageCircle className="h-3.5 w-3.5 text-primary" />
+              </Button>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground px-1 animate-pulse">
+                  {unreadCount}
+                </span>
+              )}
+            </div>
           )}
         </div>
         {opp.contact && (
@@ -125,6 +132,7 @@ export default function PipelinePage() {
   const [chatOpp, setChatOpp] = useState<(Opportunity & { contact?: Contact }) | null>(null);
   const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [chatConvStatus, setChatConvStatus] = useState<string>('open');
+  const [unreadByContact, setUnreadByContact] = useState<Record<string, number>>({});
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -195,14 +203,34 @@ export default function PipelinePage() {
     loadOpps();
   }, [selectedPipeline, tenant, loadOpps]);
 
+  // Load unread counts per contact
+  const loadUnreads = useCallback(() => {
+    if (!tenant) return;
+    supabase.from('conversations')
+      .select('contact_id, unread_count')
+      .eq('tenant_id', tenant.id)
+      .gt('unread_count', 0)
+      .in('status', ['open', 'waiting_customer', 'waiting_agent'])
+      .then(({ data }) => {
+        const map: Record<string, number> = {};
+        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null }[]) {
+          if (c.contact_id && c.unread_count) map[c.contact_id] = (map[c.contact_id] || 0) + c.unread_count;
+        }
+        setUnreadByContact(map);
+      });
+  }, [tenant]);
+
+  useEffect(() => { loadUnreads(); }, [loadUnreads]);
+
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
     const channel = supabase
       .channel('pipeline-updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => loadOpps())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => loadUnreads())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [selectedPipeline, tenant, loadOpps]);
+  }, [selectedPipeline, tenant, loadOpps, loadUnreads]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
     const stage = stages.find(s => s.id === newStageId);
@@ -278,7 +306,8 @@ export default function PipelinePage() {
                   {oppsByStage(stage.id).map(opp => (
                     <SortableOppCard key={opp.id} opp={opp} onClick={() => setSelectedOpp(opp.id)}
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
-                      isInactive={opp.status === 'open' && isOppInactive(opp)} />
+                      isInactive={opp.status === 'open' && isOppInactive(opp)}
+                      unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0} />
                   ))}
                 </SortableContext>
               </DroppableColumn>
