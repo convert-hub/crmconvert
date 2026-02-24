@@ -794,6 +794,7 @@ export type Database = {
           contact_id: string | null
           conversation_state: Json | null
           created_at: string
+          custom_fields: Json | null
           expected_close_date: string | null
           id: string
           loss_reason: string | null
@@ -820,6 +821,7 @@ export type Database = {
           contact_id?: string | null
           conversation_state?: Json | null
           created_at?: string
+          custom_fields?: Json | null
           expected_close_date?: string | null
           id?: string
           loss_reason?: string | null
@@ -846,6 +848,7 @@ export type Database = {
           contact_id?: string | null
           conversation_state?: Json | null
           created_at?: string
+          custom_fields?: Json | null
           expected_close_date?: string | null
           id?: string
           loss_reason?: string | null

@@ -14,7 +14,14 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 
+interface CustomFieldDef {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select' | 'date' | 'boolean';
+  options?: string[];
+}
 interface Props {
   opportunityId: string;
   stages: Stage[];
@@ -46,6 +53,20 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const [editNextAction, setEditNextAction] = useState('');
   const [isEditing, setIsEditing] = useState(false);
 
+  // Custom fields
+  const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDef[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    if (!tenant) return;
+    supabase.from('tenants').select('settings').eq('id', tenant.id).single()
+      .then(({ data }) => {
+        if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+          setCustomFieldDefs((data.settings as Record<string, any>).custom_opportunity_fields || []);
+        }
+      });
+  }, [tenant]);
+
   useEffect(() => {
     supabase.from('opportunities').select('*, contact:contacts(*)').eq('id', opportunityId).single()
       .then(({ data }) => {
@@ -56,6 +77,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           setEditValue(String(o.value ?? 0));
           setEditPriority(o.priority ?? 'medium');
           setEditNextAction(o.next_action ?? '');
+          setCustomFieldValues((o as any).custom_fields || {});
         }
       });
 
@@ -90,6 +112,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       value: parseFloat(editValue) || 0,
       priority: editPriority as any,
       next_action: editNextAction || null,
+      custom_fields: customFieldValues as any,
     }).eq('id', opp.id);
     if (error) { toast.error(error.message); return; }
     toast.success('Oportunidade atualizada');
@@ -247,13 +270,62 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
             </div>
           </div>
           <div className="space-y-2"><Label>Próxima ação</Label><Input value={editNextAction} onChange={e => setEditNextAction(e.target.value)} placeholder="Ex: Ligar na segunda" className="rounded-xl" /></div>
+          {/* Custom Fields */}
+          {customFieldDefs.length > 0 && (
+            <div className="space-y-3 pt-2 border-t border-border/50">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Campos Personalizados</p>
+              <div className="grid grid-cols-2 gap-3">
+                {customFieldDefs.map(fd => (
+                  <div key={fd.key} className="space-y-1.5">
+                    <Label className="text-xs">{fd.label}</Label>
+                    {fd.type === 'text' && (
+                      <Input value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(prev => ({ ...prev, [fd.key]: e.target.value }))} className="rounded-xl h-9" />
+                    )}
+                    {fd.type === 'number' && (
+                      <Input type="number" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(prev => ({ ...prev, [fd.key]: e.target.value ? parseFloat(e.target.value) : '' }))} className="rounded-xl h-9" />
+                    )}
+                    {fd.type === 'date' && (
+                      <Input type="date" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(prev => ({ ...prev, [fd.key]: e.target.value }))} className="rounded-xl h-9" />
+                    )}
+                    {fd.type === 'select' && (
+                      <Select value={String(customFieldValues[fd.key] ?? '')} onValueChange={v => setCustomFieldValues(prev => ({ ...prev, [fd.key]: v }))}>
+                        <SelectTrigger className="rounded-xl h-9"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                        <SelectContent>
+                          {fd.options?.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    {fd.type === 'boolean' && (
+                      <div className="flex items-center gap-2 h-9">
+                        <Checkbox checked={!!customFieldValues[fd.key]} onCheckedChange={v => setCustomFieldValues(prev => ({ ...prev, [fd.key]: v }))} />
+                        <span className="text-sm text-muted-foreground">{customFieldValues[fd.key] ? 'Sim' : 'Não'}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button onClick={handleSaveEdit} className="rounded-xl"><Save className="h-4 w-4 mr-1" />Salvar</Button>
             <Button variant="outline" onClick={() => setIsEditing(false)} className="rounded-xl">Cancelar</Button>
           </div>
         </div>
       ) : (
-        <Button variant="outline" size="sm" onClick={() => setIsEditing(true)} className="rounded-xl">Editar Oportunidade</Button>
+        <div className="space-y-3">
+          <Button variant="outline" size="sm" onClick={() => setIsEditing(true)} className="rounded-xl">Editar Oportunidade</Button>
+          {/* Display custom fields when not editing */}
+          {customFieldDefs.length > 0 && Object.keys(customFieldValues).some(k => customFieldValues[k] !== '' && customFieldValues[k] !== undefined && customFieldValues[k] !== null) && (
+            <div className="flex flex-wrap gap-1.5">
+              {customFieldDefs.map(fd => {
+                const val = customFieldValues[fd.key];
+                if (val === undefined || val === null || val === '') return null;
+                const display = fd.type === 'boolean' ? (val ? 'Sim' : 'Não') : fd.type === 'date' ? String(val).substring(0, 10) : String(val);
+                return <Badge key={fd.key} variant="secondary" className="text-xs rounded-full">{fd.label}: {display}</Badge>;
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Tabs */}
