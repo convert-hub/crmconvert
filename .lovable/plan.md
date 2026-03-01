@@ -1,46 +1,27 @@
 
 
-## Fix: Race Condition on Login Redirecting to "Waiting Approval"
+## Como acionar as Respostas Rápidas
 
-### Problem
-When logging in, there's a timing issue:
-1. The login handler calls `navigate('/pipeline')` immediately after auth succeeds
-2. The `onAuthStateChange` listener sets the session but loads membership data asynchronously (via `setTimeout`)
-3. Between these two events, the app sees a valid session with no membership, so it redirects to `/waiting`
+As respostas rápidas já estão implementadas no ChatPanel e podem ser acionadas de **duas formas**:
 
-### Solution
+### 1. Digitando `/` no campo de mensagem
+Ao digitar `/` no campo de texto do chat, um dropdown aparece automaticamente com todas as respostas rápidas cadastradas. Conforme você continua digitando (ex: `/saud`), a lista é filtrada em tempo real pelo atalho ou título. Clique na opção desejada e o conteúdo será inserido no campo com as variáveis (`{{nome}}`, `{{telefone}}`, `{{email}}`) já substituídas pelos dados do contato.
 
-**File: `src/contexts/AuthContext.tsx`**
-- Set `loading = true` immediately when `onAuthStateChange` detects a new sign-in event, BEFORE the `setTimeout` that loads user data
-- This ensures the app shows the loading spinner instead of rendering routes with incomplete state
+### 2. Botão de raio (⚡) na barra de mensagem
+Ao lado do campo de texto, há um botão com ícone de raio (Zap). Ao clicar, o mesmo dropdown de respostas rápidas abre para seleção.
 
-**File: `src/pages/Login.tsx`**
-- Remove the manual `navigate('/pipeline')` after login. The `AuthContext` + router logic in `App.tsx` already handles redirection based on the user's role and membership. Navigating manually creates a race with the context loading.
+### Pré-requisito
+Para que as opções apareçam, é necessário primeiro cadastrar respostas rápidas em **Configurações > Respostas Rápidas** (disponível para admin/manager). Sem templates cadastrados, o botão de raio não aparece e o `/` não abre nenhum dropdown.
 
-### Technical Details
+### Resumo do fluxo
+```text
+Configurações > Respostas Rápidas > [+ Nova]
+  → Atalho: saudacao
+  → Conteúdo: "Olá {{nome}}, tudo bem?"
 
-In `AuthContext.tsx`, the `onAuthStateChange` callback will be updated to:
+Inbox > Chat > digita "/saudacao" ou clica ⚡
+  → Seleciona template
+  → Campo preenchido: "Olá João, tudo bem?"
+  → Envia normalmente
 ```
-(_event, sess) => {
-  setSession(sess);
-  setUser(sess?.user ?? null);
-  if (sess?.user) {
-    setLoading(true);  // <-- Block rendering until data loads
-    setTimeout(async () => {
-      await loadUserData(sess.user.id);
-      setLoading(false);
-    }, 0);
-  } else {
-    // clear state...
-    setLoading(false);
-  }
-}
-```
-
-In `Login.tsx`, the `handleLogin` success path will simply let the auth state change propagate naturally -- the `App.tsx` routing already redirects authenticated users with memberships to `/pipeline`.
-
-### Impact
-- No database changes needed
-- Only 2 files modified
-- Fixes the redirect to `/waiting` for users who already have a tenant membership
 
