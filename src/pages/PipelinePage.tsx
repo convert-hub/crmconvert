@@ -1,18 +1,20 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Pipeline, Stage, Opportunity, Contact, Conversation, Activity } from '@/types/crm';
+import type { Pipeline, Stage, Opportunity, Contact, Conversation, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, TrendingUp } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
-import { formatDistanceToNow, format } from 'date-fns';
+import { formatDistanceToNow, format, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import {
@@ -33,6 +35,57 @@ interface CustomFieldDef {
   options?: string[];
 }
 
+interface Filters {
+  assignee: string; // 'all' | membership_id
+  priority: string; // 'all' | priority value
+  tag: string;      // '' | tag name
+  valueMin: string;
+  valueMax: string;
+}
+
+const emptyFilters: Filters = { assignee: 'all', priority: 'all', tag: '', valueMin: '', valueMax: '' };
+
+// ─── Engagement Score ───
+function calcEngagementScore(opp: Opportunity & { contact?: Contact }, msgCounts: Record<string, number>): number {
+  let score = 0;
+  const contactId = opp.contact_id;
+  const msgs = contactId ? (msgCounts[contactId] || 0) : 0;
+
+  // Message volume (max 30 pts)
+  score += Math.min(msgs * 3, 30);
+
+  // Recency (max 30 pts) — how recently updated
+  const daysSinceUpdate = differenceInDays(new Date(), new Date(opp.updated_at));
+  if (daysSinceUpdate <= 1) score += 30;
+  else if (daysSinceUpdate <= 3) score += 20;
+  else if (daysSinceUpdate <= 7) score += 10;
+  else if (daysSinceUpdate <= 14) score += 5;
+
+  // Value (max 20 pts)
+  const val = Number(opp.value || 0);
+  if (val >= 10000) score += 20;
+  else if (val >= 5000) score += 15;
+  else if (val >= 1000) score += 10;
+  else if (val > 0) score += 5;
+
+  // Priority (max 20 pts)
+  const pMap: Record<string, number> = { urgent: 20, high: 15, medium: 10, low: 5 };
+  score += pMap[opp.priority] || 0;
+
+  return Math.min(score, 100);
+}
+
+function EngagementBadge({ score }: { score: number }) {
+  const color = score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-muted-foreground';
+  return (
+    <div className={`flex items-center gap-0.5 text-[10px] font-semibold ${color}`} title={`Engajamento: ${score}/100`}>
+      <TrendingUp className="h-3 w-3" />
+      {score}
+    </div>
+  );
+}
+
+// ─── Droppable Column ───
 function DroppableColumn({ stage, children, count, total, onAdd }: {
   stage: Stage; children: React.ReactNode; count: number; total: number;
   onAdd: () => void;
@@ -63,13 +116,15 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
   );
 }
 
-function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, customFieldDefs }: {
+// ─── Sortable Opp Card ───
+function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, customFieldDefs, engagementScore }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
   alertStatus: CardAlertStatus;
   unreadCount: number;
   customFieldDefs: CustomFieldDef[];
+  engagementScore: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
@@ -142,6 +197,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, c
               R$ {Number(opp.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
           )}
+          <EngagementBadge score={engagementScore} />
           <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
             <Clock className="h-3 w-3" />
             {formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
@@ -174,6 +230,82 @@ function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, c
   );
 }
 
+// ─── Filter Bar ───
+function FilterBar({ filters, onChange, members, allTags }: {
+  filters: Filters;
+  onChange: (f: Filters) => void;
+  members: (TenantMembership & { profile?: Profile })[];
+  allTags: string[];
+}) {
+  const hasFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="rounded-xl gap-1.5">
+          <Filter className="h-3.5 w-3.5" />
+          Filtros
+          {hasFilters && <Badge variant="default" className="h-4 min-w-4 px-1 text-[10px] rounded-full">{[filters.assignee !== 'all', filters.priority !== 'all', filters.tag !== '', filters.valueMin !== '', filters.valueMax !== ''].filter(Boolean).length}</Badge>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 space-y-3" align="start">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold">Filtros</span>
+          {hasFilters && <Button variant="ghost" size="sm" className="h-6 text-xs rounded-lg" onClick={() => onChange(emptyFilters)}><X className="h-3 w-3 mr-1" />Limpar</Button>}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Atendente</label>
+          <Select value={filters.assignee} onValueChange={v => onChange({ ...filters, assignee: v })}>
+            <SelectTrigger className="rounded-xl h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="unassigned">Sem atendente</SelectItem>
+              {members.map(m => (
+                <SelectItem key={m.id} value={m.id}>{m.profile?.full_name || m.user_id.slice(0, 8)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Prioridade</label>
+          <Select value={filters.priority} onValueChange={v => onChange({ ...filters, priority: v })}>
+            <SelectTrigger className="rounded-xl h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
+              <SelectItem value="urgent">Urgente</SelectItem>
+              <SelectItem value="high">Alta</SelectItem>
+              <SelectItem value="medium">Média</SelectItem>
+              <SelectItem value="low">Baixa</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Tag</label>
+          <Select value={filters.tag || '__none__'} onValueChange={v => onChange({ ...filters, tag: v === '__none__' ? '' : v })}>
+            <SelectTrigger className="rounded-xl h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Todas</SelectItem>
+              {allTags.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Valor (R$)</label>
+          <div className="flex gap-2">
+            <Input type="number" placeholder="Mín" value={filters.valueMin} onChange={e => onChange({ ...filters, valueMin: e.target.value })} className="rounded-xl h-8 text-xs" />
+            <Input type="number" placeholder="Máx" value={filters.valueMax} onChange={e => onChange({ ...filters, valueMax: e.target.value })} className="rounded-xl h-8 text-xs" />
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ─── Main Component ───
 export default function PipelinePage() {
   const { tenant } = useAuth();
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -190,6 +322,9 @@ export default function PipelinePage() {
   const [unreadByContact, setUnreadByContact] = useState<Record<string, number>>({});
   const [activitiesByOpp, setActivitiesByOpp] = useState<Record<string, Activity[]>>({});
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDef[]>([]);
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [members, setMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
+  const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -199,6 +334,28 @@ export default function PipelinePage() {
     const interval = setInterval(() => setTick(t => t + 1), 60_000);
     return () => clearInterval(interval);
   }, []);
+
+  // Collect all unique tags for filter
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of opportunities) {
+      if (o.contact?.tags) o.contact.tags.forEach(t => set.add(t));
+    }
+    return [...set].sort();
+  }, [opportunities]);
+
+  // Apply filters
+  const filteredOpportunities = useMemo(() => {
+    return opportunities.filter(o => {
+      if (filters.assignee === 'unassigned' && o.assigned_to) return false;
+      if (filters.assignee !== 'all' && filters.assignee !== 'unassigned' && o.assigned_to !== filters.assignee) return false;
+      if (filters.priority !== 'all' && o.priority !== filters.priority) return false;
+      if (filters.tag && (!o.contact?.tags || !o.contact.tags.includes(filters.tag))) return false;
+      if (filters.valueMin && Number(o.value || 0) < Number(filters.valueMin)) return false;
+      if (filters.valueMax && Number(o.value || 0) > Number(filters.valueMax)) return false;
+      return true;
+    });
+  }, [opportunities, filters]);
 
   const resetUnreadForContact = useCallback(async (contactId: string | null) => {
     if (!tenant || !contactId) return;
@@ -254,7 +411,6 @@ export default function PipelinePage() {
 
   useEffect(() => {
     if (!tenant) return;
-    // Load custom field definitions from tenant settings
     supabase.from('tenants').select('settings').eq('id', tenant.id).single()
       .then(({ data }) => {
         if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
@@ -270,6 +426,11 @@ export default function PipelinePage() {
           setSelectedPipeline(def.id);
         }
       });
+    // Load members for filter
+    supabase.from('tenant_memberships').select('*, profile:profiles(*)').eq('tenant_id', tenant.id).eq('is_active', true)
+      .then(({ data }) => {
+        setMembers((data as unknown as (TenantMembership & { profile?: Profile })[]) ?? []);
+      });
   }, [tenant]);
 
   const loadOpps = useCallback(() => {
@@ -277,6 +438,50 @@ export default function PipelinePage() {
     supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('position')
       .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
   }, [selectedPipeline, tenant]);
+
+  // Load message counts per contact for engagement score
+  const loadMsgCounts = useCallback(() => {
+    if (!tenant) return;
+    supabase.from('conversations')
+      .select('contact_id')
+      .eq('tenant_id', tenant.id)
+      .not('contact_id', 'is', null)
+      .then(async ({ data: convs }) => {
+        if (!convs || convs.length === 0) return;
+        // Get unique contact_ids that have opportunities
+        const contactIds = [...new Set(convs.map(c => c.contact_id).filter(Boolean) as string[])];
+        // Count messages per conversation, then aggregate per contact
+        const counts: Record<string, number> = {};
+        // Use a simpler approach: count recent messages (last 30 days) grouped by contact
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: msgs } = await supabase.from('messages')
+          .select('conversation_id')
+          .eq('tenant_id', tenant.id)
+          .gte('created_at', thirtyDaysAgo);
+        
+        if (msgs) {
+          // Map conversation to contact
+          const convToContact: Record<string, string> = {};
+          for (const c of convs) {
+            if (c.contact_id) convToContact[c.contact_id] = c.contact_id;
+          }
+          // We need conv_id -> contact_id mapping
+          const { data: convData } = await supabase.from('conversations')
+            .select('id, contact_id')
+            .eq('tenant_id', tenant.id)
+            .not('contact_id', 'is', null);
+          const convMap: Record<string, string> = {};
+          for (const c of (convData ?? [])) {
+            if (c.contact_id) convMap[c.id] = c.contact_id;
+          }
+          for (const m of msgs) {
+            const cid = convMap[m.conversation_id];
+            if (cid) counts[cid] = (counts[cid] || 0) + 1;
+          }
+        }
+        setMsgCountsByContact(counts);
+      });
+  }, [tenant]);
 
   // Load pending activities for all opportunities in the pipeline
   const loadActivities = useCallback(() => {
@@ -306,7 +511,8 @@ export default function PipelinePage() {
       .then(({ data }) => setStages((data as unknown as Stage[]) ?? []));
     loadOpps();
     loadActivities();
-  }, [selectedPipeline, tenant, loadOpps, loadActivities]);
+    loadMsgCounts();
+  }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
 
   // Load unread counts per contact
   const loadUnreads = useCallback(() => {
@@ -347,7 +553,6 @@ export default function PipelinePage() {
     setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any } : o));
     await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
 
-    // Enqueue automation trigger for stage change
     await supabase.rpc('enqueue_job', {
       _type: 'run_automations',
       _payload: JSON.stringify({
@@ -387,7 +592,7 @@ export default function PipelinePage() {
     }
   };
 
-  const oppsByStage = (stageId: string) => opportunities.filter(o => o.stage_id === stageId);
+  const oppsByStage = (stageId: string) => filteredOpportunities.filter(o => o.stage_id === stageId);
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
 
   // Determine the alert status for each card
@@ -396,7 +601,6 @@ export default function PipelinePage() {
 
     const pendingActivities = activitiesByOpp[opp.id];
     if (pendingActivities && pendingActivities.length > 0) {
-      // Has scheduled activities — check earliest due_date
       const now = Date.now();
       let hasOverdue = false;
       let hasSoon = false;
@@ -408,10 +612,9 @@ export default function PipelinePage() {
       }
       if (hasOverdue) return 'overdue';
       if (hasSoon) return 'soon';
-      return 'scheduled'; // has future activity, suppress inactivity
+      return 'scheduled';
     }
 
-    // No scheduled activities — fall back to inactivity check
     const stage = stages.find(s => s.id === opp.stage_id);
     if (!stage || !stage.inactivity_minutes || stage.inactivity_minutes <= 0) return 'normal';
     const threshold = Date.now() - stage.inactivity_minutes * 60 * 1000;
@@ -421,6 +624,8 @@ export default function PipelinePage() {
   };
 
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
+
+  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -436,9 +641,12 @@ export default function PipelinePage() {
               </SelectContent>
             </Select>
           )}
+          <FilterBar filters={filters} onChange={setFilters} members={members} allTags={allTags} />
         </div>
         <div className="text-sm text-muted-foreground">
-          {opportunities.length} oportunidade{opportunities.length !== 1 ? 's' : ''} · R$ {opportunities.reduce((s, o) => s + (o.value || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          {hasActiveFilters && <span className="text-primary font-medium mr-2">{filteredOpportunities.length} de {opportunities.length}</span>}
+          {!hasActiveFilters && <>{opportunities.length} oportunidade{opportunities.length !== 1 ? 's' : ''} · </>}
+          R$ {filteredOpportunities.reduce((s, o) => s + (o.value || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
         </div>
       </header>
 
@@ -455,7 +663,8 @@ export default function PipelinePage() {
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
                       alertStatus={getOppAlertStatus(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
-                      customFieldDefs={customFieldDefs} />
+                      customFieldDefs={customFieldDefs}
+                      engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
                   ))}
                 </SortableContext>
               </DroppableColumn>

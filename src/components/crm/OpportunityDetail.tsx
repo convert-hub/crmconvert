@@ -9,9 +9,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake } from 'lucide-react';
+import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -22,6 +22,23 @@ interface CustomFieldDef {
   type: 'text' | 'number' | 'select' | 'date' | 'boolean';
   options?: string[];
 }
+
+interface StageMove {
+  id: string;
+  from_stage_id: string | null;
+  to_stage_id: string;
+  created_at: string;
+  is_ai_move: boolean;
+  ai_reason: string | null;
+}
+
+interface TimelineItem {
+  id: string;
+  type: 'message' | 'activity' | 'stage_move' | 'note';
+  timestamp: string;
+  data: any;
+}
+
 interface Props {
   opportunityId: string;
   stages: Stage[];
@@ -35,6 +52,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const [opp, setOpp] = useState<Opportunity & { contact?: Contact } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [stageMoves, setStageMoves] = useState<StageMove[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [newNote, setNewNote] = useState('');
   const [sending, setSending] = useState(false);
@@ -89,6 +107,10 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
 
+    // Load stage moves
+    supabase.from('stage_moves').select('*').eq('opportunity_id', opportunityId).order('created_at')
+      .then(({ data }) => setStageMoves((data as unknown as StageMove[]) ?? []));
+
     loadActivities();
   }, [opportunityId]);
 
@@ -104,6 +126,24 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       }).subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [opportunityId]);
+
+  // Build unified timeline
+  const timeline: TimelineItem[] = (() => {
+    const items: TimelineItem[] = [];
+
+    for (const msg of messages) {
+      items.push({ id: `msg-${msg.id}`, type: 'message', timestamp: msg.created_at, data: msg });
+    }
+    for (const act of activities) {
+      items.push({ id: `act-${act.id}`, type: act.type === 'note' ? 'note' : 'activity', timestamp: act.created_at, data: act });
+    }
+    for (const sm of stageMoves) {
+      items.push({ id: `sm-${sm.id}`, type: 'stage_move', timestamp: sm.created_at, data: sm });
+    }
+
+    items.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    return items;
+  })();
 
   const handleSaveEdit = async () => {
     if (!opp) return;
@@ -196,6 +236,11 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
     setActivities(prev => prev.map(a => a.id === activityId ? { ...a, is_completed: true } : a));
     toast.success('Atividade concluída');
     onActivityChange?.();
+  };
+
+  const getStageName = (stageId: string | null) => {
+    if (!stageId) return '—';
+    return stages.find(s => s.id === stageId)?.name ?? stageId.slice(0, 8);
   };
 
   if (!opp) return <div className="p-6 text-center text-muted-foreground">Carregando...</div>;
@@ -315,7 +360,6 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       ) : (
         <div className="space-y-3">
           <Button variant="outline" size="sm" onClick={() => setIsEditing(true)} className="rounded-xl">Editar Oportunidade</Button>
-          {/* Display custom fields when not editing */}
           {customFieldDefs.length > 0 && Object.keys(customFieldValues).some(k => customFieldValues[k] !== '' && customFieldValues[k] !== undefined && customFieldValues[k] !== null) && (
             <div className="flex flex-wrap gap-1.5">
               {customFieldDefs.map(fd => {
@@ -330,12 +374,87 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue="chat" className="flex-1">
+      <Tabs defaultValue="timeline" className="flex-1">
         <TabsList className="rounded-xl bg-muted/50 p-1">
+          <TabsTrigger value="timeline" className="rounded-lg"><Clock className="h-4 w-4 mr-1" />Timeline</TabsTrigger>
           <TabsTrigger value="chat" className="rounded-lg"><MessageSquare className="h-4 w-4 mr-1" />Chat</TabsTrigger>
           <TabsTrigger value="notes" className="rounded-lg">Notas</TabsTrigger>
           <TabsTrigger value="activities" className="rounded-lg"><CalendarClock className="h-4 w-4 mr-1" />Atividades</TabsTrigger>
         </TabsList>
+
+        {/* ─── Timeline Tab ─── */}
+        <TabsContent value="timeline" className="space-y-2">
+          <div className="max-h-[400px] overflow-y-auto scrollbar-thin space-y-1 pr-1">
+            {timeline.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Nenhum evento registrado</p>}
+            {timeline.map(item => (
+              <div key={item.id} className="flex gap-3 group">
+                {/* Timeline line */}
+                <div className="flex flex-col items-center">
+                  <div className={cn("h-2 w-2 rounded-full mt-2 shrink-0",
+                    item.type === 'message' ? 'bg-primary' :
+                    item.type === 'stage_move' ? 'bg-warning' :
+                    item.type === 'note' ? 'bg-accent-foreground/50' :
+                    'bg-info'
+                  )} />
+                  <div className="w-px flex-1 bg-border/50" />
+                </div>
+                {/* Content */}
+                <div className="pb-3 flex-1 min-w-0">
+                  {item.type === 'message' && (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-medium text-primary">{item.data.direction === 'inbound' ? '← Recebida' : '→ Enviada'}</span>
+                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                      </div>
+                      <p className="text-xs text-foreground mt-0.5 line-clamp-2">{item.data.content || '[Mídia]'}</p>
+                    </div>
+                  )}
+                  {item.type === 'stage_move' && (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-medium text-warning">Movido de etapa</span>
+                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-foreground mt-0.5">
+                        <span>{getStageName(item.data.from_stage_id)}</span>
+                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        <span className="font-medium">{getStageName(item.data.to_stage_id)}</span>
+                        {item.data.is_ai_move && <Badge variant="secondary" className="text-[9px] px-1 py-0 rounded-full">IA</Badge>}
+                      </div>
+                      {item.data.ai_reason && <p className="text-[10px] text-muted-foreground mt-0.5 italic">{item.data.ai_reason}</p>}
+                    </div>
+                  )}
+                  {item.type === 'note' && (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <StickyNote className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-[10px] font-medium text-muted-foreground">Nota</span>
+                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                      </div>
+                      <p className="text-xs text-foreground mt-0.5">{item.data.description}</p>
+                    </div>
+                  )}
+                  {item.type === 'activity' && (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <CalendarClock className="h-3 w-3 text-info" />
+                        <Badge variant="outline" className="text-[9px] capitalize rounded-full px-1.5 py-0">{item.data.type}</Badge>
+                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                        {item.data.is_completed && <CheckCircle2 className="h-3 w-3 text-primary" />}
+                      </div>
+                      <p className="text-xs text-foreground mt-0.5">{item.data.title}</p>
+                      {item.data.due_date && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          Prazo: {format(new Date(item.data.due_date), "dd/MM/yyyy HH:mm")}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </TabsContent>
 
         <TabsContent value="chat" className="space-y-4">
           <div className="max-h-80 overflow-y-auto scrollbar-thin space-y-2 rounded-2xl border border-border/50 p-3">
@@ -377,7 +496,6 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         </TabsContent>
 
         <TabsContent value="activities" className="space-y-3">
-          {/* New Activity Button / Form */}
           {showNewActivity ? (
             <div className="rounded-2xl border border-primary/30 p-4 space-y-3 bg-card/50">
               <div className="grid grid-cols-2 gap-3">
@@ -420,7 +538,6 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
             </Button>
           )}
 
-          {/* Activity list */}
           {activities.filter(a => a.type !== 'note').map(a => {
             const dueStatus = getActivityDueStatus(a);
             return (
