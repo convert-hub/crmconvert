@@ -7,12 +7,20 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
+
+interface QuickReply {
+  id: string;
+  shortcut: string;
+  title: string;
+  content: string;
+  variables: string[];
+}
 
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
@@ -177,8 +185,13 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
+  const [isInternal, setIsInternal] = useState(false);
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [qrFilter, setQrFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const qrRef = useRef<HTMLDivElement>(null);
 
   const statusColors: Record<string, string> = {
     open: 'bg-success/10 text-success border-success/20',
@@ -186,6 +199,36 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     waiting_agent: 'bg-info/10 text-info border-info/20',
     closed: 'bg-muted text-muted-foreground',
   };
+
+  // Load quick replies
+  useEffect(() => {
+    if (!tenant) return;
+    supabase.from('quick_replies').select('*').eq('tenant_id', tenant.id).eq('is_active', true).order('position')
+      .then(({ data }) => setQuickReplies((data as unknown as QuickReply[]) ?? []));
+  }, [tenant]);
+
+  const replaceVariables = (text: string): string => {
+    return text
+      .replace(/\{\{nome\}\}/gi, contact?.name || '')
+      .replace(/\{\{telefone\}\}/gi, contact?.phone || '')
+      .replace(/\{\{email\}\}/gi, contact?.email || '');
+  };
+
+  const handleSelectQuickReply = (qr: QuickReply) => {
+    const replaced = replaceVariables(qr.content);
+    setNewMsg(replaced);
+    setShowQuickReplies(false);
+    setQrFilter('');
+  };
+
+  // Close quick replies on click outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (qrRef.current && !qrRef.current.contains(e.target as Node)) setShowQuickReplies(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -223,37 +266,42 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     const isWhatsApp = channel === 'whatsapp';
     const contactPhone = contact?.phone;
     const msgContent = newMsg;
+    const sendAsInternal = isInternal;
     setNewMsg('');
 
     const optimisticId = crypto.randomUUID();
-    const optimisticMsg: Message = {
+    const optimisticMsg: any = {
       id: optimisticId, tenant_id: tenant.id, conversation_id: conversationId,
       direction: 'outbound', content: msgContent, sender_membership_id: membership.id,
       created_at: new Date().toISOString(), is_ai_generated: false, media_type: null, media_url: null,
+      is_internal: sendAsInternal,
     };
-    setMessages(prev => [...prev, optimisticMsg]);
+    setMessages(prev => [...prev, optimisticMsg as Message]);
 
     setSending(true);
     try {
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: conversationId, direction: 'outbound',
-        content: msgContent, sender_membership_id: membership.id,
-      }).select('id').single();
+        content: msgContent, sender_membership_id: membership.id, is_internal: sendAsInternal,
+      } as any).select('id').single();
 
       if (savedMsg?.id) setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
 
-      supabase.from('conversations').update({
-        last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
-      }).eq('id', conversationId);
+      // Only update conversation status and send to WhatsApp if NOT internal note
+      if (!sendAsInternal) {
+        supabase.from('conversations').update({
+          last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
+        }).eq('id', conversationId);
 
-      if (isWhatsApp && contactPhone) {
-        const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-          body: { action: 'send_message', tenant_id: tenant.id, phone: contactPhone, message: msgContent, conversation_id: conversationId },
-        });
-        if (error || data?.error) {
-          toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
-        } else if (savedMsg?.id && data?.provider_message_id) {
-          await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+        if (isWhatsApp && contactPhone) {
+          const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+            body: { action: 'send_message', tenant_id: tenant.id, phone: contactPhone, message: msgContent, conversation_id: conversationId },
+          });
+          if (error || data?.error) {
+            toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
+          } else if (savedMsg?.id && data?.provider_message_id) {
+            await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+          }
         }
       }
     } catch (err: any) {
@@ -338,15 +386,25 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         {messages.map(msg => {
           const msgStatus = (msg as any).provider_metadata?.status;
           const isMedia = hasMedia(msg);
+          const msgIsInternal = (msg as any).is_internal === true;
           return (
             <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
               <div className={cn("max-w-[75%] rounded-2xl px-4 py-2.5 text-sm",
-                msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
+                msgIsInternal
+                  ? 'bg-warning/10 border border-warning/30 text-foreground'
+                  : msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
+                {msgIsInternal && (
+                  <div className="flex items-center gap-1 text-[10px] text-warning font-medium mb-1">
+                    <Lock className="h-3 w-3" /> Nota interna
+                  </div>
+                )}
                 {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} />}
                 {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
-                <div className={cn("text-[10px] mt-1 flex items-center gap-1", msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
+                <div className={cn("text-[10px] mt-1 flex items-center gap-1",
+                  msgIsInternal ? 'text-warning/70 justify-end' :
+                  msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
                   {format(new Date(msg.created_at), "HH:mm")}
-                  {msg.direction === 'outbound' && (
+                  {msg.direction === 'outbound' && !msgIsInternal && (
                     msgStatus === 'read' ? <CheckCheck className="h-3 w-3 text-blue-300" /> :
                     msgStatus === 'delivered' ? <CheckCheck className="h-3 w-3" /> :
                     <Check className="h-3 w-3" />
@@ -359,18 +417,71 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="border-t border-border/50 p-3 flex gap-2 bg-card/50">
-        <input type="file" ref={fileInputRef} className="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
-          onChange={e => { const file = e.target.files?.[0]; if (file) handleSendMedia(file); e.target.value = ''; }} />
-        <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending} className="rounded-xl h-10 w-10 shrink-0">
-          <Paperclip className="h-4 w-4" />
-        </Button>
-        <AudioRecorder onRecorded={handleSendMedia} disabled={sending} />
-        <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[40px] max-h-[120px] resize-none rounded-xl text-sm"
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
-        <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()} className="rounded-xl h-10 w-10">
-          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </Button>
+      {/* Input area */}
+      <div className="border-t border-border/50 bg-card/50">
+        {/* Internal note indicator */}
+        {isInternal && (
+          <div className="px-3 pt-2 flex items-center gap-1.5 text-xs text-warning font-medium">
+            <Lock className="h-3 w-3" /> Modo nota interna — não será enviada ao cliente
+          </div>
+        )}
+
+        {/* Quick replies dropdown */}
+        {showQuickReplies && quickReplies.length > 0 && (
+          <div ref={qrRef} className="mx-3 mt-2 rounded-xl border border-border bg-card shadow-lg max-h-48 overflow-y-auto">
+            {quickReplies
+              .filter(qr => !qrFilter || qr.shortcut.includes(qrFilter) || qr.title.toLowerCase().includes(qrFilter.toLowerCase()))
+              .map(qr => (
+                <button key={qr.id} onClick={() => handleSelectQuickReply(qr)}
+                  className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center gap-2 text-sm">
+                  <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono text-muted-foreground">/{qr.shortcut}</code>
+                  <span className="font-medium text-foreground">{qr.title}</span>
+                  <span className="text-xs text-muted-foreground truncate flex-1">{qr.content.substring(0, 50)}...</span>
+                </button>
+              ))}
+            {quickReplies.filter(qr => !qrFilter || qr.shortcut.includes(qrFilter) || qr.title.toLowerCase().includes(qrFilter.toLowerCase())).length === 0 && (
+              <div className="px-3 py-2 text-xs text-muted-foreground">Nenhum atalho encontrado</div>
+            )}
+          </div>
+        )}
+
+        <div className="p-3 flex gap-2 items-end">
+          <input type="file" ref={fileInputRef} className="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
+            onChange={e => { const file = e.target.files?.[0]; if (file) handleSendMedia(file); e.target.value = ''; }} />
+          <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending || isInternal} className="rounded-xl h-10 w-10 shrink-0" title="Anexar arquivo">
+            <Paperclip className="h-4 w-4" />
+          </Button>
+          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} />}
+          <Button size="icon" variant={isInternal ? 'default' : 'ghost'} onClick={() => setIsInternal(!isInternal)}
+            className={cn("rounded-xl h-10 w-10 shrink-0", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')} title="Nota interna">
+            <StickyNote className="h-4 w-4" />
+          </Button>
+          {quickReplies.length > 0 && (
+            <Button size="icon" variant="ghost" onClick={() => setShowQuickReplies(!showQuickReplies)} className="rounded-xl h-10 w-10 shrink-0" title="Respostas rápidas">
+              <Zap className="h-4 w-4" />
+            </Button>
+          )}
+          <Textarea value={newMsg} onChange={e => {
+            const val = e.target.value;
+            setNewMsg(val);
+            // Detect / at start for quick replies
+            if (val.startsWith('/') && val.length > 1) {
+              setQrFilter(val.slice(1).toLowerCase());
+              setShowQuickReplies(true);
+            } else if (val === '/') {
+              setQrFilter('');
+              setShowQuickReplies(true);
+            } else {
+              setShowQuickReplies(false);
+            }
+          }} placeholder={isInternal ? "Escreva uma nota interna..." : "Mensagem..."}
+            className={cn("min-h-[40px] max-h-[120px] resize-none rounded-xl text-sm", isInternal && "border-warning/50 bg-warning/5")}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+          <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()}
+            className={cn("rounded-xl h-10 w-10", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')}>
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : isInternal ? <Lock className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
     </div>
   );

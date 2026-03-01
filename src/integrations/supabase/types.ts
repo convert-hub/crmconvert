@@ -731,6 +731,7 @@ export type Database = {
           direction: Database["public"]["Enums"]["message_direction"]
           id: string
           is_ai_generated: boolean | null
+          is_internal: boolean
           media_type: string | null
           media_url: string | null
           provider_message_id: string | null
@@ -745,6 +746,7 @@ export type Database = {
           direction: Database["public"]["Enums"]["message_direction"]
           id?: string
           is_ai_generated?: boolean | null
+          is_internal?: boolean
           media_type?: string | null
           media_url?: string | null
           provider_message_id?: string | null
@@ -759,6 +761,7 @@ export type Database = {
           direction?: Database["public"]["Enums"]["message_direction"]
           id?: string
           is_ai_generated?: boolean | null
+          is_internal?: boolean
           media_type?: string | null
           media_url?: string | null
           provider_message_id?: string | null
@@ -1031,6 +1034,63 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "prompt_templates_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      quick_replies: {
+        Row: {
+          content: string
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          position: number
+          shortcut: string
+          tenant_id: string
+          title: string
+          updated_at: string
+          variables: string[] | null
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          position?: number
+          shortcut: string
+          tenant_id: string
+          title: string
+          updated_at?: string
+          variables?: string[] | null
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          position?: number
+          shortcut?: string
+          tenant_id?: string
+          title?: string
+          updated_at?: string
+          variables?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quick_replies_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "tenant_memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_replies_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
