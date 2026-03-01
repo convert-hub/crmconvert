@@ -68,12 +68,25 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
+      const res = await supabase.functions.invoke('uazapi-proxy', {
         body: { action: 'download_media', tenant_id: tenantId, message_id: providerMsgId },
       });
 
-      if (error || data?.error) {
-        if (data?.expired) setMediaData('expired');
+      const data = res.data;
+      const error = res.error;
+
+      if (error) {
+        // Try to parse error response body for expired flag
+        try {
+          const errBody = typeof error === 'object' && 'context' in error ? await (error as any).context?.json?.() : null;
+          if (errBody?.expired) { setMediaData('expired'); return; }
+        } catch { /* ignore parse errors */ }
+        setMediaData('expired');
+        return;
+      }
+
+      if (data?.error) {
+        setMediaData(data.expired ? 'expired' : 'expired');
         return;
       }
 
@@ -91,8 +104,10 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
       }
 
       if (result) { mediaCache.set(providerMsgId, result); setMediaData(result); }
-    } catch (e) {
-      console.error('Media load failed:', e);
+    } catch (e: any) {
+      // Silently handle media errors (no instance, expired, etc.)
+      console.warn('Media load failed (non-critical):', e?.message || e);
+      setMediaData('expired');
     } finally {
       setLoading(false);
     }
