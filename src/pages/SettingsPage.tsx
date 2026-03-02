@@ -10,10 +10,11 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
+import TagsSettings from '@/components/settings/TagsSettings';
 
 interface CustomFieldDef {
   key: string;
@@ -349,6 +350,7 @@ export default function SettingsPage() {
           <TabsTrigger value="custom_fields" className="rounded-lg"><Settings2 className="h-3.5 w-3.5 mr-1" />Campos Personalizados</TabsTrigger>
           <TabsTrigger value="team" className="rounded-lg">Equipe</TabsTrigger>
           <TabsTrigger value="ai" className="rounded-lg">IA</TabsTrigger>
+          <TabsTrigger value="tags" className="rounded-lg"><Tag className="h-3.5 w-3.5 mr-1" />Tags</TabsTrigger>
           <TabsTrigger value="quick_replies" className="rounded-lg"><Zap className="h-3.5 w-3.5 mr-1" />Respostas Rápidas</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
         </TabsList>
@@ -607,6 +609,10 @@ export default function SettingsPage() {
               ) : <p className="text-sm text-muted-foreground text-center py-6">Nenhuma configuração de IA.</p>}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="tags" className="space-y-4 pt-4">
+          <TagsSettings />
         </TabsContent>
 
         <TabsContent value="quick_replies" className="space-y-4 pt-4">
