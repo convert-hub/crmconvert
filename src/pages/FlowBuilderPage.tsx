@@ -24,13 +24,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag } from 'lucide-react';
+import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag, HelpCircle } from 'lucide-react';
 
 // ---- Custom Node Component ----
 import MessageNode from '@/components/flow-builder/MessageNode';
 import ConditionNode from '@/components/flow-builder/ConditionNode';
 import DelayNode from '@/components/flow-builder/DelayNode';
 import ActionNode from '@/components/flow-builder/ActionNode';
+import QuestionNode from '@/components/flow-builder/QuestionNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 
 const nodeTypes = {
@@ -39,6 +40,7 @@ const nodeTypes = {
   condition: ConditionNode,
   delay: DelayNode,
   action: ActionNode,
+  question: QuestionNode,
 };
 
 const NODE_PALETTE = [
@@ -47,6 +49,7 @@ const NODE_PALETTE = [
   { type: 'condition', label: 'Condição', icon: GitBranch, color: 'text-amber-500' },
   { type: 'delay', label: 'Atraso', icon: Clock, color: 'text-purple-500' },
   { type: 'action', label: 'Ação', icon: Zap, color: 'text-red-500' },
+  { type: 'question', label: 'Pergunta', icon: HelpCircle, color: 'text-teal-500' },
 ];
 
 interface FlowRecord {
@@ -147,6 +150,7 @@ export default function FlowBuilderPage() {
     if (type === 'condition') data = { ...data, field: 'message', operator: 'contains', value: '' };
     if (type === 'delay') data = { ...data, delayMinutes: 5 };
     if (type === 'action') data = { ...data, actionType: 'add_tag', config: {} };
+    if (type === 'question') data = { ...data, question: '', saveField: 'name', customFieldKey: '', customFieldLabel: '', validationType: 'none' };
 
     const newNode: Node = { id, type, position, data };
     setNodes((nds) => [...nds, newNode]);
@@ -426,6 +430,77 @@ export default function FlowBuilderPage() {
                     className="h-9 text-sm"
                   />
                 </div>
+              )}
+
+              {editingNode.type === 'question' && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Texto da pergunta</Label>
+                    <Textarea
+                      value={(editingNode.data as any).question ?? ''}
+                      onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, question: e.target.value } })}
+                      rows={3} className="text-sm"
+                      placeholder="Ex: Qual é o seu nome completo?"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Salvar resposta em</Label>
+                    <Select
+                      value={(editingNode.data as any).saveField ?? 'name'}
+                      onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, saveField: v } })}
+                    >
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="name">Nome</SelectItem>
+                        <SelectItem value="email">E-mail</SelectItem>
+                        <SelectItem value="phone">Telefone</SelectItem>
+                        <SelectItem value="city">Cidade</SelectItem>
+                        <SelectItem value="state">Estado</SelectItem>
+                        <SelectItem value="birth_date">Data de nascimento</SelectItem>
+                        <SelectItem value="notes">Observações</SelectItem>
+                        <SelectItem value="custom">Campo personalizado</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {(editingNode.data as any).saveField === 'custom' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">Chave do campo</Label>
+                        <Input
+                          value={(editingNode.data as any).customFieldKey ?? ''}
+                          onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, customFieldKey: e.target.value } })}
+                          placeholder="ex: cpf"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">Rótulo</Label>
+                        <Input
+                          value={(editingNode.data as any).customFieldLabel ?? ''}
+                          onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, customFieldLabel: e.target.value } })}
+                          placeholder="ex: CPF"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Validação</Label>
+                    <Select
+                      value={(editingNode.data as any).validationType ?? 'none'}
+                      onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, validationType: v } })}
+                    >
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem validação</SelectItem>
+                        <SelectItem value="email">E-mail válido</SelectItem>
+                        <SelectItem value="phone">Telefone válido</SelectItem>
+                        <SelectItem value="date">Data válida</SelectItem>
+                        <SelectItem value="number">Número</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
               )}
 
               {editingNode.type === 'action' && (
