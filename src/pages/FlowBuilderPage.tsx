@@ -75,6 +75,17 @@ export default function FlowBuilderPage() {
   const [listView, setListView] = useState(true);
   const [nodeEditOpen, setNodeEditOpen] = useState(false);
   const [editingNode, setEditingNode] = useState<Node | null>(null);
+  const [registeredTags, setRegisteredTags] = useState<{ name: string; color: string }[]>([]);
+
+  // Load registered tags
+  useEffect(() => {
+    if (!tenant) return;
+    supabase.from('tenants').select('settings').eq('id', tenant.id).single().then(({ data }) => {
+      if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+        setRegisteredTags((data.settings as Record<string, any>).tags || []);
+      }
+    });
+  }, [tenant]);
 
   // Load flows
   useEffect(() => {
@@ -421,7 +432,7 @@ export default function FlowBuilderPage() {
                 <>
                   <div className="space-y-1.5">
                     <Label className="text-xs">Tipo de ação</Label>
-                    <Select value={(editingNode.data as any).actionType ?? 'add_tag'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, actionType: v } })}>
+                    <Select value={(editingNode.data as any).actionType ?? 'add_tag'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, actionType: v, config: {} } })}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="add_tag">Adicionar tag</SelectItem>
@@ -434,6 +445,50 @@ export default function FlowBuilderPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {((editingNode.data as any).actionType === 'add_tag' || (editingNode.data as any).actionType === 'remove_tag') && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Tag</Label>
+                      {registeredTags.length > 0 ? (
+                        <Select
+                          value={(editingNode.data as any).config?.tag ?? ''}
+                          onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), tag: v } } })}
+                        >
+                          <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar tag..." /></SelectTrigger>
+                          <SelectContent>
+                            {registeredTags.map(t => (
+                              <SelectItem key={t.name} value={t.name}>
+                                <div className="flex items-center gap-2">
+                                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: t.color }} />
+                                  {t.name}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={(editingNode.data as any).config?.tag ?? ''}
+                          onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), tag: e.target.value } } })}
+                          placeholder="Nome da tag"
+                          className="h-9 text-sm"
+                        />
+                      )}
+                      <p className="text-[11px] text-muted-foreground">Cadastre tags em Configurações → Tags</p>
+                    </div>
+                  )}
+
+                  {(editingNode.data as any).actionType === 'send_whatsapp' && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Mensagem</Label>
+                      <Textarea
+                        value={(editingNode.data as any).config?.message ?? ''}
+                        onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), message: e.target.value } } })}
+                        rows={3} className="text-sm"
+                        placeholder="Texto da mensagem..."
+                      />
+                    </div>
+                  )}
                 </>
               )}
 
