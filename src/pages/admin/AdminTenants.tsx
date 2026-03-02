@@ -5,7 +5,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Building2, Loader2, Trash2, Edit2 } from 'lucide-react';
+import { Plus, Building2, Loader2, Trash2, LogIn } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 interface TenantRow {
   id: string;
@@ -16,11 +18,18 @@ interface TenantRow {
 }
 
 export default function AdminTenants() {
+  const { switchTenant } = useAuth();
+  const navigate = useNavigate();
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const handleManage = async (tenantId: string) => {
+    await switchTenant(tenantId);
+    navigate('/pipeline');
+  };
 
   const load = async () => {
     setLoading(true);
@@ -125,6 +134,10 @@ export default function AdminTenants() {
                 <p className="font-semibold text-foreground truncate">{t.name}</p>
                 <p className="text-xs text-muted-foreground">Slug: {t.slug} · {t._member_count} membro(s) · Criado em {new Date(t.created_at).toLocaleDateString('pt-BR')}</p>
               </div>
+              <Button variant="outline" size="sm" className="rounded-xl gap-1.5" onClick={() => handleManage(t.id)}>
+                <LogIn className="h-3.5 w-3.5" />
+                Gerenciar
+              </Button>
               <Button variant="ghost" size="icon" className="rounded-xl text-destructive hover:text-destructive" onClick={() => handleDelete(t.id)}>
                 <Trash2 className="h-4 w-4" />
               </Button>

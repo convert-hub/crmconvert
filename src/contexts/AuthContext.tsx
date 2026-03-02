@@ -12,13 +12,19 @@ interface AuthState {
   role: TenantRole | null;
   isSaasAdmin: boolean;
   loading: boolean;
+  /** When a SaaS admin is viewing another tenant's CRM */
+  impersonatedTenantId: string | null;
   signOut: () => Promise<void>;
   refreshTenant: () => Promise<void>;
+  /** SaaS admin switches into a tenant's CRM */
+  switchTenant: (tenantId: string | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
   session: null, user: null, profile: null, membership: null,
-  tenant: null, role: null, isSaasAdmin: false, loading: true, signOut: async () => {}, refreshTenant: async () => {},
+  tenant: null, role: null, isSaasAdmin: false, loading: true,
+  impersonatedTenantId: null,
+  signOut: async () => {}, refreshTenant: async () => {}, switchTenant: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -31,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isSaasAdmin, setIsSaasAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [impersonatedTenantId, setImpersonatedTenantId] = useState<string | null>(null);
 
   const loadUserData = async (userId: string) => {
     try {
@@ -109,6 +116,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setMembership(null);
           setTenant(null);
           setIsSaasAdmin(false);
+          setImpersonatedTenantId(null);
           setLoading(false);
         }
       }
@@ -128,22 +136,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setMembership(null);
     setTenant(null);
     setIsSaasAdmin(false);
+    setImpersonatedTenantId(null);
   };
 
   const refreshTenant = async () => {
-    if (!membership) return;
+    const tid = impersonatedTenantId || membership?.tenant_id;
+    if (!tid) return;
     const { data: t } = await supabase
       .from('tenants')
       .select('*')
-      .eq('id', membership.tenant_id)
+      .eq('id', tid)
       .single();
     if (t) setTenant(t as unknown as Tenant);
   };
 
+  const switchTenant = async (tenantId: string | null) => {
+    if (!tenantId) {
+      // Go back to own tenant
+      setImpersonatedTenantId(null);
+      if (membership) {
+        const { data: t } = await supabase
+          .from('tenants')
+          .select('*')
+          .eq('id', membership.tenant_id)
+          .single();
+        setTenant(t as unknown as Tenant);
+      } else {
+        setTenant(null);
+      }
+      return;
+    }
+
+    setImpersonatedTenantId(tenantId);
+    const { data: t } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('id', tenantId)
+      .single();
+    if (t) setTenant(t as unknown as Tenant);
+  };
+
+  // For SaaS admins impersonating, derive an effective membership/role
+  const effectiveMembership = impersonatedTenantId
+    ? ({ id: 'saas-admin-impersonation', tenant_id: impersonatedTenantId, user_id: user?.id ?? '', role: 'admin' as TenantRole, is_active: true, created_at: '', updated_at: '' } as TenantMembership)
+    : membership;
+
+  const effectiveRole = impersonatedTenantId ? ('admin' as TenantRole) : (membership?.role ?? null);
+
   return (
     <AuthContext.Provider value={{
-      session, user, profile, membership, tenant,
-      role: membership?.role ?? null, isSaasAdmin, loading, signOut, refreshTenant,
+      session, user, profile,
+      membership: effectiveMembership,
+      tenant,
+      role: effectiveRole,
+      isSaasAdmin, loading,
+      impersonatedTenantId,
+      signOut, refreshTenant, switchTenant,
     }}>
       {children}
     </AuthContext.Provider>

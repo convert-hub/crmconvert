@@ -26,7 +26,7 @@ const adminItems = [
 ];
 
 export default function AppSidebar() {
-  const { tenant, role, profile, signOut, isSaasAdmin } = useAuth();
+  const { tenant, role, profile, signOut, isSaasAdmin, impersonatedTenantId, switchTenant } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const branding = getTenantBranding(tenant);
@@ -84,13 +84,18 @@ export default function AppSidebar() {
 
       {/* SaaS Admin Link */}
       {isSaasAdmin && (
-        <div className="px-3 pb-1">
+        <div className="px-3 pb-1 space-y-1">
+          {impersonatedTenantId && (
+            <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2 text-[11px] text-destructive font-medium text-center">
+              Visualizando: {tenant?.name}
+            </div>
+          )}
           <button
-            onClick={() => navigate('/admin')}
+            onClick={() => { switchTenant(null); navigate('/admin'); }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-all border border-dashed border-border"
           >
             <Shield className="h-4 w-4" strokeWidth={1.75} />
-            Painel SaaS Admin
+            {impersonatedTenantId ? 'Voltar ao Painel Admin' : 'Painel SaaS Admin'}
           </button>
         </div>
       )}
