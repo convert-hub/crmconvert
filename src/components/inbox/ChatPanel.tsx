@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -204,6 +204,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [qrFilter, setQrFilter] = useState('');
+  const [aiSuggesting, setAiSuggesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
@@ -323,6 +324,32 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       toast.error('Erro ao enviar: ' + err.message);
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleAiSuggest = async () => {
+    if (!tenant || !conversationId || aiSuggesting) return;
+    setAiSuggesting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-copilot', {
+        body: { conversation_id: conversationId, tenant_id: tenant.id },
+      });
+      if (error) {
+        toast.error('Erro ao gerar sugestão: ' + error.message);
+        return;
+      }
+      if (data?.error) {
+        toast.error(data.error);
+        return;
+      }
+      if (data?.suggestion) {
+        setNewMsg(data.suggestion);
+        toast.success('Sugestão de IA inserida');
+      }
+    } catch (err: any) {
+      toast.error('Erro: ' + err.message);
+    } finally {
+      setAiSuggesting(false);
     }
   };
 
@@ -476,6 +503,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
               <Zap className="h-4 w-4" />
             </Button>
           )}
+          <Button size="icon" variant="ghost" onClick={handleAiSuggest} disabled={aiSuggesting || sending}
+            className="rounded-xl h-10 w-10 shrink-0 text-primary hover:bg-primary/10" title="Sugestão de IA">
+            {aiSuggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          </Button>
           <Textarea value={newMsg} onChange={e => {
             const val = e.target.value;
             setNewMsg(val);

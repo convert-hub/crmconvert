@@ -13,3 +13,6 @@ verify_jwt = false
 [functions.check-inactivity]
 verify_jwt = false
 
+[functions.ai-copilot]
+verify_jwt = false
+
