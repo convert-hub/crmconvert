@@ -69,9 +69,9 @@ export default function AdminTenants() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Tem certeza? Todos os dados desta empresa serão perdidos.')) return;
-    // Note: cascade delete would need to be configured in DB for full cleanup
-    const { error } = await supabase.from('tenants').delete().eq('id', id);
+    const { error, count } = await supabase.from('tenants').delete({ count: 'exact' }).eq('id', id);
     if (error) { toast.error(error.message); return; }
+    if (count === 0) { toast.error('Não foi possível remover a empresa. Verifique se não há dados vinculados.'); return; }
     toast.success('Empresa removida');
     load();
   };
