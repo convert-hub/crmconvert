@@ -99,10 +99,21 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
 
+    // Try to find conversation by opportunity_id first, then fallback to contact_id
     supabase.from('conversations').select('id').eq('opportunity_id', opportunityId).limit(1)
-      .then(({ data: convs }) => {
-        if (convs && convs.length > 0) {
-          supabase.from('messages').select('*').eq('conversation_id', convs[0].id).order('created_at')
+      .then(async ({ data: convs }) => {
+        let convId: string | null = convs && convs.length > 0 ? convs[0].id : null;
+        // Fallback: find conversation by contact_id if none linked to opportunity
+        if (!convId) {
+          const { data: oppData } = await supabase.from('opportunities').select('contact_id').eq('id', opportunityId).single();
+          if (oppData?.contact_id) {
+            const { data: contactConvs } = await supabase.from('conversations')
+              .select('id').eq('contact_id', oppData.contact_id).order('last_message_at', { ascending: false }).limit(1);
+            if (contactConvs && contactConvs.length > 0) convId = contactConvs[0].id;
+          }
+        }
+        if (convId) {
+          supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at')
             .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
         }
       });
