@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, TrendingUp } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -78,8 +78,8 @@ function calcEngagementScore(opp: Opportunity & { contact?: Contact }, msgCounts
 function EngagementBadge({ score }: { score: number }) {
   const color = score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-muted-foreground';
   return (
-    <div className={`flex items-center gap-0.5 text-[10px] font-semibold ${color}`} title={`Engajamento: ${score}/100`}>
-      <TrendingUp className="h-3 w-3" />
+    <div className={`flex items-center gap-0.5 text-[10px] font-semibold ${color}`} title={`Temperatura: ${score}/100`}>
+      <Flame className="h-3 w-3" />
       {score}
     </div>
   );
