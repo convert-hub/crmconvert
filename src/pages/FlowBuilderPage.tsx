@@ -24,7 +24,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag, HelpCircle } from 'lucide-react';
+import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag, HelpCircle, Shuffle } from 'lucide-react';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 
 // ---- Custom Node Component ----
 import MessageNode from '@/components/flow-builder/MessageNode';
@@ -32,6 +33,7 @@ import ConditionNode from '@/components/flow-builder/ConditionNode';
 import DelayNode from '@/components/flow-builder/DelayNode';
 import ActionNode from '@/components/flow-builder/ActionNode';
 import QuestionNode from '@/components/flow-builder/QuestionNode';
+import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 
 const nodeTypes = {
@@ -41,6 +43,7 @@ const nodeTypes = {
   delay: DelayNode,
   action: ActionNode,
   question: QuestionNode,
+  randomizer: RandomizerNode,
 };
 
 const NODE_PALETTE = [
@@ -50,6 +53,7 @@ const NODE_PALETTE = [
   { type: 'delay', label: 'Atraso', icon: Clock, color: 'text-purple-500' },
   { type: 'action', label: 'Ação', icon: Zap, color: 'text-red-500' },
   { type: 'question', label: 'Pergunta', icon: HelpCircle, color: 'text-teal-500' },
+  { type: 'randomizer', label: 'Randomizador', icon: Shuffle, color: 'text-cyan-500' },
 ];
 
 interface FlowRecord {
@@ -151,6 +155,7 @@ export default function FlowBuilderPage() {
     if (type === 'delay') data = { ...data, delayMinutes: 5 };
     if (type === 'action') data = { ...data, actionType: 'add_tag', config: {} };
     if (type === 'question') data = { ...data, question: '', saveField: 'name', customFieldKey: '', customFieldLabel: '', validationType: 'none' };
+    if (type === 'randomizer') data = { ...data, mode: 'random', options: [{ label: 'Opção A', weight: 50 }, { label: 'Opção B', weight: 50 }] };
 
     const newNode: Node = { id, type, position, data };
     setNodes((nds) => [...nds, newNode]);
@@ -502,6 +507,104 @@ export default function FlowBuilderPage() {
                   </div>
                 </>
               )}
+
+              {editingNode.type === 'randomizer' && (() => {
+                const options = ((editingNode.data as any).options || []) as { label: string; weight: number }[];
+                const mode = (editingNode.data as any).mode || 'random';
+                const totalWeight = options.reduce((s, o) => s + (o.weight || 0), 0);
+                const updateOptions = (newOptions: { label: string; weight: number }[]) =>
+                  setEditingNode({ ...editingNode, data: { ...editingNode.data, options: newOptions } });
+
+                return (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Tipo de seleção</Label>
+                      <RadioGroup
+                        value={mode}
+                        onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, mode: v } })}
+                        className="flex gap-4"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <RadioGroupItem value="random" id="mode-random" />
+                          <Label htmlFor="mode-random" className="text-xs font-normal cursor-pointer">Aleatório</Label>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <RadioGroupItem value="sequential" id="mode-sequential" />
+                          <Label htmlFor="mode-sequential" className="text-xs font-normal cursor-pointer">Sequencial, um por um</Label>
+                        </div>
+                      </RadioGroup>
+                      {mode === 'random' && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Indique a probabilidade de escolha da opção. A porcentagem somada deve corresponder 100%.
+                        </p>
+                      )}
+                      {mode === 'sequential' && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Distribui contatos sequencialmente entre as opções (1→A, 2→B, 3→A...).
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs">Opções</Label>
+                      {options.map((opt, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <Input
+                            value={opt.label}
+                            onChange={e => {
+                              const newOpts = [...options];
+                              newOpts[i] = { ...newOpts[i], label: e.target.value };
+                              updateOptions(newOpts);
+                            }}
+                            placeholder={`Opção ${i + 1}`}
+                            className="h-8 text-xs flex-1"
+                          />
+                          {mode === 'random' && (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={opt.weight}
+                                onChange={e => {
+                                  const newOpts = [...options];
+                                  newOpts[i] = { ...newOpts[i], weight: Number(e.target.value) };
+                                  updateOptions(newOpts);
+                                }}
+                                className="h-8 text-xs w-16"
+                              />
+                              <span className="text-[11px] text-muted-foreground">%</span>
+                            </div>
+                          )}
+                          {options.length > 2 && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={() => updateOptions(options.filter((_, j) => j !== i))}
+                            >
+                              <Trash2 className="h-3 w-3 text-muted-foreground" />
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full h-8 text-xs border-dashed"
+                        onClick={() => updateOptions([...options, { label: `Opção ${options.length + 1}`, weight: 0 }])}
+                      >
+                        <Plus className="h-3 w-3 mr-1" />Adicionar opção
+                      </Button>
+                      {mode === 'random' && totalWeight !== 100 && (
+                        <p className="text-[11px] text-destructive flex items-center gap-1">
+                          ⚠ A porcentagem somada deve corresponder 100% (atual: {totalWeight}%)
+                        </p>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
 
               {editingNode.type === 'action' && (
                 <>
