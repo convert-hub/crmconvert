@@ -18,8 +18,8 @@ const navItems = [
 const adminItems = [
   { icon: MessageSquare, label: 'Conversas', path: '/inbox', roles: ['admin', 'manager'] as const },
   { icon: Zap, label: 'Automações', path: '/automations', roles: ['admin', 'manager'] as const },
-  { icon: GitBranch, label: 'Flow Builder', path: '/flow-builder', roles: ['admin', 'manager'] as const },
-  { icon: Brain, label: 'Prompt Studio', path: '/prompt-studio', roles: ['admin', 'manager'] as const },
+  { icon: GitBranch, label: 'Flow Builder', path: '/flow-builder', roles: ['admin'] as const },
+  { icon: Brain, label: 'Prompt Studio', path: '/prompt-studio', roles: ['admin'] as const },
   { icon: Settings, label: 'Configurações', path: '/settings', roles: ['admin'] as const },
   { icon: AlertTriangle, label: 'Jobs & Logs', path: '/jobs', roles: ['admin'] as const },
   { icon: FileText, label: 'Relatórios', path: '/reports', roles: ['admin', 'manager'] as const },
