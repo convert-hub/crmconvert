@@ -56,7 +56,7 @@ function AppRoutes() {
       {/* CRM routes */}
       <Route path="/" element={
         <ProtectedRoute>
-          {membership ? <AppLayout /> : (isSaasAdmin ? <Navigate to="/admin" /> : <Navigate to="/waiting" />)}
+          {(membership || (isSaasAdmin && session)) ? <AppLayout /> : (isSaasAdmin ? <Navigate to="/admin" /> : <Navigate to="/waiting" />)}
         </ProtectedRoute>
       }>
         <Route index element={<Navigate to="/pipeline" replace />} />
