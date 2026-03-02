@@ -7,12 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
+import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
 
 interface QuickReply {
   id: string;
@@ -205,6 +206,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [qrFilter, setQrFilter] = useState('');
   const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
@@ -507,6 +509,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             className="rounded-xl h-10 w-10 shrink-0 text-primary hover:bg-primary/10" title="Sugestão de IA">
             {aiSuggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           </Button>
+          <Button size="icon" variant="ghost" onClick={() => setShowSchedule(true)} disabled={sending || isInternal}
+            className="rounded-xl h-10 w-10 shrink-0" title="Agendar mensagem">
+            <Clock className="h-4 w-4" />
+          </Button>
           <Textarea value={newMsg} onChange={e => {
             const val = e.target.value;
             setNewMsg(val);
@@ -529,6 +535,16 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           </Button>
         </div>
       </div>
+
+      {tenant && membership && (
+        <ScheduleMessageDialog
+          open={showSchedule}
+          onOpenChange={setShowSchedule}
+          conversationId={conversationId}
+          tenantId={tenant.id}
+          membershipId={membership.id}
+        />
+      )}
     </div>
   );
 }

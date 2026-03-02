@@ -144,33 +144,40 @@ async function executeAction(supabase, tenantId, action, context) {
 
     case 'assign_round_robin': {
       if (!context.opportunity_id) break;
-      // Get active members (attendants, managers)
-      const { data: members } = await supabase.from('tenant_memberships')
-        .select('id, user_id')
-        .eq('tenant_id', tenantId)
-        .eq('is_active', true)
-        .in('role', ['attendant', 'manager', 'admin']);
+      
+      // Use DB function for workload-based round-robin
+      const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenantId });
 
-      if (!members || members.length === 0) break;
-
-      // Count open opportunities per member
-      const counts = await Promise.all(members.map(async m => {
-        const { count } = await supabase.from('opportunities')
-          .select('id', { count: 'exact', head: true })
+      if (!workload || workload.length === 0) {
+        // Fallback: simple round-robin from memberships
+        const { data: members } = await supabase.from('tenant_memberships')
+          .select('id')
           .eq('tenant_id', tenantId)
-          .eq('assigned_to', m.id)
-          .eq('status', 'open');
-        return { membership_id: m.id, count: count || 0 };
-      }));
+          .eq('is_active', true)
+          .in('role', ['attendant', 'manager', 'admin']);
+        
+        if (!members || members.length === 0) break;
+        const assignTo = members[Math.floor(Math.random() * members.length)].id;
+        await supabase.from('opportunities').update({ assigned_to: assignTo }).eq('id', context.opportunity_id);
+        if (context.contact_id) {
+          await supabase.from('contacts').update({ assigned_to: assignTo }).eq('id', context.contact_id);
+        }
+        console.log(`[Automations] Fallback round-robin assigned to ${assignTo}`);
+        break;
+      }
 
-      counts.sort((a, b) => a.count - b.count);
-      const assignTo = counts[0].membership_id;
+      // workload is already sorted by total_load ASC
+      const assignTo = workload[0].membership_id;
 
       await supabase.from('opportunities').update({ assigned_to: assignTo }).eq('id', context.opportunity_id);
       if (context.contact_id) {
         await supabase.from('contacts').update({ assigned_to: assignTo }).eq('id', context.contact_id);
       }
-      console.log(`[Automations] Round-robin assigned to ${assignTo}`);
+      // Also assign conversation if present
+      if (context.conversation_id) {
+        await supabase.from('conversations').update({ assigned_to: assignTo }).eq('id', context.conversation_id);
+      }
+      console.log(`[Automations] Workload-based round-robin assigned to ${assignTo} (load: ${workload[0].total_load})`);
       break;
     }
 

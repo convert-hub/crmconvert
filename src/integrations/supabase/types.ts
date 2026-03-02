@@ -1116,6 +1116,73 @@ export type Database = {
         }
         Relationships: []
       }
+      scheduled_messages: {
+        Row: {
+          content: string | null
+          conversation_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          media_type: string | null
+          media_url: string | null
+          scheduled_at: string
+          sent_at: string | null
+          status: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          content?: string | null
+          conversation_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          media_type?: string | null
+          media_url?: string | null
+          scheduled_at: string
+          sent_at?: string | null
+          status?: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          content?: string | null
+          conversation_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          media_type?: string | null
+          media_url?: string | null
+          scheduled_at?: string
+          sent_at?: string | null
+          status?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scheduled_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scheduled_messages_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "tenant_memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scheduled_messages_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       stage_moves: {
         Row: {
           ai_reason: string | null
@@ -1468,6 +1535,17 @@ export type Database = {
       fail_job: {
         Args: { _error: string; _job_id: string }
         Returns: undefined
+      }
+      get_member_workload: {
+        Args: { p_tenant_id: string }
+        Returns: {
+          membership_id: string
+          open_conversations: number
+          open_opportunities: number
+          role: string
+          total_load: number
+          user_id: string
+        }[]
       }
       get_user_membership_id: { Args: { _tenant_id: string }; Returns: string }
       get_user_role_in_tenant: {
