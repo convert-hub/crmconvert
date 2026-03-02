@@ -288,50 +288,37 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     console.error('webhook-uazapi: failed to reset opportunity inactivity:', e);
   }
 
-  // Fetch profile picture for inbound messages (if contact has no avatar yet)
+  // Fetch profile picture asynchronously (fire and forget) to avoid delaying webhook response
   if (!fromMe && !contact.avatar_url) {
-    try {
-      const { data: inst } = await supabase.from('whatsapp_instances')
-        .select('api_url, api_token_encrypted')
-        .eq('tenant_id', tenantId)
-        .eq('is_active', true)
-        .limit(1)
-        .single();
+    (async () => {
+      try {
+        const { data: inst } = await supabase.from('whatsapp_instances')
+          .select('api_url, api_token_encrypted')
+          .eq('tenant_id', tenantId)
+          .eq('is_active', true)
+          .limit(1)
+          .single();
 
-      if (inst) {
-        const apiBase = inst.api_url.replace(/\/+$/, '');
-        const cleanPhone = phone.replace(/\D/g, '');
-        // Use POST /chat/details to get profile picture (per UAZAPI v2 docs)
-        try {
-          const detailsRes = await fetch(`${apiBase}/chat/details`, {
+        if (inst) {
+          const ab = inst.api_url.replace(/\/+$/, '');
+          const cleanPh = phone.replace(/\D/g, '');
+          const detailsRes = await fetch(`${ab}/chat/details`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
-            body: JSON.stringify({ number: cleanPhone, preview: false }),
+            body: JSON.stringify({ number: cleanPh, preview: false }),
           });
-          console.log(`webhook-uazapi: /chat/details status=${detailsRes.status}`);
-
           if (detailsRes.ok) {
             const details = await detailsRes.json();
-            // Look for image fields in the chat details response
             const avatarUrl = details.imagePreview || details.image || details.profilePicture || details.wa_profilePicture || details.picture || null;
-            console.log(`webhook-uazapi: chat/details image fields: imagePreview=${!!details.imagePreview}, image=${!!details.image}, profilePicture=${!!details.profilePicture}`);
             if (avatarUrl) {
               await supabase.from('contacts').update({ avatar_url: avatarUrl }).eq('id', contact.id);
-              console.log(`webhook-uazapi: saved avatar for contact ${contact.id}`);
-            } else {
-              console.log(`webhook-uazapi: no avatar URL found in chat/details response`);
             }
-          } else {
-            const errText = await detailsRes.text();
-            console.log(`webhook-uazapi: /chat/details failed: ${detailsRes.status} ${errText}`);
           }
-        } catch (e) {
-          console.log('webhook-uazapi: chat/details avatar fetch error:', e);
         }
+      } catch (e) {
+        console.log('webhook-uazapi: avatar fetch error (non-critical):', e);
       }
-    } catch (e) {
-      console.log('webhook-uazapi: avatar fetch error (non-critical):', e);
-    }
+    })();
   }
 
   // Keyword-based lead creation for inbound messages

@@ -280,32 +280,13 @@ serve(async (req) => {
           return jsonResponse({ error: 'Número de telefone inválido' }, 400);
         }
 
-        // Check if number is on WhatsApp first
-        try {
-          const checkRes = await fetch(`${apiBase}/check/number`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'token': instToken },
-            body: JSON.stringify({ number: cleanPhone }),
-          });
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            console.log('UAZAPI check number:', JSON.stringify(checkData));
-            // If exists is explicitly false, the number is not on WhatsApp
-            if (checkData.exists === false || checkData.numberExists === false) {
-              return jsonResponse({ error: `O número ${phone} não está no WhatsApp` }, 400);
-            }
-          }
-        } catch (e) {
-          console.warn('Number check failed (non-critical):', e);
-        }
-
         const sendRes = await fetch(`${apiBase}/send/text`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'token': instToken },
           body: JSON.stringify({
             number: cleanPhone,
             text: message,
-            delay: 1000,
+            delay: 0,
             readchat: true,
             readmessages: true,
           }),
