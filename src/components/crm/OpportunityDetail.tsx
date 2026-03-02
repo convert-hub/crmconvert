@@ -99,18 +99,22 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
 
-    // Try to find conversation by opportunity_id first, then fallback to contact_id
-    supabase.from('conversations').select('id').eq('opportunity_id', opportunityId).limit(1)
-      .then(async ({ data: convs }) => {
-        let convId: string | null = convs && convs.length > 0 ? convs[0].id : null;
-        // Fallback: find conversation by contact_id if none linked to opportunity
+    // Find the contact's main conversation (prefer by contact_id to get ALL messages)
+    supabase.from('opportunities').select('contact_id').eq('id', opportunityId).single()
+      .then(async ({ data: oppData }) => {
+        let convId: string | null = null;
+        if (oppData?.contact_id) {
+          // Get the contact's primary conversation (most recent, with messages)
+          const { data: contactConvs } = await supabase.from('conversations')
+            .select('id').eq('contact_id', oppData.contact_id).eq('channel', 'whatsapp')
+            .order('last_message_at', { ascending: false, nullsFirst: false }).limit(1);
+          if (contactConvs && contactConvs.length > 0) convId = contactConvs[0].id;
+        }
+        // Fallback: try by opportunity_id
         if (!convId) {
-          const { data: oppData } = await supabase.from('opportunities').select('contact_id').eq('id', opportunityId).single();
-          if (oppData?.contact_id) {
-            const { data: contactConvs } = await supabase.from('conversations')
-              .select('id').eq('contact_id', oppData.contact_id).order('last_message_at', { ascending: false }).limit(1);
-            if (contactConvs && contactConvs.length > 0) convId = contactConvs[0].id;
-          }
+          const { data: oppConvs } = await supabase.from('conversations')
+            .select('id').eq('opportunity_id', opportunityId).limit(1);
+          if (oppConvs && oppConvs.length > 0) convId = oppConvs[0].id;
         }
         if (convId) {
           supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at')
@@ -175,17 +179,32 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
     if (!newMessage.trim() || !tenant || !membership) return;
     setSending(true);
     try {
-      let convId: string;
-      const { data: existingConv } = await supabase.from('conversations').select('id').eq('opportunity_id', opportunityId).limit(1);
-      if (existingConv && existingConv.length > 0) {
-        convId = existingConv[0].id;
-      } else {
+      let convId: string | null = null;
+
+      // 1. Find existing conversation by contact_id (primary - same one the webhook uses)
+      if (opp?.contact_id) {
+        const { data: contactConvs } = await supabase.from('conversations')
+          .select('id').eq('contact_id', opp.contact_id).eq('channel', 'whatsapp')
+          .order('last_message_at', { ascending: false, nullsFirst: false }).limit(1);
+        if (contactConvs && contactConvs.length > 0) convId = contactConvs[0].id;
+      }
+
+      // 2. Fallback: find by opportunity_id
+      if (!convId) {
+        const { data: oppConvs } = await supabase.from('conversations')
+          .select('id').eq('opportunity_id', opportunityId).limit(1);
+        if (oppConvs && oppConvs.length > 0) convId = oppConvs[0].id;
+      }
+
+      // 3. Last resort: create new conversation
+      if (!convId) {
         const { data: newConv } = await supabase.from('conversations').insert({
           tenant_id: tenant.id, contact_id: opp?.contact_id, opportunity_id: opportunityId,
           channel: 'whatsapp', status: 'open', assigned_to: membership.id,
         }).select().single();
         convId = newConv!.id;
       }
+
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: convId, direction: 'outbound',
         content: newMessage, sender_membership_id: membership.id,
