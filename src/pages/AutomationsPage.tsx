@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquare, Move } from 'lucide-react';
+import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
@@ -199,7 +200,7 @@ export default function AutomationsPage() {
         return (
           <div className="space-y-1.5">
             <Label className="text-xs">Nome da tag</Label>
-            <Input value={conditions.tag || ''} onChange={e => setConditions(c => ({ ...c, tag: e.target.value }))} placeholder="Ex: qualificado" className="h-9 text-xs" />
+            <TagPickerSelect value={conditions.tag || ''} onChange={v => setConditions(c => ({ ...c, tag: v }))} />
           </div>
         );
       case 'lead_created':
@@ -228,7 +229,7 @@ export default function AutomationsPage() {
         );
       case 'add_tag':
       case 'remove_tag':
-        return <Input value={action.tag || ''} onChange={e => updateAction(index, { tag: e.target.value })} placeholder="Nome da tag" className="h-9 text-xs flex-1" />;
+        return <TagPickerSelect value={action.tag || ''} onChange={v => updateAction(index, { tag: v })} className="flex-1" />;
       case 'create_activity':
         return (
           <div className="flex-1 space-y-2">
