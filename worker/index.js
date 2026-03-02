@@ -267,7 +267,7 @@ const handlers = {
       body: JSON.stringify({
         number: cleanPhone,
         text: message,
-        delay: 1000,
+        delay: 0,
         readchat: true,
         readmessages: true,
       }),
