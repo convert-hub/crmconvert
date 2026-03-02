@@ -398,12 +398,32 @@ const handlers = {
           else noTargets.forEach(n => queue.push(n));
         } else if (node.type === 'action') {
           const actionType = node.data?.actionType || '';
+          const config = node.data?.config || {};
           switch (actionType) {
             case 'add_tag':
-              if (ctx.contact_id && node.data?.config?.tag) {
+              if (ctx.contact_id && config.tag) {
                 const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
-                const tags = [...(c?.tags || []), node.data.config.tag];
+                const tags = [...new Set([...(c?.tags || []), config.tag])];
                 await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
+              }
+              break;
+            case 'remove_tag':
+              if (ctx.contact_id && config.tag) {
+                const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
+                const tags = (c?.tags || []).filter(t => t !== config.tag);
+                await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
+              }
+              break;
+            case 'send_whatsapp':
+              if (ctx.contact_id && config.message) {
+                const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+                if (contact?.phone) {
+                  await supabase.rpc('enqueue_job', {
+                    _type: 'send_whatsapp',
+                    _payload: JSON.stringify({ tenant_id, phone: contact.phone, message: config.message, conversation_id: ctx.conversation_id }),
+                    _tenant_id: tenant_id,
+                  });
+                }
               }
               break;
             case 'close_conversation':
@@ -422,6 +442,64 @@ const handlers = {
           }
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
+        } else if (node.type === 'question') {
+          // Question node: the response is expected in ctx.variables.message (the user's reply)
+          // Save the answer to the configured contact field
+          const saveField = node.data?.saveField || '';
+          const answer = ctx.variables.message || ctx.variables.last_answer || '';
+          if (ctx.contact_id && saveField && answer) {
+            if (saveField === 'custom') {
+              const customKey = node.data?.customFieldKey || '';
+              if (customKey) {
+                const { data: c } = await supabase.from('contacts').select('custom_fields').eq('id', ctx.contact_id).single();
+                const customFields = { ...(c?.custom_fields || {}), [customKey]: answer };
+                await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', ctx.contact_id);
+                console.log(`[Worker] Flow: saved custom field "${customKey}" = "${answer}"`);
+              }
+            } else {
+              const updateData = { [saveField]: answer };
+              await supabase.from('contacts').update(updateData).eq('id', ctx.contact_id);
+              console.log(`[Worker] Flow: saved "${saveField}" = "${answer}"`);
+            }
+          }
+          const next = adjacency[nodeId] || [];
+          next.forEach(n => queue.push(n));
+        } else if (node.type === 'randomizer') {
+          const mode = node.data?.mode || 'random';
+          const options = node.data?.options || [];
+          if (options.length === 0) {
+            const next = adjacency[nodeId] || [];
+            next.forEach(n => queue.push(n));
+          } else {
+            let chosenIndex = 0;
+            if (mode === 'random') {
+              // Weighted random selection
+              const totalWeight = options.reduce((s, o) => s + (o.weight || 0), 0);
+              const rand = Math.random() * totalWeight;
+              let cumulative = 0;
+              for (let i = 0; i < options.length; i++) {
+                cumulative += options[i].weight || 0;
+                if (rand <= cumulative) { chosenIndex = i; break; }
+              }
+            } else {
+              // Sequential round-robin using execution context
+              const counterKey = `randomizer_${nodeId}`;
+              const counters = ctx.variables._randomizer_counters || {};
+              const current = counters[counterKey] || 0;
+              chosenIndex = current % options.length;
+              // Update counter in context and flow_executions
+              counters[counterKey] = current + 1;
+              ctx.variables._randomizer_counters = counters;
+              await supabase.from('flow_executions').update({
+                context: { ...ctx, variables: ctx.variables },
+              }).eq('id', execution.id);
+            }
+            console.log(`[Worker] Flow: randomizer ${mode} chose option ${chosenIndex} "${options[chosenIndex]?.label}"`);
+            // Follow edges from the chosen option handle
+            const handleKey = `${nodeId}:option-${chosenIndex}`;
+            const next = adjacency[handleKey] || [];
+            next.forEach(n => queue.push(n));
+          }
         }
       }
 
