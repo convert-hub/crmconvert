@@ -286,6 +286,63 @@ const handlers = {
     await executeAutomations(supabase, tenant_id, trigger_type, context || {});
     return { trigger_type, executed: true };
   },
+
+  async send_scheduled_message(payload) {
+    const { scheduled_message_id } = payload;
+    if (!scheduled_message_id) throw new Error('Missing scheduled_message_id');
+
+    const { data: msg } = await supabase.from('scheduled_messages')
+      .select('*, conversations!inner(contact_id, channel)')
+      .eq('id', scheduled_message_id)
+      .eq('status', 'pending')
+      .single();
+
+    if (!msg) return { skipped: true, reason: 'not found or not pending' };
+
+    const conv = msg.conversations;
+
+    // Insert message
+    await supabase.from('messages').insert({
+      tenant_id: msg.tenant_id,
+      conversation_id: msg.conversation_id,
+      direction: 'outbound',
+      content: msg.content,
+      sender_membership_id: msg.created_by,
+      is_ai_generated: false,
+    });
+
+    // Send via WhatsApp if applicable
+    if (conv.channel === 'whatsapp' && conv.contact_id) {
+      const { data: contact } = await supabase.from('contacts').select('phone').eq('id', conv.contact_id).single();
+      if (contact?.phone) {
+        await supabase.rpc('enqueue_job', {
+          _type: 'send_whatsapp',
+          _payload: JSON.stringify({
+            tenant_id: msg.tenant_id,
+            phone: contact.phone,
+            message: msg.content,
+            conversation_id: msg.conversation_id,
+          }),
+          _tenant_id: msg.tenant_id,
+        });
+      }
+    }
+
+    // Update conversation
+    await supabase.from('conversations').update({
+      last_message_at: new Date().toISOString(),
+      last_agent_message_at: new Date().toISOString(),
+      status: 'waiting_customer',
+    }).eq('id', msg.conversation_id);
+
+    // Mark as sent
+    await supabase.from('scheduled_messages').update({
+      status: 'sent',
+      sent_at: new Date().toISOString(),
+    }).eq('id', msg.id);
+
+    return { sent: true, scheduled_message_id };
+  },
 };
 
 // Helpers

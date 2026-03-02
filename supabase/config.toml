@@ -16,3 +16,6 @@ verify_jwt = false
 [functions.ai-copilot]
 verify_jwt = false
 
+[functions.check-scheduled-messages]
+verify_jwt = false
+

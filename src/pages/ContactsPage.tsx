@@ -9,13 +9,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon } from 'lucide-react';
+import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import ImportContactsDialog from '@/components/contacts/ImportContactsDialog';
 
 export default function ContactsPage() {
   const { tenant, role } = useAuth();
@@ -25,6 +26,7 @@ export default function ContactsPage() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: '', birth_date: undefined as Date | undefined });
+  const [showImport, setShowImport] = useState(false);
 
   const loadContacts = () => {
     if (!tenant) return;
@@ -124,7 +126,10 @@ export default function ContactsPage() {
           </div>
           <Button variant="outline" size="sm" onClick={exportCSV} className="h-9 text-[13px]"><Download className="h-3.5 w-3.5 mr-1.5" />CSV</Button>
           {!isReadonly && (
-            <Button size="sm" onClick={openCreate} className="h-9 text-[13px]"><Plus className="h-3.5 w-3.5 mr-1.5" />Novo Contato</Button>
+            <>
+              <Button variant="outline" size="sm" onClick={() => setShowImport(true)} className="h-9 text-[13px]"><Upload className="h-3.5 w-3.5 mr-1.5" />Importar</Button>
+              <Button size="sm" onClick={openCreate} className="h-9 text-[13px]"><Plus className="h-3.5 w-3.5 mr-1.5" />Novo Contato</Button>
+            </>
           )}
         </div>
       </header>
@@ -221,6 +226,15 @@ export default function ContactsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {tenant && (
+        <ImportContactsDialog
+          open={showImport}
+          onOpenChange={setShowImport}
+          tenantId={tenant.id}
+          onImported={loadContacts}
+        />
+      )}
     </div>
   );
 }
