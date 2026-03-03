@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -117,10 +117,11 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
 }
 
 // ─── Sortable Opp Card ───
-function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, customFieldDefs, engagementScore }: {
+function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
+  onDelete: (e: React.MouseEvent) => void;
   alertStatus: CardAlertStatus;
   unreadCount: number;
   customFieldDefs: CustomFieldDef[];
@@ -177,6 +178,10 @@ function SortableOppCard({ opp, onClick, onWhatsApp, alertStatus, unreadCount, c
               )}
             </div>
           )}
+          <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+            onClick={onDelete} title="Excluir oportunidade">
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+          </Button>
         </div>
         {opp.contact && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
@@ -592,6 +597,15 @@ export default function PipelinePage() {
     }
   };
 
+  const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Excluir esta oportunidade permanentemente?')) return;
+    const { error } = await supabase.from('opportunities').delete().eq('id', oppId);
+    if (error) { toast.error('Erro ao excluir oportunidade'); return; }
+    setOpportunities(prev => prev.filter(o => o.id !== oppId));
+    toast.success('Oportunidade excluída');
+  };
+
   const oppsByStage = (stageId: string) => filteredOpportunities.filter(o => o.stage_id === stageId);
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
 
@@ -661,6 +675,7 @@ export default function PipelinePage() {
                   {oppsByStage(stage.id).map(opp => (
                     <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
                       onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
+                      onDelete={(e) => handleDeleteOpportunity(opp.id, e)}
                       alertStatus={getOppAlertStatus(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
                       customFieldDefs={customFieldDefs}
