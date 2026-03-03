@@ -16,6 +16,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { contactStatusLabels } from '@/lib/labels';
 import ImportContactsDialog from '@/components/contacts/ImportContactsDialog';
 import TagInput from '@/components/contacts/TagInput';
 import type { TagDef } from '@/components/settings/TagsSettings';
@@ -202,7 +203,7 @@ export default function ContactsPage() {
                   <TableCell className="text-[13px]">{c.phone && <span className="flex items-center gap-1.5 text-muted-foreground"><Phone className="h-3 w-3" strokeWidth={1.5} />{c.phone}</span>}</TableCell>
                   <TableCell className="text-[13px]">{c.email && <span className="flex items-center gap-1.5 text-muted-foreground"><Mail className="h-3 w-3" strokeWidth={1.5} />{c.email}</span>}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-[11px] capitalize rounded-full font-normal ${statusColors[c.status] ?? ''}`}>{c.status}</Badge>
+                    <Badge variant="outline" className={`text-[11px] rounded-full font-normal ${statusColors[c.status] ?? ''}`}>{contactStatusLabels[c.status] ?? c.status}</Badge>
                   </TableCell>
                   <TableCell><div className="flex gap-1 flex-wrap">{c.tags?.slice(0, 3).map(t => { const color = getTagColor(t); return <Badge key={t} variant="outline" className="text-[10px] rounded-full font-normal" style={color ? { borderColor: color, color } : undefined}>{t}</Badge>; })}</div></TableCell>
                   <TableCell className="text-[12px] text-muted-foreground">{c.birth_date ? format(new Date(c.birth_date + 'T00:00:00'), 'dd/MM/yyyy') : '-'}</TableCell>
@@ -247,7 +248,7 @@ export default function ContactsPage() {
                 <SelectContent>
                   <SelectItem value="lead">Lead</SelectItem>
                   <SelectItem value="customer">Cliente</SelectItem>
-                  <SelectItem value="churned">Churned</SelectItem>
+                  <SelectItem value="churned">Perdido</SelectItem>
                   <SelectItem value="inactive">Inativo</SelectItem>
                 </SelectContent>
               </Select>
