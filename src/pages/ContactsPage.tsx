@@ -94,6 +94,7 @@ export default function ContactsPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza? Isso excluirá também todas as conversas e mensagens deste contato.')) return;
     const { error } = await supabase.from('contacts').delete().eq('id', id);
     if (error) { toast.error(error.message); return; }
     toast.success('Contato removido');

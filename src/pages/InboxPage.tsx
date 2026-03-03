@@ -8,7 +8,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels, channelLabels } from '@/lib/labels';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -499,6 +499,16 @@ export default function InboxPage() {
     }
   };
 
+  const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Excluir esta conversa e todas as mensagens?')) return;
+    const { error } = await supabase.from('conversations').delete().eq('id', convId);
+    if (error) { toast.error(error.message); return; }
+    toast.success('Conversa excluída');
+    if (selectedConv === convId) { setSelectedConv(null); setMessages([]); }
+    setConversations(prev => prev.filter(c => c.id !== convId));
+  };
+
   const filtered = conversations.filter(c => {
     if (!search) return true;
     const s = search.toLowerCase();
@@ -543,7 +553,7 @@ export default function InboxPage() {
           {filtered.map(conv => (
             <button key={conv.id} onClick={() => setSelectedConv(conv.id)}
               className={cn(
-                "w-full text-left px-4 py-3.5 border-b border-border/30 hover:bg-accent/50 transition-all duration-150",
+                "w-full text-left px-4 py-3.5 border-b border-border/30 hover:bg-accent/50 transition-all duration-150 group/conv relative",
                 selectedConv === conv.id && "bg-accent/80 border-l-2 border-l-primary"
               )}>
               <div className="flex items-center gap-3">
@@ -554,9 +564,16 @@ export default function InboxPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-sm truncate text-foreground">{conv.contact?.name ?? 'Desconhecido'}</span>
-                    {conv.unread_count > 0 && (
-                      <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {conv.unread_count > 0 && (
+                        <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
+                      )}
+                      <span onClick={(e) => handleDeleteConversation(conv.id, e)}
+                        className="h-6 w-6 flex items-center justify-center rounded-md opacity-0 group-hover/conv:opacity-100 hover:bg-destructive/10 transition-all cursor-pointer"
+                        title="Excluir conversa">
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </span>
+                    </div>
                   </div>
                   {conv.contact?.phone && (
                     <span className="text-[11px] text-muted-foreground truncate block">{conv.contact.phone}</span>
