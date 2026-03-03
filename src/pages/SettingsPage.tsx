@@ -221,6 +221,8 @@ export default function SettingsPage() {
   const [aiModel, setAiModel] = useState('gpt-4o-mini');
   const [aiDailyLimit, setAiDailyLimit] = useState('100');
   const [aiMonthlyLimit, setAiMonthlyLimit] = useState('3000');
+  const [aiGlobalKeyId, setAiGlobalKeyId] = useState('');
+  const [globalApiKeys, setGlobalApiKeys] = useState<{ id: string; label: string; provider: string }[]>([]);
 
   // Custom fields state
   const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
@@ -255,6 +257,8 @@ export default function SettingsPage() {
     }
     const { data: ais } = await supabase.from('ai_configs').select('*').eq('tenant_id', tenant.id);
     setAiConfigs((ais as unknown as AiConfig[]) ?? []);
+    const { data: gKeys } = await supabase.from('global_api_keys').select('id, label, provider').eq('is_active', true);
+    setGlobalApiKeys((gKeys as any[]) ?? []);
   };
 
   const saveTenant = async () => { if (!tenant) return; const { error } = await supabase.from('tenants').update({ name: tenantName }).eq('id', tenant.id); if (error) toast.error(error.message); else toast.success('Salvo!'); };
@@ -296,10 +300,11 @@ export default function SettingsPage() {
   const saveAiConfig = async () => {
     if (!tenant) return;
     const existing = aiConfigs.find(c => c.task_type === aiTaskType);
+    const configData = { provider: aiProvider, model: aiModel, daily_limit: parseInt(aiDailyLimit), monthly_limit: parseInt(aiMonthlyLimit), global_api_key_id: aiGlobalKeyId || null };
     if (existing) {
-      await supabase.from('ai_configs').update({ provider: aiProvider, model: aiModel, daily_limit: parseInt(aiDailyLimit), monthly_limit: parseInt(aiMonthlyLimit) }).eq('id', existing.id);
+      await supabase.from('ai_configs').update(configData).eq('id', existing.id);
     } else {
-      await supabase.from('ai_configs').insert({ tenant_id: tenant.id, task_type: aiTaskType as any, provider: aiProvider, model: aiModel, daily_limit: parseInt(aiDailyLimit), monthly_limit: parseInt(aiMonthlyLimit) });
+      await supabase.from('ai_configs').insert({ tenant_id: tenant.id, task_type: aiTaskType as any, ...configData });
     }
     toast.success('Configuração de IA salva'); setAiDialogOpen(false); loadAll();
   };
@@ -580,6 +585,15 @@ export default function SettingsPage() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2"><Label>Provedor</Label><Input value={aiProvider} onChange={e => setAiProvider(e.target.value)} className="rounded-xl" /></div>
                       <div className="space-y-2"><Label>Modelo</Label><Input value={aiModel} onChange={e => setAiModel(e.target.value)} className="rounded-xl" /></div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Chave de API Global</Label>
+                      <Select value={aiGlobalKeyId} onValueChange={setAiGlobalKeyId}>
+                        <SelectTrigger className="rounded-xl"><SelectValue placeholder="Selecione uma chave" /></SelectTrigger>
+                        <SelectContent>
+                          {globalApiKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.label} ({k.provider})</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2"><Label>Limite Diário</Label><Input type="number" value={aiDailyLimit} onChange={e => setAiDailyLimit(e.target.value)} className="rounded-xl" /></div>
