@@ -10,6 +10,7 @@ import { CheckCircle2, Clock, AlertTriangle, Phone, Mail, Calendar, StickyNote, 
 import { format, isPast, differenceInHours } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import { activityTypeLabels } from '@/lib/labels';
 
 const typeIcons: Record<string, React.ElementType> = {
   call: Phone,
