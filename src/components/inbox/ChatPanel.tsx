@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { conversationStatusLabels } from '@/lib/labels';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
@@ -422,7 +423,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             <h3 className="font-semibold text-foreground text-sm truncate">{contact.name}</h3>
             <span className="text-xs text-muted-foreground">{contact.phone} · {channel}</span>
           </div>
-          {status && <Badge variant="outline" className={`capitalize rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{status.replace('_', ' ')}</Badge>}
+          {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
         </div>
       )}
 

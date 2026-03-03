@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { conversationStatusLabels, channelLabels } from '@/lib/labels';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -248,7 +249,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
         </div>
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
         </div>
-      <Badge variant="outline" className={`capitalize rounded-full ${statusColors[status ?? ''] ?? ''}`}>{status?.replace('_', ' ')}</Badge>
+      <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
     </div>
   );
 }
@@ -561,10 +562,10 @@ export default function InboxPage() {
                     <span className="text-[11px] text-muted-foreground truncate block">{conv.contact.phone}</span>
                   )}
                   <div className="flex items-center justify-between mt-1">
-                    <span className="text-xs text-muted-foreground capitalize">{conv.channel}</span>
+                    <span className="text-xs text-muted-foreground">{channelLabels[conv.channel] ?? conv.channel}</span>
                     {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
                   </div>
-                  <Badge variant="outline" className={`text-[10px] mt-1.5 capitalize rounded-full ${statusColors[conv.status] ?? ''}`}>{conv.status.replace('_', ' ')}</Badge>
+                  <Badge variant="outline" className={`text-[10px] mt-1.5 rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
                 </div>
               </div>
             </button>

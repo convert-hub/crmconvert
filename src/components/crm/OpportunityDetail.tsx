@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import { opportunityStatusLabels, priorityLabels } from '@/lib/labels';
 import { Checkbox } from '@/components/ui/checkbox';
 
 interface CustomFieldDef {
@@ -323,9 +324,9 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         <Badge variant={opp.status === 'won' ? 'default' : opp.status === 'lost' ? 'destructive' : 'secondary'} className="rounded-full">
           {opp.status === 'won' && <CheckCircle2 className="h-3 w-3 mr-1" />}
           {opp.status === 'lost' && <XCircle className="h-3 w-3 mr-1" />}
-          {opp.status}
+          {opportunityStatusLabels[opp.status] ?? opp.status}
         </Badge>
-        <Badge variant="outline" className={`rounded-full capitalize ${priorityColors[opp.priority ?? 'medium']}`}>{opp.priority ?? 'medium'}</Badge>
+        <Badge variant="outline" className={`rounded-full ${priorityColors[opp.priority ?? 'medium']}`}>{priorityLabels[opp.priority ?? 'medium'] ?? opp.priority}</Badge>
         {(opp.value ?? 0) > 0 && <span className="text-sm font-semibold text-success">R$ {opp.value.toLocaleString('pt-BR')}</span>}
       </div>
 
