@@ -34,3 +34,12 @@ export const channelLabels: Record<string, string> = {
   web: 'Web',
   facebook: 'Facebook',
 };
+
+export const activityTypeLabels: Record<string, string> = {
+  call: 'Ligação',
+  task: 'Tarefa',
+  note: 'Nota',
+  email: 'Email',
+  meeting: 'Reunião',
+  follow_up: 'Follow-up',
+};

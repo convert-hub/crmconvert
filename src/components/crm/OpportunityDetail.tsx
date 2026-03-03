@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
-import { opportunityStatusLabels, priorityLabels } from '@/lib/labels';
+import { opportunityStatusLabels, priorityLabels, activityTypeLabels } from '@/lib/labels';
 import { Checkbox } from '@/components/ui/checkbox';
 
 interface CustomFieldDef {
@@ -469,7 +469,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
                     <div>
                       <div className="flex items-center gap-2">
                         <CalendarClock className="h-3 w-3 text-info" />
-                        <Badge variant="outline" className="text-[9px] capitalize rounded-full px-1.5 py-0">{item.data.type}</Badge>
+                        <Badge variant="outline" className="text-[9px] rounded-full px-1.5 py-0">{activityTypeLabels[item.data.type] ?? item.data.type}</Badge>
                         <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
                         {item.data.is_completed && <CheckCircle2 className="h-3 w-3 text-primary" />}
                       </div>
