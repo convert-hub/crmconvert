@@ -4,10 +4,19 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Users, Target, MessageSquare, TrendingUp, ArrowUpRight, ArrowDownRight, Calendar, BarChart3, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { format } from 'date-fns';
+
+interface UpcomingActivity {
+  id: string;
+  title: string;
+  due_date: string;
+  type: string;
+}
 
 export default function DashboardPage() {
   const { tenant, profile } = useAuth();
   const [stats, setStats] = useState({ contacts: 0, opportunities: 0, conversations: 0, totalValue: 0, inactive: 0 });
+  const [activities, setActivities] = useState<UpcomingActivity[]>([]);
 
   useEffect(() => {
     if (!tenant) return;
@@ -34,7 +43,17 @@ export default function DashboardPage() {
         conversations: convRes.count ?? 0,
         totalValue: opps.reduce((s, o) => s + (o.value || 0), 0),
         inactive: inactiveCount,
-      });
+    });
+
+    // Fetch upcoming activities
+    supabase.from('activities').select('id, title, due_date, type')
+      .eq('tenant_id', tenant.id)
+      .eq('is_completed', false)
+      .not('due_date', 'is', null)
+      .gte('due_date', new Date().toISOString())
+      .order('due_date', { ascending: true })
+      .limit(5)
+      .then(({ data }) => setActivities((data as unknown as UpcomingActivity[]) ?? []));
     });
   }, [tenant]);
 
@@ -126,16 +145,15 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
-            {[
-              { title: 'Follow-up com lead', time: '09:30' },
-              { title: 'Reunião de equipe', time: '14:00' },
-              { title: 'Demo do produto', time: '16:30' },
-            ].map((item, i) => (
-              <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-accent transition-colors">
+            {activities.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-4">Nenhuma atividade agendada</p>
+            )}
+            {activities.map((item) => (
+              <div key={item.id} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-accent transition-colors">
                 <div className="w-0.5 h-7 rounded-full bg-primary/40" />
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-medium truncate">{item.title}</p>
-                  <p className="text-[11px] text-muted-foreground">{item.time}</p>
+                  <p className="text-[11px] text-muted-foreground">{format(new Date(item.due_date), 'dd/MM · HH:mm')}</p>
                 </div>
               </div>
             ))}
