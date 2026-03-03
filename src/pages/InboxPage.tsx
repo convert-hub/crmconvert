@@ -551,9 +551,9 @@ export default function InboxPage() {
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.map(conv => (
-            <button key={conv.id} onClick={() => setSelectedConv(conv.id)}
+            <div key={conv.id} onClick={() => setSelectedConv(conv.id)}
               className={cn(
-                "w-full text-left px-4 py-3.5 border-b border-border/30 hover:bg-accent/50 transition-all duration-150 group/conv relative",
+                "w-full text-left px-4 py-3.5 border-b border-border/30 hover:bg-accent/50 transition-all duration-150 group relative cursor-pointer",
                 selectedConv === conv.id && "bg-accent/80 border-l-2 border-l-primary"
               )}>
               <div className="flex items-center gap-3">
@@ -568,11 +568,11 @@ export default function InboxPage() {
                       {conv.unread_count > 0 && (
                         <span className="h-5 w-5 flex items-center justify-center p-0 rounded-full text-[10px] font-bold gradient-primary text-white">{conv.unread_count}</span>
                       )}
-                      <span onClick={(e) => handleDeleteConversation(conv.id, e)}
-                        className="h-6 w-6 flex items-center justify-center rounded-md opacity-0 group-hover/conv:opacity-100 hover:bg-destructive/10 transition-all cursor-pointer"
+                      <button onClick={(e) => handleDeleteConversation(conv.id, e)}
+                        className="h-6 w-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-destructive/10 transition-all"
                         title="Excluir conversa">
                         <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </span>
+                      </button>
                     </div>
                   </div>
                   {conv.contact?.phone && (
@@ -585,7 +585,7 @@ export default function InboxPage() {
                   <Badge variant="outline" className={`text-[10px] mt-1.5 rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
                 </div>
               </div>
-            </button>
+            </div>
           ))}
           {filtered.length === 0 && <p className="text-center text-sm text-muted-foreground py-8">Nenhuma conversa</p>}
         </div>
