@@ -732,7 +732,7 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
     return;
   }
 
-  const apiKey = config.global_api_key?.api_key_encrypted;
+  let apiKey = config.api_key_encrypted || config.global_api_key?.api_key_encrypted || process.env.OPENAI_API_KEY;
   if (!apiKey) {
     console.log('[Worker] No API key for message_generation');
     return;
@@ -794,7 +794,7 @@ async function checkQualification(tenantId, conversation, contact, history) {
   const config = await getAiConfig(tenantId, 'qualification');
   if (!config) return;
 
-  const apiKey = config.global_api_key?.api_key_encrypted;
+  const apiKey = config.api_key_encrypted || config.global_api_key?.api_key_encrypted || process.env.OPENAI_API_KEY;
   if (!apiKey) return;
 
   const template = await getPromptTemplate(tenantId, 'qualification');
