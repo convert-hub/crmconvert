@@ -106,6 +106,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           setEditPriority(o.priority ?? 'medium');
           setEditNextAction(o.next_action ?? '');
           setCustomFieldValues((o as any).custom_fields || {});
+          setAssignedTo(o.assigned_to ?? null);
         }
       });
 
