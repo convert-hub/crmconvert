@@ -115,33 +115,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let mounted = true;
-
-    const initSession = async () => {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (!mounted) return;
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        await loadUserData(s.user.id);
-      }
-      if (mounted) setLoading(false);
-    };
-
-    initSession();
+    let dataLoaded = false;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, sess) => {
+      async (event, sess) => {
         if (!mounted) return;
         setSession(sess);
         setUser(sess?.user ?? null);
+
         if (sess?.user) {
-          setLoading(true);
-          setTimeout(async () => {
-            if (!mounted) return;
+          // Only load data once on init, or on actual sign-in events
+          if (!dataLoaded || event === 'SIGNED_IN') {
+            dataLoaded = true;
             await loadUserData(sess.user.id);
-            if (mounted) setLoading(false);
-          }, 0);
+          }
+          if (mounted) setLoading(false);
         } else {
+          dataLoaded = false;
           setProfile(null);
           setMembership(null);
           setTenant(null);
