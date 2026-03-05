@@ -89,9 +89,18 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
     // Load team members (attendants, managers, admins)
-    supabase.from('tenant_memberships').select('*, profile:profiles(*)').eq('tenant_id', tenant.id).eq('is_active', true)
-      .then(({ data }) => {
-        setTeamMembers((data as unknown as (TenantMembership & { profile?: Profile })[]) ?? []);
+    supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id).eq('is_active', true)
+      .then(async ({ data: memData, error: memErr }) => {
+        console.log('[OpportunityDetail] memberships loaded:', memData?.length, 'error:', memErr?.message);
+        if (!memData || memData.length === 0) return;
+        const members = memData as unknown as TenantMembership[];
+        // Load profiles separately
+        const userIds = members.map(m => m.user_id);
+        const { data: profilesData } = await supabase.from('profiles').select('*').in('user_id', userIds);
+        console.log('[OpportunityDetail] profiles loaded:', profilesData?.length);
+        const profileMap = new Map((profilesData ?? []).map(p => [p.user_id, p]));
+        const enriched = members.map(m => ({ ...m, profile: profileMap.get(m.user_id) as Profile | undefined }));
+        setTeamMembers(enriched);
       });
   }, [tenant]);
 
