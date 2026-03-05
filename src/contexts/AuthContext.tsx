@@ -12,11 +12,9 @@ interface AuthState {
   role: TenantRole | null;
   isSaasAdmin: boolean;
   loading: boolean;
-  /** When a SaaS admin is viewing another tenant's CRM */
   impersonatedTenantId: string | null;
   signOut: () => Promise<void>;
   refreshTenant: () => Promise<void>;
-  /** SaaS admin switches into a tenant's CRM */
   switchTenant: (tenantId: string | null) => Promise<void>;
 }
 
@@ -29,6 +27,8 @@ const AuthContext = createContext<AuthState>({
 
 export const useAuth = () => useContext(AuthContext);
 
+const IMPERSONATION_KEY = 'impersonatedTenantId';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -37,7 +37,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isSaasAdmin, setIsSaasAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [impersonatedTenantId, setImpersonatedTenantId] = useState<string | null>(null);
+  const [impersonatedTenantId, setImpersonatedTenantId] = useState<string | null>(
+    () => sessionStorage.getItem(IMPERSONATION_KEY)
+  );
 
   const loadUserData = async (userId: string) => {
     try {
@@ -61,14 +63,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (mem) {
         const m = mem as unknown as TenantMembership;
         setMembership(m);
-
-        // Load tenant
-        const { data: t } = await supabase
-          .from('tenants')
-          .select('*')
-          .eq('id', m.tenant_id)
-          .single();
-        setTenant(t as unknown as Tenant);
       }
 
       // Check SaaS admin
@@ -77,7 +71,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .select('id')
         .eq('user_id', userId)
         .maybeSingle();
-      setIsSaasAdmin(!!saasRow);
+      const isAdmin = !!saasRow;
+      setIsSaasAdmin(isAdmin);
+
+      // Restore impersonated tenant from sessionStorage
+      const storedImpersonation = sessionStorage.getItem(IMPERSONATION_KEY);
+      if (isAdmin && storedImpersonation) {
+        setImpersonatedTenantId(storedImpersonation);
+        const { data: t } = await supabase
+          .from('tenants')
+          .select('*')
+          .eq('id', storedImpersonation)
+          .single();
+        if (t) {
+          setTenant(t as unknown as Tenant);
+        } else {
+          // Invalid stored tenant, clear it
+          sessionStorage.removeItem(IMPERSONATION_KEY);
+          setImpersonatedTenantId(null);
+          // Fall back to own tenant
+          if (mem) {
+            const { data: ownT } = await supabase
+              .from('tenants')
+              .select('*')
+              .eq('id', (mem as unknown as TenantMembership).tenant_id)
+              .single();
+            setTenant(ownT as unknown as Tenant);
+          }
+        }
+      } else if (mem) {
+        // Load own tenant
+        const { data: t } = await supabase
+          .from('tenants')
+          .select('*')
+          .eq('id', (mem as unknown as TenantMembership).tenant_id)
+          .single();
+        setTenant(t as unknown as Tenant);
+      }
     } catch (e) {
       console.error('Error loading user data:', e);
     }
@@ -117,6 +147,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setTenant(null);
           setIsSaasAdmin(false);
           setImpersonatedTenantId(null);
+          sessionStorage.removeItem(IMPERSONATION_KEY);
           setLoading(false);
         }
       }
@@ -137,6 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setTenant(null);
     setIsSaasAdmin(false);
     setImpersonatedTenantId(null);
+    sessionStorage.removeItem(IMPERSONATION_KEY);
   };
 
   const refreshTenant = async () => {
@@ -154,6 +186,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!tenantId) {
       // Go back to own tenant
       setImpersonatedTenantId(null);
+      sessionStorage.removeItem(IMPERSONATION_KEY);
       if (membership) {
         const { data: t } = await supabase
           .from('tenants')
@@ -168,6 +201,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     setImpersonatedTenantId(tenantId);
+    sessionStorage.setItem(IMPERSONATION_KEY, tenantId);
     const { data: t } = await supabase
       .from('tenants')
       .select('*')
