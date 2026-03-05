@@ -53,6 +53,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const { tenant, membership } = useAuth();
   const [opp, setOpp] = useState<Opportunity & { contact?: Contact } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [stageMoves, setStageMoves] = useState<StageMove[]>([]);
   const [newMessage, setNewMessage] = useState('');
