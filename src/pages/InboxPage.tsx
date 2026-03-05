@@ -18,6 +18,7 @@ import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
+import ChatPanel from '@/components/inbox/ChatPanel';
 
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
