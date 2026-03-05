@@ -255,7 +255,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
 }
 
 export default function InboxPage() {
-  const { tenant, membership } = useAuth();
+  const { tenant, membership, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [conversations, setConversations] = useState<(Conversation & { contact?: Contact })[]>([]);
   const [selectedConv, setSelectedConv] = useState<string | null>(searchParams.get('conv'));
@@ -270,8 +270,14 @@ export default function InboxPage() {
 
   const loadConversations = () => {
     if (!tenant) return;
-    supabase.from('conversations').select('*, contact:contacts(*)').eq('tenant_id', tenant.id).order('last_message_at', { ascending: false }).limit(100)
-      .then(({ data }) => {
+    let query = supabase.from('conversations').select('*, contact:contacts(*)').eq('tenant_id', tenant.id).order('last_message_at', { ascending: false }).limit(100);
+
+    // Attendants only see unassigned chats + chats assigned to themselves
+    if (role === 'attendant' && membership) {
+      query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
+    }
+
+    query.then(({ data }) => {
         const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
         setConversations(convs);
         const urlConv = searchParams.get('conv');
