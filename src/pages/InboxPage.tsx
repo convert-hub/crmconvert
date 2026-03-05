@@ -260,14 +260,9 @@ export default function InboxPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [conversations, setConversations] = useState<(Conversation & { contact?: Contact })[]>([]);
   const [selectedConv, setSelectedConv] = useState<string | null>(searchParams.get('conv'));
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMsg, setNewMsg] = useState('');
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
-  const [sending, setSending] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadConversations = () => {
     if (!tenant) return;
