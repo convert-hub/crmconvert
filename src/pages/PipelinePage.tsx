@@ -638,9 +638,65 @@ export default function PipelinePage() {
     return 'normal';
   };
 
+  const createDefaultPipeline = async () => {
+    if (!tenant) return;
+    setCreatingPipeline(true);
+    try {
+      const { data: newPipeline, error: pError } = await supabase
+        .from('pipelines')
+        .insert({ tenant_id: tenant.id, name: 'Pipeline Principal', is_default: true, position: 0 })
+        .select()
+        .single();
+      if (pError || !newPipeline) { toast.error('Erro ao criar pipeline: ' + (pError?.message || '')); return; }
+
+      const defaultStages = [
+        { name: 'Novo Lead', color: '#6366f1', position: 0 },
+        { name: 'Qualificação', color: '#f59e0b', position: 1 },
+        { name: 'Proposta', color: '#3b82f6', position: 2 },
+        { name: 'Negociação', color: '#8b5cf6', position: 3 },
+        { name: 'Ganho', color: '#22c55e', position: 4, is_won: true },
+        { name: 'Perdido', color: '#ef4444', position: 5, is_lost: true },
+      ];
+      const { error: sError } = await supabase.from('stages').insert(
+        defaultStages.map(s => ({ ...s, tenant_id: tenant.id, pipeline_id: newPipeline.id }))
+      );
+      if (sError) { toast.error('Erro ao criar etapas: ' + sError.message); return; }
+
+      const p = newPipeline as unknown as Pipeline;
+      setPipelines([p]);
+      setSelectedPipeline(p.id);
+      toast.success('Pipeline criado com sucesso!');
+    } catch (e) {
+      toast.error('Erro inesperado ao criar pipeline');
+    } finally {
+      setCreatingPipeline(false);
+    }
+  };
+
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
 
   const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
+
+  // Empty state: no pipeline exists
+  if (pipelines.length === 0 && !selectedPipeline) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-background gap-4 p-8">
+        <Kanban className="h-16 w-16 text-muted-foreground" />
+        <h2 className="text-xl font-bold text-foreground">Nenhum pipeline encontrado</h2>
+        <p className="text-sm text-muted-foreground text-center max-w-md">
+          Esta empresa ainda não possui um pipeline configurado. Crie o pipeline padrão para começar a gerenciar suas oportunidades.
+        </p>
+        {(role === 'admin' || role === 'manager') ? (
+          <Button onClick={createDefaultPipeline} disabled={creatingPipeline} className="rounded-xl gap-2">
+            {creatingPipeline ? <Clock className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Criar Pipeline Padrão
+          </Button>
+        ) : (
+          <p className="text-xs text-muted-foreground">Contate o administrador para criar o pipeline.</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col bg-background">
