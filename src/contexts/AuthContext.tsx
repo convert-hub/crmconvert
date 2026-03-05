@@ -127,6 +127,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Only load data once on init, or on actual sign-in events
           if (!dataLoaded || event === 'SIGNED_IN') {
             dataLoaded = true;
+            // Keep loading true while fetching user data to prevent premature routing
+            setLoading(true);
             await loadUserData(sess.user.id);
           }
           if (mounted) setLoading(false);
