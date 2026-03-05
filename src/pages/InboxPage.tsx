@@ -8,7 +8,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil, Trash2 } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil, Trash2, Kanban } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels, channelLabels } from '@/lib/labels';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -16,6 +16,8 @@ import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
+import AudioPlayer from '@/components/inbox/AudioPlayer';
+import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 
 // Media cache to avoid re-downloading
