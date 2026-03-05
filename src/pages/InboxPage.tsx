@@ -8,7 +8,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil, Trash2 } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, Pause, FileText, Download, Pencil, Trash2, Kanban } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels, channelLabels } from '@/lib/labels';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
+import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 
 // Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
@@ -219,37 +220,36 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
   };
 
   return (
-    <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
-      <div className="flex items-center gap-3 group">
-        <Avatar className="h-10 w-10">
-          {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact?.name ?? ''} />}
-          <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{(contact?.name ?? '?').slice(0, 2).toUpperCase()}</AvatarFallback>
-        </Avatar>
-        <div>
-          {editing ? (
-            <Input
-              ref={inputRef}
-              value={name}
-              onChange={e => setName(e.target.value)}
-              onBlur={save}
-              onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setName(contact?.name ?? ''); setEditing(false); } }}
-              className="h-8 text-base font-semibold rounded-lg w-56"
-            />
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <h3 className="font-semibold text-foreground">{contact?.name ?? 'Conversa'}</h3>
-              {contact && (
-                <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent" title="Editar nome">
-                  <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              )}
-            </div>
-          )}
-          <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
-        </div>
+    <div className="flex items-center gap-3 group flex-1">
+      <Avatar className="h-10 w-10">
+        {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact?.name ?? ''} />}
+        <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{(contact?.name ?? '?').slice(0, 2).toUpperCase()}</AvatarFallback>
+      </Avatar>
+      <div>
+        {editing ? (
+          <Input
+            ref={inputRef}
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onBlur={save}
+            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setName(contact?.name ?? ''); setEditing(false); } }}
+            className="h-8 text-base font-semibold rounded-lg w-56"
+          />
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-semibold text-foreground">{contact?.name ?? 'Conversa'}</h3>
+            {contact && (
+              <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent" title="Editar nome">
+                <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            )}
+          </div>
+        )}
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
-        </div>
-      <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
+      </div>
+      <div className="ml-auto">
+        <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
+      </div>
     </div>
   );
 }
@@ -264,6 +264,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
   const [sending, setSending] = useState(false);
+  const [oppContact, setOppContact] = useState<Contact | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -595,15 +596,22 @@ export default function InboxPage() {
       <div className="flex-1 flex flex-col">
         {selectedConv ? (
           <>
-            <ChatHeader
-              contact={selectedData?.contact}
-              channel={selectedData?.channel}
-              status={selectedData?.status}
-              statusColors={statusColors}
-              onNameSaved={(newName) => {
-                setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
-              }}
-            />
+            <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
+              <ChatHeader
+                contact={selectedData?.contact}
+                channel={selectedData?.channel}
+                status={selectedData?.status}
+                statusColors={statusColors}
+                onNameSaved={(newName) => {
+                  setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
+                }}
+              />
+              {selectedData?.contact && (
+                <Button size="sm" variant="outline" className="ml-2 h-8 text-xs" onClick={() => setOppContact(selectedData.contact!)}>
+                  <Kanban className="h-3.5 w-3.5 mr-1.5" />Criar Oportunidade
+                </Button>
+              )}
+            </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
               {messages.map(msg => {
                 const status = (msg as any).provider_metadata?.status;
@@ -666,6 +674,14 @@ export default function InboxPage() {
       </div>
 
       <StartConversationDialog open={showNewConv} onOpenChange={setShowNewConv} />
+
+      {oppContact && (
+        <CreateOpportunityFromContactDialog
+          open={!!oppContact}
+          onOpenChange={(v) => { if (!v) setOppContact(null); }}
+          contact={oppContact}
+        />
+      )}
     </div>
   );
 }
