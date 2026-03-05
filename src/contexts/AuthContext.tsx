@@ -47,31 +47,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loadUserData = async (userId: string) => {
     try {
+      console.log('[Auth] loadUserData start for', userId);
+      
       // Load profile
-      const { data: prof } = await supabase
+      const { data: prof, error: profErr } = await supabase
         .from('profiles')
         .select('*')
         .eq('user_id', userId)
         .single();
+      console.log('[Auth] profile:', prof?.id, 'error:', profErr?.message);
       setProfile(prof as unknown as Profile);
 
       // Load ALL active memberships
-      const { data: memRows } = await supabase
+      const { data: memRows, error: memErr } = await supabase
         .from('tenant_memberships')
         .select('*')
         .eq('user_id', userId)
         .eq('is_active', true);
+      console.log('[Auth] memberships:', memRows?.length, 'error:', memErr?.message);
       const memberships = (memRows ?? []) as unknown as TenantMembership[];
       setAllMemberships(memberships);
 
       // Pick active membership: check stored preference first
       const storedActiveTenant = sessionStorage.getItem(ACTIVE_TENANT_KEY);
+      console.log('[Auth] storedActiveTenant:', storedActiveTenant);
       let activeMem = storedActiveTenant
         ? memberships.find(m => m.tenant_id === storedActiveTenant)
         : null;
       if (!activeMem && memberships.length > 0) {
         activeMem = memberships[0];
       }
+      console.log('[Auth] activeMem:', activeMem?.id, 'tenant:', activeMem?.tenant_id, 'role:', activeMem?.role);
       setMembership(activeMem ?? null);
 
       // Check SaaS admin
@@ -81,6 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('user_id', userId)
         .maybeSingle();
       const isAdmin = !!saasRow;
+      console.log('[Auth] isSaasAdmin:', isAdmin);
       setIsSaasAdmin(isAdmin);
 
       // Restore impersonated tenant from sessionStorage (SaaS admin only)
@@ -106,10 +113,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else if (activeMem) {
         const { data: t } = await supabase
           .from('tenants').select('*').eq('id', activeMem.tenant_id).single();
+        console.log('[Auth] tenant loaded:', t?.id, t?.name);
         setTenant(t as unknown as Tenant);
       }
+      console.log('[Auth] loadUserData complete');
     } catch (e) {
-      console.error('Error loading user data:', e);
+      console.error('[Auth] Error loading user data:', e);
     }
   };
 
