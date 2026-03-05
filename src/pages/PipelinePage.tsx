@@ -312,7 +312,7 @@ function FilterBar({ filters, onChange, members, allTags }: {
 
 // ─── Main Component ───
 export default function PipelinePage() {
-  const { tenant } = useAuth();
+  const { tenant, role } = useAuth();
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [stages, setStages] = useState<Stage[]>([]);
@@ -330,6 +330,7 @@ export default function PipelinePage() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [members, setMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
+  const [creatingPipeline, setCreatingPipeline] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
