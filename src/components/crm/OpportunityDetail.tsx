@@ -340,6 +340,35 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         {(opp.value ?? 0) > 0 && <span className="text-sm font-semibold text-success">R$ {opp.value.toLocaleString('pt-BR')}</span>}
       </div>
 
+      {/* Assign Member */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <UserPlus className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">Atribuir a:</span>
+        </div>
+        <Select
+          value={assignedTo ?? '__none__'}
+          onValueChange={async (v) => {
+            const newVal = v === '__none__' ? null : v;
+            setAssignedTo(newVal);
+            const { error } = await supabase.from('opportunities').update({ assigned_to: newVal }).eq('id', opp.id);
+            if (error) { toast.error(error.message); return; }
+            toast.success(newVal ? 'Atendente atribuído' : 'Atribuição removida');
+          }}
+        >
+          <SelectTrigger className="w-[220px] rounded-xl"><SelectValue placeholder="Sem atendente" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">Sem atendente</SelectItem>
+            {teamMembers.map(m => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.profile?.full_name || m.user_id.slice(0, 8)}
+                {m.role === 'attendant' ? ' (Atendente)' : m.role === 'manager' ? ' (Gerente)' : m.role === 'admin' ? ' (Admin)' : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Edit section */}
       {isEditing ? (
         <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
