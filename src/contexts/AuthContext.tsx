@@ -8,6 +8,7 @@ interface AuthState {
   user: User | null;
   profile: Profile | null;
   membership: TenantMembership | null;
+  allMemberships: TenantMembership[];
   tenant: Tenant | null;
   role: TenantRole | null;
   isSaasAdmin: boolean;
@@ -20,6 +21,7 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState>({
   session: null, user: null, profile: null, membership: null,
+  allMemberships: [],
   tenant: null, role: null, isSaasAdmin: false, loading: true,
   impersonatedTenantId: null,
   signOut: async () => {}, refreshTenant: async () => {}, switchTenant: async () => {},
@@ -28,12 +30,14 @@ const AuthContext = createContext<AuthState>({
 export const useAuth = () => useContext(AuthContext);
 
 const IMPERSONATION_KEY = 'impersonatedTenantId';
+const ACTIVE_TENANT_KEY = 'activeTenantId';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [membership, setMembership] = useState<TenantMembership | null>(null);
+  const [allMemberships, setAllMemberships] = useState<TenantMembership[]>([]);
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isSaasAdmin, setIsSaasAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -51,19 +55,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .single();
       setProfile(prof as unknown as Profile);
 
-      // Load membership (first active) — use maybeSingle to avoid error when multiple exist
+      // Load ALL active memberships
       const { data: memRows } = await supabase
         .from('tenant_memberships')
         .select('*')
         .eq('user_id', userId)
-        .eq('is_active', true)
-        .limit(1);
-      const mem = memRows?.[0] ?? null;
-      
-      if (mem) {
-        const m = mem as unknown as TenantMembership;
-        setMembership(m);
+        .eq('is_active', true);
+      const memberships = (memRows ?? []) as unknown as TenantMembership[];
+      setAllMemberships(memberships);
+
+      // Pick active membership: check stored preference first
+      const storedActiveTenant = sessionStorage.getItem(ACTIVE_TENANT_KEY);
+      let activeMem = storedActiveTenant
+        ? memberships.find(m => m.tenant_id === storedActiveTenant)
+        : null;
+      if (!activeMem && memberships.length > 0) {
+        activeMem = memberships[0];
       }
+      setMembership(activeMem ?? null);
 
       // Check SaaS admin
       const { data: saasRow } = await supabase
@@ -74,7 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isAdmin = !!saasRow;
       setIsSaasAdmin(isAdmin);
 
-      // Restore impersonated tenant from sessionStorage
+      // Restore impersonated tenant from sessionStorage (SaaS admin only)
       const storedImpersonation = sessionStorage.getItem(IMPERSONATION_KEY);
       if (isAdmin && storedImpersonation) {
         setImpersonatedTenantId(storedImpersonation);
@@ -86,26 +95,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (t) {
           setTenant(t as unknown as Tenant);
         } else {
-          // Invalid stored tenant, clear it
           sessionStorage.removeItem(IMPERSONATION_KEY);
           setImpersonatedTenantId(null);
-          // Fall back to own tenant
-          if (mem) {
+          if (activeMem) {
             const { data: ownT } = await supabase
-              .from('tenants')
-              .select('*')
-              .eq('id', (mem as unknown as TenantMembership).tenant_id)
-              .single();
+              .from('tenants').select('*').eq('id', activeMem.tenant_id).single();
             setTenant(ownT as unknown as Tenant);
           }
         }
-      } else if (mem) {
-        // Load own tenant
+      } else if (activeMem) {
         const { data: t } = await supabase
-          .from('tenants')
-          .select('*')
-          .eq('id', (mem as unknown as TenantMembership).tenant_id)
-          .single();
+          .from('tenants').select('*').eq('id', activeMem.tenant_id).single();
         setTenant(t as unknown as Tenant);
       }
     } catch (e) {
@@ -137,25 +137,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dataLoaded = false;
         setProfile(null);
         setMembership(null);
+        setAllMemberships([]);
         setTenant(null);
         setIsSaasAdmin(false);
         if (event === 'SIGNED_OUT') {
           setImpersonatedTenantId(null);
           sessionStorage.removeItem(IMPERSONATION_KEY);
+          sessionStorage.removeItem(ACTIVE_TENANT_KEY);
         }
         if (mounted) setLoading(false);
       }
     };
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, sess) => { handleSession(event, sess); }
     );
 
-    // Safety: also do an initial getSession check in case onAuthStateChange doesn't fire
     supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
       if (!mounted) return;
-      // Only act if we're still in loading state (onAuthStateChange hasn't resolved yet)
       if (!dataLoaded) {
         handleSession('INITIAL_SESSION', initialSession);
       }
@@ -173,34 +172,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setProfile(null);
     setMembership(null);
+    setAllMemberships([]);
     setTenant(null);
     setIsSaasAdmin(false);
     setImpersonatedTenantId(null);
     sessionStorage.removeItem(IMPERSONATION_KEY);
+    sessionStorage.removeItem(ACTIVE_TENANT_KEY);
   };
 
   const refreshTenant = async () => {
     const tid = impersonatedTenantId || membership?.tenant_id;
     if (!tid) return;
-    const { data: t } = await supabase
-      .from('tenants')
-      .select('*')
-      .eq('id', tid)
-      .single();
+    const { data: t } = await supabase.from('tenants').select('*').eq('id', tid).single();
     if (t) setTenant(t as unknown as Tenant);
   };
 
   const switchTenant = async (tenantId: string | null) => {
     if (!tenantId) {
-      // Go back to own tenant
+      // SaaS admin: go back to own tenant
       setImpersonatedTenantId(null);
       sessionStorage.removeItem(IMPERSONATION_KEY);
       if (membership) {
-        const { data: t } = await supabase
-          .from('tenants')
-          .select('*')
-          .eq('id', membership.tenant_id)
-          .single();
+        const { data: t } = await supabase.from('tenants').select('*').eq('id', membership.tenant_id).single();
         setTenant(t as unknown as Tenant);
       } else {
         setTenant(null);
@@ -208,14 +201,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    setImpersonatedTenantId(tenantId);
-    sessionStorage.setItem(IMPERSONATION_KEY, tenantId);
-    const { data: t } = await supabase
-      .from('tenants')
-      .select('*')
-      .eq('id', tenantId)
-      .single();
-    if (t) setTenant(t as unknown as Tenant);
+    // Check if this is one of the user's own memberships
+    const ownMem = allMemberships.find(m => m.tenant_id === tenantId);
+    if (ownMem) {
+      // Regular tenant switch (user's own membership)
+      setMembership(ownMem);
+      sessionStorage.setItem(ACTIVE_TENANT_KEY, tenantId);
+      setImpersonatedTenantId(null);
+      sessionStorage.removeItem(IMPERSONATION_KEY);
+      const { data: t } = await supabase.from('tenants').select('*').eq('id', tenantId).single();
+      if (t) setTenant(t as unknown as Tenant);
+    } else {
+      // SaaS admin impersonation
+      setImpersonatedTenantId(tenantId);
+      sessionStorage.setItem(IMPERSONATION_KEY, tenantId);
+      const { data: t } = await supabase.from('tenants').select('*').eq('id', tenantId).single();
+      if (t) setTenant(t as unknown as Tenant);
+    }
   };
 
   // For SaaS admins impersonating, derive an effective membership/role
@@ -229,6 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider value={{
       session, user, profile,
       membership: effectiveMembership,
+      allMemberships,
       tenant,
       role: effectiveRole,
       isSaasAdmin, loading,

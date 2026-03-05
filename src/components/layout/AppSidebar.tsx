@@ -1,12 +1,17 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch, Building2, ChevronDown
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getTenantBranding } from '@/hooks/useTenantBranding';
 import defaultLogo from '@/assets/logo.png';
+import { supabase } from '@/integrations/supabase/client';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -26,11 +31,27 @@ const adminItems = [
 ];
 
 export default function AppSidebar() {
-  const { tenant, role, profile, signOut, isSaasAdmin, impersonatedTenantId, switchTenant } = useAuth();
+  const { tenant, role, profile, signOut, isSaasAdmin, impersonatedTenantId, switchTenant, allMemberships } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const branding = getTenantBranding(tenant);
   const logoSrc = branding.logo_url || defaultLogo;
+
+  // Load tenant names for the switcher
+  const [tenantNames, setTenantNames] = useState<Record<string, string>>({});
+  const hasMultipleTenants = allMemberships.length > 1;
+
+  useEffect(() => {
+    if (!hasMultipleTenants) return;
+    const tenantIds = allMemberships.map(m => m.tenant_id);
+    supabase.from('tenants').select('id, name').in('id', tenantIds).then(({ data }) => {
+      if (data) {
+        const map: Record<string, string> = {};
+        data.forEach(t => { map[t.id] = t.name; });
+        setTenantNames(map);
+      }
+    });
+  }, [allMemberships, hasMultipleTenants]);
 
   const filteredAdminItems = adminItems.filter(
     item => role && (item.roles as readonly string[]).includes(role)
@@ -54,12 +75,47 @@ export default function AppSidebar() {
     );
   };
 
+  const handleSwitchTenant = async (tenantId: string) => {
+    await switchTenant(tenantId);
+    navigate('/pipeline');
+  };
+
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
       <div className="flex items-center justify-center px-3 py-6">
         <img src={logoSrc} alt={tenant?.name ?? 'Logo'} className="h-28 w-auto object-contain" />
       </div>
+
+      {/* Tenant Switcher */}
+      {hasMultipleTenants && (
+        <div className="px-3 pb-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex w-full items-center gap-2 rounded-lg border border-border bg-accent/50 px-3 py-2 text-[12px] font-medium text-foreground hover:bg-accent transition-colors">
+                <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="flex-1 truncate text-left">{tenant?.name ?? 'Selecionar empresa'}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              {allMemberships.map(m => (
+                <DropdownMenuItem
+                  key={m.id}
+                  onClick={() => handleSwitchTenant(m.tenant_id)}
+                  className={cn(
+                    "text-[12px]",
+                    tenant?.id === m.tenant_id && "bg-accent font-semibold"
+                  )}
+                >
+                  <Building2 className="h-3.5 w-3.5 mr-2" />
+                  {tenantNames[m.tenant_id] ?? m.tenant_id}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-1 space-y-0.5">
