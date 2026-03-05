@@ -618,52 +618,14 @@ export default function InboxPage() {
                 </Button>
               )}
             </div>
-            <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
-              {messages.map(msg => {
-                const status = (msg as any).provider_metadata?.status;
-                const isMedia = hasMedia(msg);
-                return (
-                  <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
-                    <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5 text-sm",
-                      msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
-                      {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} />}
-                      {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
-                      <div className={cn("text-[10px] mt-1 flex items-center gap-1", msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
-                        {format(new Date(msg.created_at), "HH:mm")}
-                        {msg.direction === 'outbound' && (
-                          status === 'read' ? <CheckCheck className="h-3 w-3 text-blue-300" /> :
-                          status === 'delivered' ? <CheckCheck className="h-3 w-3" /> :
-                          <Check className="h-3 w-3" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
-            <div className="border-t border-border/50 p-4 flex gap-2 bg-card/50">
-              <input
-                type="file"
-                ref={fileInputRef}
-                className="hidden"
-                accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
-                onChange={e => {
-                  const file = e.target.files?.[0];
-                  if (file) handleSendMedia(file);
-                  e.target.value = '';
-                }}
-              />
-              <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending} className="rounded-xl h-12 w-12 shrink-0">
-                <Paperclip className="h-4 w-4" />
-              </Button>
-              <AudioRecorder onRecorded={handleSendMedia} disabled={sending} />
-              <Textarea value={newMsg} onChange={e => setNewMsg(e.target.value)} placeholder="Mensagem..." className="min-h-[50px] resize-none rounded-xl"
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
-              <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()} className="rounded-xl h-12 w-12">
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </Button>
-            </div>
+            <ChatPanel
+              conversationId={selectedConv}
+              contact={selectedData?.contact}
+              channel={selectedData?.channel}
+              status={selectedData?.status}
+              showHeader={false}
+              className="flex-1"
+            />
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
