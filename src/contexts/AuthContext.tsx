@@ -117,36 +117,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
     let dataLoaded = false;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, sess) => {
-        if (!mounted) return;
-        setSession(sess);
-        setUser(sess?.user ?? null);
+    const handleSession = async (event: string, sess: Session | null) => {
+      if (!mounted) return;
+      setSession(sess);
+      setUser(sess?.user ?? null);
 
-        if (sess?.user) {
-          // Only load data once on init, or on actual sign-in events
-          if (!dataLoaded || event === 'SIGNED_IN') {
-            dataLoaded = true;
-            // Keep loading true while fetching user data to prevent premature routing
-            setLoading(true);
+      if (sess?.user) {
+        if (!dataLoaded || event === 'SIGNED_IN') {
+          dataLoaded = true;
+          setLoading(true);
+          try {
             await loadUserData(sess.user.id);
+          } catch (e) {
+            console.error('Failed to load user data:', e);
           }
-          if (mounted) setLoading(false);
-        } else {
-          dataLoaded = false;
-          setProfile(null);
-          setMembership(null);
-          setTenant(null);
-          setIsSaasAdmin(false);
-          // Only clear impersonation on explicit sign-out, not on transient null sessions
-          if (event === 'SIGNED_OUT') {
-            setImpersonatedTenantId(null);
-            sessionStorage.removeItem(IMPERSONATION_KEY);
-          }
-          if (mounted) setLoading(false);
         }
+        if (mounted) setLoading(false);
+      } else {
+        dataLoaded = false;
+        setProfile(null);
+        setMembership(null);
+        setTenant(null);
+        setIsSaasAdmin(false);
+        if (event === 'SIGNED_OUT') {
+          setImpersonatedTenantId(null);
+          sessionStorage.removeItem(IMPERSONATION_KEY);
+        }
+        if (mounted) setLoading(false);
       }
+    };
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, sess) => { handleSession(event, sess); }
     );
+
+    // Safety: also do an initial getSession check in case onAuthStateChange doesn't fire
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (!mounted) return;
+      // Only act if we're still in loading state (onAuthStateChange hasn't resolved yet)
+      if (!dataLoaded) {
+        handleSession('INITIAL_SESSION', initialSession);
+      }
+    });
 
     return () => {
       mounted = false;
