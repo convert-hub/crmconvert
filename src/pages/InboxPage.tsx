@@ -255,7 +255,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
 }
 
 export default function InboxPage() {
-  const { tenant, membership } = useAuth();
+  const { tenant, membership, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [conversations, setConversations] = useState<(Conversation & { contact?: Contact })[]>([]);
   const [selectedConv, setSelectedConv] = useState<string | null>(searchParams.get('conv'));
