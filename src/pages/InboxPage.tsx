@@ -250,7 +250,9 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
         </div>
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
         </div>
-      <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
+      <div className="flex items-center gap-2">
+        <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
+      </div>
     </div>
   );
 }
@@ -597,15 +599,22 @@ export default function InboxPage() {
       <div className="flex-1 flex flex-col">
         {selectedConv ? (
           <>
-            <ChatHeader
-              contact={selectedData?.contact}
-              channel={selectedData?.channel}
-              status={selectedData?.status}
-              statusColors={statusColors}
-              onNameSaved={(newName) => {
-                setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
-              }}
-            />
+            <div className="border-b border-border/50 px-6 py-4 flex items-center justify-between bg-card/50">
+              <ChatHeader
+                contact={selectedData?.contact}
+                channel={selectedData?.channel}
+                status={selectedData?.status}
+                statusColors={statusColors}
+                onNameSaved={(newName) => {
+                  setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
+                }}
+              />
+              {selectedData?.contact && (
+                <Button size="sm" variant="outline" className="ml-2 h-8 text-xs" onClick={() => setOppContact(selectedData.contact!)}>
+                  <Kanban className="h-3.5 w-3.5 mr-1.5" />Criar Oportunidade
+                </Button>
+              )}
+            </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3 bg-background">
               {messages.map(msg => {
                 const status = (msg as any).provider_metadata?.status;
@@ -668,6 +677,14 @@ export default function InboxPage() {
       </div>
 
       <StartConversationDialog open={showNewConv} onOpenChange={setShowNewConv} />
+
+      {oppContact && (
+        <CreateOpportunityFromContactDialog
+          open={!!oppContact}
+          onOpenChange={(v) => { if (!v) setOppContact(null); }}
+          contact={oppContact}
+        />
+      )}
     </div>
   );
 }
