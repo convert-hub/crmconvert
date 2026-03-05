@@ -156,10 +156,6 @@ export default function InboxPage() {
     closed: 'bg-muted text-muted-foreground',
   };
 
-  const hasMedia = (msg: Message) => {
-    const mt = ((msg as any).media_type || '').toLowerCase();
-    return mt.includes('audio') || mt.includes('image') || mt.includes('video') || mt.includes('document') || mt.includes('ptt');
-  };
 
   return (
     <div className="flex h-full bg-background">
