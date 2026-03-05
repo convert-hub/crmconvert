@@ -139,6 +139,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           if (oppConvs && oppConvs.length > 0) convId = oppConvs[0].id;
         }
         if (convId) {
+          setChatConvId(convId);
           supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at')
             .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
         }
