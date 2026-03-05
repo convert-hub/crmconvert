@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag } from 'lucide-react';
+import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
@@ -20,6 +20,7 @@ import { contactStatusLabels } from '@/lib/labels';
 import ImportContactsDialog from '@/components/contacts/ImportContactsDialog';
 import TagInput from '@/components/contacts/TagInput';
 import type { TagDef } from '@/components/settings/TagsSettings';
+import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 
 export default function ContactsPage() {
   const { tenant, role } = useAuth();
@@ -33,6 +34,7 @@ export default function ContactsPage() {
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [registeredTags, setRegisteredTags] = useState<TagDef[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);
+  const [oppContact, setOppContact] = useState<Contact | null>(null);
 
   useEffect(() => {
     if (!tenant) return;
@@ -220,6 +222,7 @@ export default function ContactsPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => openEdit(c)}><Edit className="h-3.5 w-3.5 mr-2" />Editar</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setOppContact(c); }}><Kanban className="h-3.5 w-3.5 mr-2" />Criar Oportunidade</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleDelete(c.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5 mr-2" />Excluir</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -280,6 +283,15 @@ export default function ContactsPage() {
           onOpenChange={setShowImport}
           tenantId={tenant.id}
           onImported={loadContacts}
+        />
+      )}
+
+      {oppContact && (
+        <CreateOpportunityFromContactDialog
+          open={!!oppContact}
+          onOpenChange={(v) => { if (!v) setOppContact(null); }}
+          contact={oppContact}
+          onCreated={() => toast.success('Card criado no pipeline!')}
         />
       )}
     </div>
