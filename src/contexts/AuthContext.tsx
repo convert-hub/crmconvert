@@ -51,14 +51,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .single();
       setProfile(prof as unknown as Profile);
 
-      // Load membership (first active)
-      const { data: mem } = await supabase
+      // Load membership (first active) — use maybeSingle to avoid error when multiple exist
+      const { data: memRows } = await supabase
         .from('tenant_memberships')
         .select('*')
         .eq('user_id', userId)
         .eq('is_active', true)
-        .limit(1)
-        .single();
+        .limit(1);
+      const mem = memRows?.[0] ?? null;
       
       if (mem) {
         const m = mem as unknown as TenantMembership;
