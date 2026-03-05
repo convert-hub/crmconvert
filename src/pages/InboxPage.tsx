@@ -265,6 +265,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
   const [sending, setSending] = useState(false);
+  const [oppContact, setOppContact] = useState<Contact | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
