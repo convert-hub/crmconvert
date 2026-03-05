@@ -116,6 +116,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let mounted = true;
     let dataLoaded = false;
+    let isLoadingData = false;
 
     const handleSession = async (event: string, sess: Session | null) => {
       if (!mounted) return;
@@ -123,18 +124,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(sess?.user ?? null);
 
       if (sess?.user) {
-        if (!dataLoaded || event === 'SIGNED_IN') {
+        if ((!dataLoaded || event === 'SIGNED_IN') && !isLoadingData) {
           dataLoaded = true;
+          isLoadingData = true;
           setLoading(true);
           try {
             await loadUserData(sess.user.id);
           } catch (e) {
             console.error('Failed to load user data:', e);
+          } finally {
+            isLoadingData = false;
+            if (mounted) setLoading(false);
           }
         }
-        if (mounted) setLoading(false);
+        // Don't set loading=false here if data is still loading
       } else {
         dataLoaded = false;
+        isLoadingData = false;
         setProfile(null);
         setMembership(null);
         setAllMemberships([]);
