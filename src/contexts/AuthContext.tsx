@@ -136,9 +136,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setMembership(null);
           setTenant(null);
           setIsSaasAdmin(false);
-          setImpersonatedTenantId(null);
-          sessionStorage.removeItem(IMPERSONATION_KEY);
-          setLoading(false);
+          // Only clear impersonation on explicit sign-out, not on transient null sessions
+          if (event === 'SIGNED_OUT') {
+            setImpersonatedTenantId(null);
+            sessionStorage.removeItem(IMPERSONATION_KEY);
+          }
+          if (mounted) setLoading(false);
         }
       }
     );

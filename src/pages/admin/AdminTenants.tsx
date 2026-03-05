@@ -53,11 +53,13 @@ export default function AdminTenants() {
     const tenantId = crypto.randomUUID();
     
     const { error } = await supabase.from('tenants').insert({ id: tenantId, name, slug });
-    if (error) { toast.error(error.message); setSaving(false); return; }
+    if (error) { toast.error('Erro ao criar empresa: ' + error.message); setSaving(false); return; }
 
     // Create default pipeline
     const pipelineId = crypto.randomUUID();
-    await supabase.from('pipelines').insert({ id: pipelineId, tenant_id: tenantId, name: 'Pipeline Principal', is_default: true, position: 0 });
+    const { error: pipelineError } = await supabase.from('pipelines').insert({ id: pipelineId, tenant_id: tenantId, name: 'Pipeline Principal', is_default: true, position: 0 });
+    if (pipelineError) { toast.error('Empresa criada, mas erro ao criar pipeline: ' + pipelineError.message); setSaving(false); load(); return; }
+    
     const stages = [
       { name: 'Novo Lead', position: 0, color: '#6366f1' },
       { name: 'Contato Feito', position: 1, color: '#8b5cf6' },
@@ -67,9 +69,10 @@ export default function AdminTenants() {
       { name: 'Fechado Ganho', position: 5, color: '#22c55e', is_won: true },
       { name: 'Perdido', position: 6, color: '#94a3b8', is_lost: true },
     ];
-    await supabase.from('stages').insert(stages.map(s => ({ ...s, tenant_id: tenantId, pipeline_id: pipelineId })));
+    const { error: stagesError } = await supabase.from('stages').insert(stages.map(s => ({ ...s, tenant_id: tenantId, pipeline_id: pipelineId })));
+    if (stagesError) { toast.error('Pipeline criado, mas erro nas etapas: ' + stagesError.message); setSaving(false); load(); return; }
 
-    toast.success('Empresa criada!');
+    toast.success('Empresa criada com pipeline e etapas!');
     setName('');
     setOpen(false);
     setSaving(false);

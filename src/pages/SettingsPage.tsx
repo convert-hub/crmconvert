@@ -291,8 +291,12 @@ export default function SettingsPage() {
   const addStage = async () => {
     if (!tenant || !newStageName.trim()) return;
     const { data: pipelines } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant.id).eq('is_default', true).limit(1);
-    if (!pipelines || pipelines.length === 0) return;
-    await supabase.from('stages').insert({ tenant_id: tenant.id, pipeline_id: pipelines[0].id, name: newStageName, color: newStageColor, position: stages.length });
+    if (!pipelines || pipelines.length === 0) {
+      toast.error('Nenhum pipeline padrão encontrado. Crie a empresa novamente ou contate o administrador.');
+      return;
+    }
+    const { error } = await supabase.from('stages').insert({ tenant_id: tenant.id, pipeline_id: pipelines[0].id, name: newStageName, color: newStageColor, position: stages.length });
+    if (error) { toast.error('Erro ao adicionar etapa: ' + error.message); return; }
     setNewStageName(''); toast.success('Etapa adicionada'); loadAll();
   };
   const deleteStage = async (id: string) => { await supabase.from('stages').delete().eq('id', id); toast.success('Etapa removida'); loadAll(); };
