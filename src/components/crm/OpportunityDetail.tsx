@@ -538,27 +538,19 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           </div>
         </TabsContent>
 
-        <TabsContent value="chat" className="space-y-4">
-          <div className="max-h-80 overflow-y-auto scrollbar-thin space-y-2 rounded-2xl border border-border/50 p-3">
-            {messages.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Nenhuma mensagem ainda</p>}
-            {messages.map(msg => (
-              <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
-                <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm",
-                  msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-muted text-foreground')}>
-                  {msg.content}
-                  <div className={cn("text-[10px] mt-1", msg.direction === 'outbound' ? 'text-white/70' : 'text-muted-foreground')}>
-                    {format(new Date(msg.created_at), "HH:mm", { locale: ptBR })}
-                    {msg.is_ai_generated && ' • IA'}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <Textarea value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite uma mensagem..." className="min-h-[60px] resize-none rounded-xl"
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }} />
-            <Button size="icon" onClick={handleSendMessage} disabled={sending || !newMessage.trim()} className="rounded-xl h-12 w-12"><Send className="h-4 w-4" /></Button>
-          </div>
+        <TabsContent value="chat" className="space-y-0">
+          {chatConvId ? (
+            <ChatPanel
+              conversationId={chatConvId}
+              contact={opp?.contact}
+              channel="whatsapp"
+              status={undefined}
+              showHeader={false}
+              className="h-[420px]"
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">Nenhuma conversa encontrada para este contato</p>
+          )}
         </TabsContent>
 
         <TabsContent value="notes" className="space-y-4">
