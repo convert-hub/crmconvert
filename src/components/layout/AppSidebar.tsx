@@ -21,7 +21,7 @@ const navItems = [
 ];
 
 const adminItems = [
-  { icon: MessageSquare, label: 'Conversas', path: '/inbox', roles: ['admin', 'manager'] as const },
+  { icon: MessageSquare, label: 'Conversas', path: '/inbox', roles: ['admin', 'manager', 'attendant'] as const },
   { icon: Zap, label: 'Automações', path: '/automations', roles: ['admin', 'manager'] as const },
   { icon: GitBranch, label: 'Flow Builder', path: '/flow-builder', roles: ['admin'] as const },
   { icon: Brain, label: 'Prompt Studio', path: '/prompt-studio', roles: ['admin'] as const },
