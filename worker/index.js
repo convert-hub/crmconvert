@@ -738,12 +738,14 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
     return;
   }
 
-  const history = await getConversationHistory(conversation.id);
   const template = await getPromptTemplate(tenantId, 'message_generation');
-  const systemPrompt = template?.content || `Você é um atendente virtual de uma empresa. Seja cordial, objetivo e profissional.
-Responda perguntas sobre a empresa e seus serviços.
-Se o cliente demonstrar interesse real em comprar ou contratar, responda normalmente mas sinalize internamente que está qualificado.
-NÃO use emojis em excesso. Mantenha mensagens curtas e claras para WhatsApp.`;
+  if (!template) {
+    console.log('[Worker] No active prompt_template for message_generation, skipping auto-reply');
+    return;
+  }
+
+  const history = await getConversationHistory(conversation.id);
+  const systemPrompt = template.content;
 
   const messages = [
     { role: 'system', content: systemPrompt },

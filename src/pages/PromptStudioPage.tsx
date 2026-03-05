@@ -60,13 +60,24 @@ export default function PromptStudioPage() {
 
     if (editId) {
       const existing = templates.find(t => t.id === editId);
-      const newVersion = (existing?.version ?? 0) + 1;
-      await supabase.from('prompt_templates').update({ is_active: false }).eq('id', editId);
-      const { error } = await supabase.from('prompt_templates').insert({
-        tenant_id: tenant.id, name, task_type: taskType as any, content, variables: vars,
-        forbidden_terms: forbidden, version: newVersion, is_active: isActive,
-      });
-      if (error) toast.error(error.message); else toast.success(`Prompt v${newVersion} salvo`);
+      const contentChanged = existing && (existing.content !== content || existing.name !== name || existing.task_type !== taskType);
+      
+      if (contentChanged) {
+        // Content changed → create new version, deactivate old
+        const newVersion = (existing?.version ?? 0) + 1;
+        await supabase.from('prompt_templates').update({ is_active: false }).eq('id', editId);
+        const { error } = await supabase.from('prompt_templates').insert({
+          tenant_id: tenant.id, name, task_type: taskType as any, content, variables: vars,
+          forbidden_terms: forbidden, version: newVersion, is_active: isActive,
+        });
+        if (error) toast.error(error.message); else toast.success(`Prompt v${newVersion} salvo`);
+      } else {
+        // Only metadata changed (active toggle, variables, forbidden terms) → update in place
+        const { error } = await supabase.from('prompt_templates').update({
+          variables: vars, forbidden_terms: forbidden, is_active: isActive,
+        }).eq('id', editId);
+        if (error) toast.error(error.message); else toast.success('Prompt atualizado');
+      }
     } else {
       const { error } = await supabase.from('prompt_templates').insert({
         tenant_id: tenant.id, name, task_type: taskType as any, content, variables: vars,
