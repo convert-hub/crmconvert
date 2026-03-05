@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Opportunity, Contact, Stage, Message, Activity } from '@/types/crm';
+import type { Opportunity, Contact, Stage, Message, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp } from 'lucide-react';
+import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -76,6 +76,10 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDef[]>([]);
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, unknown>>({});
 
+  // Team members for assignment
+  const [teamMembers, setTeamMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
+  const [assignedTo, setAssignedTo] = useState<string | null>(null);
+
   useEffect(() => {
     if (!tenant) return;
     supabase.from('tenants').select('settings').eq('id', tenant.id).single()
@@ -83,6 +87,11 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
           setCustomFieldDefs((data.settings as Record<string, any>).custom_opportunity_fields || []);
         }
+      });
+    // Load team members (attendants, managers, admins)
+    supabase.from('tenant_memberships').select('*, profile:profiles(*)').eq('tenant_id', tenant.id).eq('is_active', true)
+      .then(({ data }) => {
+        setTeamMembers((data as unknown as (TenantMembership & { profile?: Profile })[]) ?? []);
       });
   }, [tenant]);
 
