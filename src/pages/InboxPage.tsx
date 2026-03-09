@@ -106,7 +106,7 @@ export default function InboxPage() {
       });
   };
 
-  useEffect(() => { loadConversations(); }, [tenant]);
+  useEffect(() => { loadConversations(); }, [tenant, role, membership?.id]);
 
   // Realtime: listen for new/updated conversations
   useEffect(() => {
@@ -117,7 +117,7 @@ export default function InboxPage() {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [tenant]);
+  }, [tenant, role, membership?.id]);
 
   useEffect(() => {
     if (!selectedConv) return;
