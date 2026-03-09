@@ -86,6 +86,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
+  const [deleteConvId, setDeleteConvId] = useState<string | null>(null);
 
   const loadConversations = () => {
     if (!tenant) return;
