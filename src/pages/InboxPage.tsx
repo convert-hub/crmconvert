@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Conversation, Contact } from '@/types/crm';
 import { Badge } from '@/components/ui/badge';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -85,6 +86,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [showNewConv, setShowNewConv] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
+  const [deleteConvId, setDeleteConvId] = useState<string | null>(null);
 
   const loadConversations = () => {
     if (!tenant) return;
@@ -127,9 +129,15 @@ export default function InboxPage() {
     });
   }, [selectedConv]);
 
-  const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
+  const handleDeleteConversation = (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Excluir esta conversa e todas as mensagens?')) return;
+    setDeleteConvId(convId);
+  };
+
+  const confirmDeleteConversation = async () => {
+    if (!deleteConvId) return;
+    const convId = deleteConvId;
+    setDeleteConvId(null);
     const { error } = await supabase.from('conversations').delete().eq('id', convId);
     if (error) { toast.error(error.message); return; }
     toast.success('Conversa excluída');
@@ -267,6 +275,23 @@ export default function InboxPage() {
           contact={oppContact}
         />
       )}
+
+      <AlertDialog open={!!deleteConvId} onOpenChange={(open) => { if (!open) setDeleteConvId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir conversa</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja excluir esta conversa e todas as mensagens? Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteConversation} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

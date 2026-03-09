@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
@@ -331,6 +332,7 @@ export default function PipelinePage() {
   const [members, setMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
   const [creatingPipeline, setCreatingPipeline] = useState(false);
+  const [deleteOppId, setDeleteOppId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -600,7 +602,13 @@ export default function PipelinePage() {
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Excluir esta oportunidade permanentemente?')) return;
+    setDeleteOppId(oppId);
+  };
+
+  const confirmDeleteOpportunity = async () => {
+    if (!deleteOppId) return;
+    const oppId = deleteOppId;
+    setDeleteOppId(null);
 
     // Clear FK references first (conversations, activities, stage_moves)
     await Promise.all([
@@ -801,6 +809,23 @@ export default function PipelinePage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteOppId} onOpenChange={(open) => { if (!open) setDeleteOppId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir oportunidade</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja excluir esta oportunidade permanentemente? Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteOpportunity} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
