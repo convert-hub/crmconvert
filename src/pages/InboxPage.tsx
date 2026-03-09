@@ -129,9 +129,15 @@ export default function InboxPage() {
     });
   }, [selectedConv]);
 
-  const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
+  const handleDeleteConversation = (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Excluir esta conversa e todas as mensagens?')) return;
+    setDeleteConvId(convId);
+  };
+
+  const confirmDeleteConversation = async () => {
+    if (!deleteConvId) return;
+    const convId = deleteConvId;
+    setDeleteConvId(null);
     const { error } = await supabase.from('conversations').delete().eq('id', convId);
     if (error) { toast.error(error.message); return; }
     toast.success('Conversa excluída');
