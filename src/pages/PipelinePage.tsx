@@ -617,9 +617,9 @@ export default function PipelinePage() {
       supabase.from('stage_moves').delete().eq('opportunity_id', oppId),
     ]);
 
-    const { error, count } = await supabase.from('opportunities').delete().eq('id', oppId).select();
+    const { error, data: deleted } = await supabase.from('opportunities').delete().eq('id', oppId).select();
     if (error) { toast.error(`Erro ao excluir: ${error.message}`); return; }
-    if (!count || count === 0) { toast.error('Sem permissão para excluir esta oportunidade'); return; }
+    if (!deleted || deleted.length === 0) { toast.error('Sem permissão para excluir esta oportunidade'); return; }
     setOpportunities(prev => prev.filter(o => o.id !== oppId));
     toast.success('Oportunidade excluída');
   };
