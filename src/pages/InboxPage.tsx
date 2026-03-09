@@ -106,7 +106,7 @@ export default function InboxPage() {
       });
   };
 
-  useEffect(() => { loadConversations(); }, [tenant]);
+  useEffect(() => { loadConversations(); }, [tenant, role, membership?.id]);
 
   // Realtime: listen for new/updated conversations
   useEffect(() => {
