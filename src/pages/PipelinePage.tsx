@@ -602,7 +602,13 @@ export default function PipelinePage() {
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Excluir esta oportunidade permanentemente?')) return;
+    setDeleteOppId(oppId);
+  };
+
+  const confirmDeleteOpportunity = async () => {
+    if (!deleteOppId) return;
+    const oppId = deleteOppId;
+    setDeleteOppId(null);
 
     // Clear FK references first (conversations, activities, stage_moves)
     await Promise.all([
