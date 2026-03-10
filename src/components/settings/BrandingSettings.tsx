@@ -10,8 +10,8 @@ import { toast } from 'sonner';
 import { getTenantBranding, type BrandingConfig } from '@/hooks/useTenantBranding';
 
 export default function BrandingSettings() {
-  const { tenant, role, refreshTenant } = useAuth();
-  const isAdmin = role === 'admin' || role === 'manager';
+  const { tenant, role, refreshTenant, isSaasAdmin } = useAuth();
+  const isAdmin = role === 'admin' || role === 'manager' || isSaasAdmin;
   const [branding, setBranding] = useState<BrandingConfig>({});
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -175,12 +175,10 @@ export default function BrandingSettings() {
             </div>
           </div>
 
-          {isAdmin && (
-            <Button onClick={saveColors} disabled={saving} className="rounded-xl">
-              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Salvar Cores
-            </Button>
-          )}
+          <Button onClick={saveColors} disabled={saving || !isAdmin} className="rounded-xl">
+            {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Salvar Cores
+          </Button>
         </CardContent>
       </Card>
     </div>
