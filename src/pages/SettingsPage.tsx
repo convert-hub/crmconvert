@@ -313,7 +313,7 @@ export default function SettingsPage() {
     toast.success('Configuração de IA salva'); setAiDialogOpen(false); loadAll();
   };
 
-  const isAdmin = role === 'admin';
+  const isAdmin = role === 'admin' || role === 'manager';
 
   const slugify = (text: string) => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
