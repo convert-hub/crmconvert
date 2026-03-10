@@ -605,6 +605,10 @@ export default function PipelinePage() {
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (role !== 'admin' && role !== 'manager') {
+      toast.error('Apenas admins e gerentes podem excluir oportunidades');
+      return;
+    }
     setDeleteOppId(oppId);
   };
 
@@ -621,7 +625,30 @@ export default function PipelinePage() {
     ]);
 
     const { error } = await supabase.from('opportunities').delete().eq('id', oppId);
-    if (error) { toast.error(`Erro ao excluir: ${error.message}`); return; }
+    if (error) {
+      toast.error(`Erro ao excluir: ${error.message}`);
+      loadOpps();
+      return;
+    }
+
+    const { data: remaining, error: checkError } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('id', oppId)
+      .maybeSingle();
+
+    if (checkError) {
+      toast.error(`Erro ao validar exclusão: ${checkError.message}`);
+      loadOpps();
+      return;
+    }
+
+    if (remaining) {
+      toast.error('Sem permissão para excluir esta oportunidade');
+      loadOpps();
+      return;
+    }
+
     setOpportunities(prev => prev.filter(o => o.id !== oppId));
     toast.success('Oportunidade excluída');
   };
