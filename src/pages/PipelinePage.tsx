@@ -118,7 +118,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
 }
 
 // ─── Sortable Opp Card ───
-function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore }: {
+function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore, canDelete }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
@@ -127,6 +127,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
   unreadCount: number;
   customFieldDefs: CustomFieldDef[];
   engagementScore: number;
+  canDelete: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
