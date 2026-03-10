@@ -720,6 +720,7 @@ export default function PipelinePage() {
   };
 
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
+  const canDeleteOpportunity = role === 'admin' || role === 'manager';
 
   const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
 
