@@ -6,6 +6,7 @@ export interface BrandingConfig {
   primary_color?: string;
   secondary_color?: string;
   font_color?: string;
+  sidebar_color?: string;
 }
 
 function hexToHsl(hex: string): string | null {
@@ -42,57 +43,26 @@ export function useTenantBranding() {
   useEffect(() => {
     const root = document.documentElement;
 
-    if (branding.primary_color) {
-      const hsl = hexToHsl(branding.primary_color);
-      if (hsl) {
-        root.style.setProperty('--primary', hsl);
-        root.style.setProperty('--ring', hsl);
-        root.style.setProperty('--sidebar-primary', hsl);
-      }
-    } else {
-      root.style.removeProperty('--primary');
-      root.style.removeProperty('--ring');
-      root.style.removeProperty('--sidebar-primary');
-    }
+    const colorMap: Array<{ hex?: string; vars: string[] }> = [
+      { hex: branding.primary_color, vars: ['--primary', '--ring', '--sidebar-primary'] },
+      { hex: branding.secondary_color, vars: ['--secondary', '--accent', '--sidebar-accent'] },
+      { hex: branding.font_color, vars: ['--foreground', '--card-foreground', '--sidebar-foreground'] },
+      { hex: branding.sidebar_color, vars: ['--sidebar-background'] },
+    ];
 
-    if (branding.secondary_color) {
-      const hsl = hexToHsl(branding.secondary_color);
-      if (hsl) {
-        root.style.setProperty('--secondary', hsl);
-        root.style.setProperty('--accent', hsl);
-        root.style.setProperty('--sidebar-accent', hsl);
+    colorMap.forEach(({ hex, vars }) => {
+      if (hex) {
+        const hsl = hexToHsl(hex);
+        if (hsl) vars.forEach(v => root.style.setProperty(v, hsl));
+      } else {
+        vars.forEach(v => root.style.removeProperty(v));
       }
-    } else {
-      root.style.removeProperty('--secondary');
-      root.style.removeProperty('--accent');
-      root.style.removeProperty('--sidebar-accent');
-    }
-
-    if (branding.font_color) {
-      const hsl = hexToHsl(branding.font_color);
-      if (hsl) {
-        root.style.setProperty('--foreground', hsl);
-        root.style.setProperty('--card-foreground', hsl);
-        root.style.setProperty('--sidebar-foreground', hsl);
-      }
-    } else {
-      root.style.removeProperty('--foreground');
-      root.style.removeProperty('--card-foreground');
-      root.style.removeProperty('--sidebar-foreground');
-    }
+    });
 
     return () => {
-      root.style.removeProperty('--primary');
-      root.style.removeProperty('--ring');
-      root.style.removeProperty('--sidebar-primary');
-      root.style.removeProperty('--secondary');
-      root.style.removeProperty('--accent');
-      root.style.removeProperty('--sidebar-accent');
-      root.style.removeProperty('--foreground');
-      root.style.removeProperty('--card-foreground');
-      root.style.removeProperty('--sidebar-foreground');
+      colorMap.forEach(({ vars }) => vars.forEach(v => root.style.removeProperty(v)));
     };
-  }, [branding.primary_color, branding.secondary_color, branding.font_color]);
+  }, [branding.primary_color, branding.secondary_color, branding.font_color, branding.sidebar_color]);
 
   return branding;
 }
