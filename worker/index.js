@@ -245,6 +245,12 @@ const handlers = {
       } catch (err) {
         console.error('[Worker] Keyword lead creation error:', err.message);
       }
+
+      try {
+        await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, text);
+      } catch (err) {
+        console.error('[Worker] Flow trigger error:', err.message);
+      }
     }
 
     return { contact_id: contact.id, conversation_id: conversation.id };
