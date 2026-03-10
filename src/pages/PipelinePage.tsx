@@ -180,10 +180,12 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
               )}
             </div>
           )}
-          <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-            onClick={onDelete} title="Excluir oportunidade">
-            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-          </Button>
+          {canDelete && (
+            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+              onClick={onDelete} title="Excluir oportunidade">
+              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+            </Button>
+          )}
         </div>
         {opp.contact && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
