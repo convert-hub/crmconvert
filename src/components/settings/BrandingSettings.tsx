@@ -126,24 +126,12 @@ export default function BrandingSettings() {
           <CardDescription>Personalize as cores da interface para sua marca</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
               <Label className="text-sm">Cor Primária</Label>
               <div className="flex gap-2 items-center">
-                <Input
-                  type="color"
-                  value={branding.primary_color || '#3B4252'}
-                  onChange={e => handleColorChange('primary_color', e.target.value)}
-                  className="w-14 h-10 p-1 rounded-xl cursor-pointer"
-                  disabled={!isAdmin}
-                />
-                <Input
-                  value={branding.primary_color || '#3B4252'}
-                  onChange={e => handleColorChange('primary_color', e.target.value)}
-                  className="rounded-xl font-mono text-sm flex-1"
-                  placeholder="#3B4252"
-                  disabled={!isAdmin}
-                />
+                <Input type="color" value={branding.primary_color || '#3B4252'} onChange={e => handleColorChange('primary_color', e.target.value)} className="w-14 h-10 p-1 rounded-xl cursor-pointer" disabled={!isAdmin} />
+                <Input value={branding.primary_color || '#3B4252'} onChange={e => handleColorChange('primary_color', e.target.value)} className="rounded-xl font-mono text-sm flex-1" placeholder="#3B4252" disabled={!isAdmin} />
               </div>
               <p className="text-xs text-muted-foreground">Botões, links e destaques</p>
             </div>
@@ -151,20 +139,8 @@ export default function BrandingSettings() {
             <div className="space-y-2">
               <Label className="text-sm">Cor Secundária</Label>
               <div className="flex gap-2 items-center">
-                <Input
-                  type="color"
-                  value={branding.secondary_color || '#F0EDE8'}
-                  onChange={e => handleColorChange('secondary_color', e.target.value)}
-                  className="w-14 h-10 p-1 rounded-xl cursor-pointer"
-                  disabled={!isAdmin}
-                />
-                <Input
-                  value={branding.secondary_color || '#F0EDE8'}
-                  onChange={e => handleColorChange('secondary_color', e.target.value)}
-                  className="rounded-xl font-mono text-sm flex-1"
-                  placeholder="#F0EDE8"
-                  disabled={!isAdmin}
-                />
+                <Input type="color" value={branding.secondary_color || '#F0EDE8'} onChange={e => handleColorChange('secondary_color', e.target.value)} className="w-14 h-10 p-1 rounded-xl cursor-pointer" disabled={!isAdmin} />
+                <Input value={branding.secondary_color || '#F0EDE8'} onChange={e => handleColorChange('secondary_color', e.target.value)} className="rounded-xl font-mono text-sm flex-1" placeholder="#F0EDE8" disabled={!isAdmin} />
               </div>
               <p className="text-xs text-muted-foreground">Fundos secundários e acentos</p>
             </div>
@@ -172,22 +148,19 @@ export default function BrandingSettings() {
             <div className="space-y-2">
               <Label className="text-sm">Cor das Fontes</Label>
               <div className="flex gap-2 items-center">
-                <Input
-                  type="color"
-                  value={branding.font_color || '#2B2F3A'}
-                  onChange={e => handleColorChange('font_color', e.target.value)}
-                  className="w-14 h-10 p-1 rounded-xl cursor-pointer"
-                  disabled={!isAdmin}
-                />
-                <Input
-                  value={branding.font_color || '#2B2F3A'}
-                  onChange={e => handleColorChange('font_color', e.target.value)}
-                  className="rounded-xl font-mono text-sm flex-1"
-                  placeholder="#2B2F3A"
-                  disabled={!isAdmin}
-                />
+                <Input type="color" value={branding.font_color || '#2B2F3A'} onChange={e => handleColorChange('font_color', e.target.value)} className="w-14 h-10 p-1 rounded-xl cursor-pointer" disabled={!isAdmin} />
+                <Input value={branding.font_color || '#2B2F3A'} onChange={e => handleColorChange('font_color', e.target.value)} className="rounded-xl font-mono text-sm flex-1" placeholder="#2B2F3A" disabled={!isAdmin} />
               </div>
               <p className="text-xs text-muted-foreground">Textos e títulos</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm">Cor do Menu Lateral</Label>
+              <div className="flex gap-2 items-center">
+                <Input type="color" value={branding.sidebar_color || '#FFFFFF'} onChange={e => handleColorChange('sidebar_color', e.target.value)} className="w-14 h-10 p-1 rounded-xl cursor-pointer" disabled={!isAdmin} />
+                <Input value={branding.sidebar_color || '#FFFFFF'} onChange={e => handleColorChange('sidebar_color', e.target.value)} className="rounded-xl font-mono text-sm flex-1" placeholder="#FFFFFF" disabled={!isAdmin} />
+              </div>
+              <p className="text-xs text-muted-foreground">Fundo da sidebar / menu lateral</p>
             </div>
           </div>
 
@@ -197,6 +170,7 @@ export default function BrandingSettings() {
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg" style={{ backgroundColor: branding.primary_color || '#3B4252' }} />
               <div className="h-10 w-10 rounded-lg border" style={{ backgroundColor: branding.secondary_color || '#F0EDE8' }} />
+              <div className="h-10 w-10 rounded-lg border" style={{ backgroundColor: branding.sidebar_color || '#FFFFFF' }} />
               <span className="text-sm font-semibold" style={{ color: branding.font_color || '#2B2F3A' }}>Texto de exemplo</span>
             </div>
           </div>
