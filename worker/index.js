@@ -653,6 +653,35 @@ function removeAccents(str) {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
+  const { data: flows } = await supabase.from('chatbot_flows')
+    .select('id')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .eq('trigger_type', 'message_received');
+
+  if (!flows || flows.length === 0) return;
+
+  for (const flow of flows) {
+    await supabase.rpc('enqueue_job', {
+      _type: 'execute_flow',
+      _payload: JSON.stringify({
+        flow_id: flow.id,
+        tenant_id: tenantId,
+        contact_id: contactId,
+        conversation_id: conversationId,
+        trigger_data: {
+          message: messageText,
+          message_text: messageText,
+          last_answer: messageText,
+        },
+      }),
+      _tenant_id: tenantId,
+      _idempotency_key: `flow-${flow.id}-${conversationId}-${Date.now()}`,
+    });
+  }
+}
+
 async function checkKeywordLeadCreation(tenantId, contactId, conversationId, messageText) {
   // 1. Check contact status
   const { data: contact } = await supabase.from('contacts').select('id, name, status').eq('id', contactId).single();
