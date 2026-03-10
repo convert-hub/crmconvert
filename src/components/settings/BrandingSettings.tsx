@@ -58,7 +58,7 @@ export default function BrandingSettings() {
     if (error) { toast.error(error.message); setUploading(false); return; }
 
     const { data: urlData } = supabase.storage.from('tenant-logos').getPublicUrl(path);
-    const logo_url = urlData.publicUrl;
+    const logo_url = `${urlData.publicUrl}?t=${Date.now()}`;
     await saveBranding({ ...branding, logo_url });
     setUploading(false);
   };
