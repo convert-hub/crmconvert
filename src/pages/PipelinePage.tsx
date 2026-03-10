@@ -118,7 +118,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
 }
 
 // ─── Sortable Opp Card ───
-function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore }: {
+function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore, canDelete }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
@@ -127,6 +127,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
   unreadCount: number;
   customFieldDefs: CustomFieldDef[];
   engagementScore: number;
+  canDelete: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
@@ -179,10 +180,12 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
               )}
             </div>
           )}
-          <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-            onClick={onDelete} title="Excluir oportunidade">
-            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-          </Button>
+          {canDelete && (
+            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+              onClick={onDelete} title="Excluir oportunidade">
+              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+            </Button>
+          )}
         </div>
         {opp.contact && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground pl-5">
@@ -602,6 +605,10 @@ export default function PipelinePage() {
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (role !== 'admin' && role !== 'manager') {
+      toast.error('Apenas admins e gerentes podem excluir oportunidades');
+      return;
+    }
     setDeleteOppId(oppId);
   };
 
@@ -618,7 +625,30 @@ export default function PipelinePage() {
     ]);
 
     const { error } = await supabase.from('opportunities').delete().eq('id', oppId);
-    if (error) { toast.error(`Erro ao excluir: ${error.message}`); return; }
+    if (error) {
+      toast.error(`Erro ao excluir: ${error.message}`);
+      loadOpps();
+      return;
+    }
+
+    const { data: remaining, error: checkError } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('id', oppId)
+      .maybeSingle();
+
+    if (checkError) {
+      toast.error(`Erro ao validar exclusão: ${checkError.message}`);
+      loadOpps();
+      return;
+    }
+
+    if (remaining) {
+      toast.error('Sem permissão para excluir esta oportunidade');
+      loadOpps();
+      return;
+    }
+
     setOpportunities(prev => prev.filter(o => o.id !== oppId));
     toast.success('Oportunidade excluída');
   };
@@ -690,6 +720,7 @@ export default function PipelinePage() {
   };
 
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
+  const canDeleteOpportunity = role === 'admin' || role === 'manager';
 
   const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
 
@@ -752,6 +783,7 @@ export default function PipelinePage() {
                       alertStatus={getOppAlertStatus(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
                       customFieldDefs={customFieldDefs}
+                      canDelete={canDeleteOpportunity}
                       engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
                   ))}
                 </SortableContext>

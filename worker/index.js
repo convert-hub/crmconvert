@@ -152,6 +152,15 @@ const handlers = {
         }
       }
 
+      // Trigger active chatbot flows with trigger_type='message_received'
+      if (message_text && !data?.fromMe) {
+        try {
+          await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, message_text);
+        } catch (err) {
+          console.error('[Worker] Flow trigger error:', err.message);
+        }
+      }
+
       return { conversation_id, contact_id, ai_processed: true };
     }
 
@@ -235,6 +244,12 @@ const handlers = {
         await checkKeywordLeadCreation(tenant_id, contact.id, conversation.id, text);
       } catch (err) {
         console.error('[Worker] Keyword lead creation error:', err.message);
+      }
+
+      try {
+        await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, text);
+      } catch (err) {
+        console.error('[Worker] Flow trigger error:', err.message);
       }
     }
 
@@ -426,6 +441,46 @@ const handlers = {
                 }
               }
               break;
+            case 'create_opportunity': {
+              if (!ctx.contact_id) break;
+              const { data: existingOpp } = await supabase.from('opportunities')
+                .select('id')
+                .eq('tenant_id', tenant_id)
+                .eq('contact_id', ctx.contact_id)
+                .eq('status', 'open')
+                .limit(1);
+              if (existingOpp && existingOpp.length > 0) break;
+
+              const { data: pipeline } = await supabase.from('pipelines')
+                .select('id')
+                .eq('tenant_id', tenant_id)
+                .eq('is_default', true)
+                .single();
+              if (!pipeline) break;
+
+              const { data: stage } = await supabase.from('stages')
+                .select('id')
+                .eq('pipeline_id', pipeline.id)
+                .order('position')
+                .limit(1)
+                .single();
+              if (!stage) break;
+
+              const { data: contact } = await supabase.from('contacts')
+                .select('name')
+                .eq('id', ctx.contact_id)
+                .single();
+
+              await supabase.from('opportunities').insert({
+                tenant_id,
+                contact_id: ctx.contact_id,
+                pipeline_id: pipeline.id,
+                stage_id: stage.id,
+                title: `Lead: ${contact?.name || 'Contato'}`,
+                source: 'flow_builder',
+              });
+              break;
+            }
             case 'close_conversation':
               if (ctx.conversation_id) {
                 await supabase.from('conversations').update({ status: 'closed' }).eq('id', ctx.conversation_id);
@@ -596,6 +651,35 @@ async function findContact(tenantId, phone, email) {
 // Keyword Lead Creation
 function removeAccents(str) {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
+  const { data: flows } = await supabase.from('chatbot_flows')
+    .select('id')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .eq('trigger_type', 'message_received');
+
+  if (!flows || flows.length === 0) return;
+
+  for (const flow of flows) {
+    await supabase.rpc('enqueue_job', {
+      _type: 'execute_flow',
+      _payload: JSON.stringify({
+        flow_id: flow.id,
+        tenant_id: tenantId,
+        contact_id: contactId,
+        conversation_id: conversationId,
+        trigger_data: {
+          message: messageText,
+          message_text: messageText,
+          last_answer: messageText,
+        },
+      }),
+      _tenant_id: tenantId,
+      _idempotency_key: `flow-${flow.id}-${conversationId}-${Date.now()}`,
+    });
+  }
 }
 
 async function checkKeywordLeadCreation(tenantId, contactId, conversationId, messageText) {
