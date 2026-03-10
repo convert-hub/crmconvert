@@ -783,6 +783,7 @@ export default function PipelinePage() {
                       alertStatus={getOppAlertStatus(opp)}
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
                       customFieldDefs={customFieldDefs}
+                      canDelete={canDeleteOpportunity}
                       engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
                   ))}
                 </SortableContext>
