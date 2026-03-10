@@ -88,6 +88,13 @@ export default function AdminUsers() {
     load();
   };
 
+  const handleChangeRole = async (membershipId: string, newRole: string) => {
+    const { error } = await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', membershipId);
+    if (error) { toast.error(error.message); return; }
+    toast.success('Permissão atualizada!');
+    load();
+  };
+
   const openAssignFor = (userId: string) => {
     setSelectedUserId(userId);
     setAssignOpen(true);
@@ -182,7 +189,17 @@ export default function AdminUsers() {
                     {userMemberships.map(m => (
                       <div key={m.id} className="flex items-center gap-2 bg-muted rounded-xl px-3 py-1.5 text-xs">
                         <span className="font-medium">{getTenantName(m.tenant_id)}</span>
-                        <Badge className={`text-[10px] ${roleColors[m.role] || ''}`}>{m.role}</Badge>
+                        <Select value={m.role} onValueChange={(val) => handleChangeRole(m.id, val)}>
+                          <SelectTrigger className="h-6 w-auto min-w-[100px] rounded-lg text-[10px] border-0 bg-transparent p-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="admin">Admin</SelectItem>
+                            <SelectItem value="manager">Gerente</SelectItem>
+                            <SelectItem value="attendant">Atendente</SelectItem>
+                            <SelectItem value="readonly">Somente Leitura</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <button onClick={() => handleRemoveMembership(m.id)} className="text-muted-foreground hover:text-destructive">
                           <Trash2 className="h-3 w-3" />
                         </button>
