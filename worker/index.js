@@ -398,12 +398,17 @@ const handlers = {
           const value = node.data?.value || '';
           let testValue = ctx.variables[field] || ctx.variables.message || '';
 
+          // Normalize both values: lowercase, remove accents, trim whitespace
+          const normalize = (s) => removeAccents(s.toLowerCase().trim().replace(/\s+/g, ' '));
+          const normTest = normalize(testValue);
+          const normValue = normalize(value);
+
           let result = false;
           switch (operator) {
-            case 'contains': result = testValue.toLowerCase().includes(value.toLowerCase()); break;
-            case 'equals': result = testValue.toLowerCase() === value.toLowerCase(); break;
-            case 'starts_with': result = testValue.toLowerCase().startsWith(value.toLowerCase()); break;
-            case 'not_contains': result = !testValue.toLowerCase().includes(value.toLowerCase()); break;
+            case 'contains': result = normTest.includes(normValue); break;
+            case 'equals': result = normTest === normValue; break;
+            case 'starts_with': result = normTest.startsWith(normValue); break;
+            case 'not_contains': result = !normTest.includes(normValue); break;
           }
 
           // Route to yes or no handle
