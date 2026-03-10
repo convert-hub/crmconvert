@@ -11,7 +11,7 @@ import { getTenantBranding, type BrandingConfig } from '@/hooks/useTenantBrandin
 
 export default function BrandingSettings() {
   const { tenant, role, refreshTenant } = useAuth();
-  const isAdmin = role === 'admin';
+  const isAdmin = role === 'admin' || role === 'manager';
   const [branding, setBranding] = useState<BrandingConfig>({});
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
