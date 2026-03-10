@@ -152,6 +152,15 @@ const handlers = {
         }
       }
 
+      // Trigger active chatbot flows with trigger_type='message_received'
+      if (message_text && !data?.fromMe) {
+        try {
+          await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, message_text);
+        } catch (err) {
+          console.error('[Worker] Flow trigger error:', err.message);
+        }
+      }
+
       return { conversation_id, contact_id, ai_processed: true };
     }
 
