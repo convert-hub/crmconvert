@@ -441,6 +441,46 @@ const handlers = {
                 }
               }
               break;
+            case 'create_opportunity': {
+              if (!ctx.contact_id) break;
+              const { data: existingOpp } = await supabase.from('opportunities')
+                .select('id')
+                .eq('tenant_id', tenant_id)
+                .eq('contact_id', ctx.contact_id)
+                .eq('status', 'open')
+                .limit(1);
+              if (existingOpp && existingOpp.length > 0) break;
+
+              const { data: pipeline } = await supabase.from('pipelines')
+                .select('id')
+                .eq('tenant_id', tenant_id)
+                .eq('is_default', true)
+                .single();
+              if (!pipeline) break;
+
+              const { data: stage } = await supabase.from('stages')
+                .select('id')
+                .eq('pipeline_id', pipeline.id)
+                .order('position')
+                .limit(1)
+                .single();
+              if (!stage) break;
+
+              const { data: contact } = await supabase.from('contacts')
+                .select('name')
+                .eq('id', ctx.contact_id)
+                .single();
+
+              await supabase.from('opportunities').insert({
+                tenant_id,
+                contact_id: ctx.contact_id,
+                pipeline_id: pipeline.id,
+                stage_id: stage.id,
+                title: `Lead: ${contact?.name || 'Contato'}`,
+                source: 'flow_builder',
+              });
+              break;
+            }
             case 'close_conversation':
               if (ctx.conversation_id) {
                 await supabase.from('conversations').update({ status: 'closed' }).eq('id', ctx.conversation_id);
