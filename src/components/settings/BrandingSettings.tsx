@@ -170,6 +170,7 @@ export default function BrandingSettings() {
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg" style={{ backgroundColor: branding.primary_color || '#3B4252' }} />
               <div className="h-10 w-10 rounded-lg border" style={{ backgroundColor: branding.secondary_color || '#F0EDE8' }} />
+              <div className="h-10 w-10 rounded-lg border" style={{ backgroundColor: branding.sidebar_color || '#FFFFFF' }} />
               <span className="text-sm font-semibold" style={{ color: branding.font_color || '#2B2F3A' }}>Texto de exemplo</span>
             </div>
           </div>
