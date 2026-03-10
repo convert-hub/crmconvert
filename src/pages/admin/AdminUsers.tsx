@@ -88,6 +88,13 @@ export default function AdminUsers() {
     load();
   };
 
+  const handleChangeRole = async (membershipId: string, newRole: string) => {
+    const { error } = await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', membershipId);
+    if (error) { toast.error(error.message); return; }
+    toast.success('Permissão atualizada!');
+    load();
+  };
+
   const openAssignFor = (userId: string) => {
     setSelectedUserId(userId);
     setAssignOpen(true);
