@@ -605,8 +605,8 @@ export default function PipelinePage() {
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (role !== 'admin' && role !== 'manager') {
-      toast.error('Apenas admins e gerentes podem excluir oportunidades');
+    if (!canDeleteOpportunity) {
+      toast.error('Você não tem permissão para excluir oportunidades');
       return;
     }
     setDeleteOppId(oppId);
@@ -614,15 +614,14 @@ export default function PipelinePage() {
 
   const confirmDeleteOpportunity = async () => {
     if (!deleteOppId) return;
+    if (!canDeleteOpportunity) {
+      setDeleteOppId(null);
+      toast.error('Você não tem permissão para excluir oportunidades');
+      return;
+    }
+
     const oppId = deleteOppId;
     setDeleteOppId(null);
-
-    // Clear FK references first (conversations, activities, stage_moves)
-    await Promise.all([
-      supabase.from('conversations').update({ opportunity_id: null }).eq('opportunity_id', oppId),
-      supabase.from('activities').update({ opportunity_id: null }).eq('opportunity_id', oppId),
-      supabase.from('stage_moves').delete().eq('opportunity_id', oppId),
-    ]);
 
     const { error } = await supabase.from('opportunities').delete().eq('id', oppId);
     if (error) {
@@ -644,7 +643,7 @@ export default function PipelinePage() {
     }
 
     if (remaining) {
-      toast.error('Sem permissão para excluir esta oportunidade');
+      toast.error('A exclusão não foi concluída');
       loadOpps();
       return;
     }
@@ -720,7 +719,7 @@ export default function PipelinePage() {
   };
 
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
-  const canDeleteOpportunity = role === 'admin' || role === 'manager';
+  const canDeleteOpportunity = role !== 'readonly' && role !== null;
 
   const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
 
