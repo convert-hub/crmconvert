@@ -10,8 +10,8 @@ import { toast } from 'sonner';
 import { getTenantBranding, type BrandingConfig } from '@/hooks/useTenantBranding';
 
 export default function BrandingSettings() {
-  const { tenant, role, refreshTenant } = useAuth();
-  const isAdmin = role === 'admin' || role === 'manager';
+  const { tenant, role, refreshTenant, isSaasAdmin } = useAuth();
+  const isAdmin = role === 'admin' || role === 'manager' || isSaasAdmin;
   const [branding, setBranding] = useState<BrandingConfig>({});
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
