@@ -311,11 +311,11 @@ serve(async (req) => {
               .single();
             if (conv?.contact_id) {
               await supabaseAdmin.from('opportunities')
-                .update({ updated_at: new Date().toISOString() })
+                .update({ updated_at: new Date().toISOString(), position: 0 })
                 .eq('contact_id', conv.contact_id)
                 .eq('tenant_id', effectiveTenantId)
                 .eq('status', 'open');
-              console.log(`uazapi-proxy: reset inactivity for contact ${conv.contact_id}`);
+              console.log(`uazapi-proxy: reset inactivity and bumped opportunities for contact ${conv.contact_id}`);
             }
           } catch (e) {
             console.error('uazapi-proxy: failed to reset inactivity:', e);
