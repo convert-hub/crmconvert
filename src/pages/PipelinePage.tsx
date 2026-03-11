@@ -568,8 +568,9 @@ export default function PipelinePage() {
     const fromStageId = opp.stage_id;
     const stage = stages.find(s => s.id === newStageId);
     const newStatus = stage?.is_won ? 'won' : stage?.is_lost ? 'lost' : 'open';
-    setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any } : o));
-    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
+    const nowIso = new Date().toISOString();
+    setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any, position: 0, updated_at: nowIso } : o));
+    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus, position: 0, updated_at: nowIso }).eq('id', oppId);
 
     await supabase.rpc('enqueue_job', {
       _type: 'run_automations',
