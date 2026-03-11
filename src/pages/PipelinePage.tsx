@@ -584,7 +584,7 @@ export default function PipelinePage() {
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string);
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     setActiveId(null);
     const { active, over } = event;
     if (!over) return;
@@ -600,7 +600,36 @@ export default function PipelinePage() {
     } else {
       const overOpp = opportunities.find(o => o.id === overId);
       if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
+        // Cross-stage move
         moveOpportunity(activeOpp.id, overOpp.stage_id);
+      } else if (overOpp && overOpp.stage_id === activeOpp.stage_id && overOpp.id !== activeOpp.id) {
+        // Same-stage reorder: swap updated_at to reflect new visual order
+        const stageOpps = opportunities
+          .filter(o => o.stage_id === activeOpp.stage_id)
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+        const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
+        const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
+        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+          // Reorder by assigning new position values
+          const reordered = [...stageOpps];
+          const [moved] = reordered.splice(oldIndex, 1);
+          reordered.splice(newIndex, 0, moved);
+          // Assign position values (lower = higher in list)
+          const updates = reordered.map((o, i) => ({ id: o.id, position: i }));
+          // Optimistic update
+          setOpportunities(prev => {
+            const next = [...prev];
+            for (const u of updates) {
+              const idx = next.findIndex(o => o.id === u.id);
+              if (idx !== -1) next[idx] = { ...next[idx], position: u.position };
+            }
+            return next;
+          });
+          // Persist
+          for (const u of updates) {
+            await supabase.from('opportunities').update({ position: u.position }).eq('id', u.id);
+          }
+        }
       }
     }
   };
