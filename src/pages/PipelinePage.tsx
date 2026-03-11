@@ -446,7 +446,7 @@ export default function PipelinePage() {
 
   const loadOpps = useCallback(() => {
     if (!selectedPipeline || !tenant) return;
-    supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('position')
+    supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('updated_at', { ascending: false })
       .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
   }, [selectedPipeline, tenant]);
 
