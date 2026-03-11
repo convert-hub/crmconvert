@@ -392,7 +392,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       setMessages(prev => [...prev, optimisticMsg]);
 
       const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-        body: { action: 'send_media', tenant_id: tenant.id, phone: contactPhone, media_base64: `data:${file.type};base64,${base64}`, media_type: mediaType, caption: '' },
+        body: {
+          action: 'send_media',
+          tenant_id: tenant.id,
+          phone: contactPhone,
+          media_base64: `data:${file.type};base64,${base64}`,
+          media_type: mediaType,
+          caption: '',
+          conversation_id: conversationId,
+        },
       });
 
       if (error || data?.error) {

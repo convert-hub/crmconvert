@@ -523,6 +523,26 @@ serve(async (req) => {
           return jsonResponse({ error: sendData.error || sendData.message || `Falha ao enviar mídia: ${sendRes.status}`, details: sendData }, 502);
         }
 
+        if (convId) {
+          try {
+            const { data: conv } = await supabaseAdmin.from('conversations')
+              .select('contact_id')
+              .eq('id', convId)
+              .single();
+
+            if (conv?.contact_id) {
+              await supabaseAdmin.from('opportunities')
+                .update({ updated_at: new Date().toISOString(), position: 0 })
+                .eq('contact_id', conv.contact_id)
+                .eq('tenant_id', effectiveTenantId)
+                .eq('status', 'open');
+              console.log(`uazapi-proxy: reset inactivity and bumped opportunities for contact ${conv.contact_id} (media)`);
+            }
+          } catch (e) {
+            console.error('uazapi-proxy: failed to reset inactivity on media send:', e);
+          }
+        }
+
         return jsonResponse({ ok: true, provider_message_id: sendData.key?.id || sendData.messageid || sendData.id || null });
       }
 
