@@ -532,30 +532,52 @@ export default function PipelinePage() {
   const loadUnreads = useCallback(async () => {
     if (!tenant) return;
 
-    const { data } = await supabase.from('conversations')
-      .select('contact_id, unread_count, status, last_customer_message_at, last_agent_message_at')
+    const { data: conversations } = await supabase.from('conversations')
+      .select('id, contact_id, unread_count, status')
       .eq('tenant_id', tenant.id)
       .in('status', ['open', 'waiting_customer', 'waiting_agent']);
 
-    const map: Record<string, number> = {};
-    for (const c of (data ?? []) as {
+    const convs = (conversations ?? []) as {
+      id: string;
       contact_id: string | null;
       unread_count: number | null;
       status: string;
-      last_customer_message_at: string | null;
-      last_agent_message_at: string | null;
-    }[]) {
+    }[];
+
+    if (convs.length === 0) {
+      setUnreadByContact({});
+      return;
+    }
+
+    const convIds = convs.map(c => c.id);
+    const { data: messages } = await supabase.from('messages')
+      .select('conversation_id, direction, created_at')
+      .eq('tenant_id', tenant.id)
+      .in('conversation_id', convIds)
+      .order('created_at', { ascending: false });
+
+    const lastDirectionByConversation: Record<string, 'inbound' | 'outbound'> = {};
+    for (const m of (messages ?? []) as { conversation_id: string; direction: 'inbound' | 'outbound'; created_at: string }[]) {
+      if (!lastDirectionByConversation[m.conversation_id]) {
+        lastDirectionByConversation[m.conversation_id] = m.direction;
+      }
+    }
+
+    const map: Record<string, number> = {};
+    for (const c of convs) {
       if (!c.contact_id) continue;
+
+      const lastDirection = lastDirectionByConversation[c.id];
+      const isLastInbound = lastDirection === 'inbound';
+      if (!isLastInbound) continue;
 
       const unread = c.unread_count || 0;
       const pendingByStatus = c.status === 'waiting_agent';
-      const pendingByTimestamps = !!c.last_customer_message_at && (
-        !c.last_agent_message_at ||
-        new Date(c.last_customer_message_at).getTime() > new Date(c.last_agent_message_at).getTime()
-      );
+      const signal = pendingByStatus ? Math.max(unread, 1) : unread;
 
-      const signal = (pendingByStatus || pendingByTimestamps) ? Math.max(unread, 1) : unread;
-      if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
+      if (signal > 0) {
+        map[c.contact_id] = (map[c.contact_id] || 0) + signal;
+      }
     }
 
     setUnreadByContact(map);
