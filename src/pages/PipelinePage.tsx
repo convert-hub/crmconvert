@@ -612,7 +612,12 @@ export default function PipelinePage() {
         // Same-stage reorder: swap updated_at to reflect new visual order
         const stageOpps = opportunities
           .filter(o => o.stage_id === activeOpp.stage_id)
-          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+          .sort((a, b) => {
+            const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
+            const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
+            if (posA !== posB) return posA - posB;
+            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+          });
         const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
         const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
         if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
