@@ -848,7 +848,7 @@ export default function PipelinePage() {
 
       {/* Kanban */}
       <div className="flex-1 overflow-x-auto p-4 pt-0">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="flex gap-4 h-full min-w-max">
             {stages.map(stage => (
               <DroppableColumn key={stage.id} stage={stage} count={oppsByStage(stage.id).length}
