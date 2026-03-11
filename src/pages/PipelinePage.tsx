@@ -19,10 +19,10 @@ import { formatDistanceToNow, format, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import {
-  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  DndContext, closestCorners, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragStartEvent, DragOverlay,
 } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
 
@@ -529,37 +529,72 @@ export default function PipelinePage() {
   }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
 
   // Load unread / pending-response signal per contact
-  const loadUnreads = useCallback(() => {
+  const loadUnreads = useCallback(async () => {
     if (!tenant) return;
-    supabase.from('conversations')
-      .select('contact_id, unread_count, status')
+
+    const { data } = await supabase.from('conversations')
+      .select('contact_id, unread_count, status, last_customer_message_at, last_agent_message_at')
       .eq('tenant_id', tenant.id)
-      .in('status', ['open', 'waiting_customer', 'waiting_agent'])
-      .then(({ data }) => {
-        const map: Record<string, number> = {};
-        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null; status: string }[]) {
-          if (!c.contact_id) continue;
-          const unread = c.unread_count || 0;
-          const pendingAgent = c.status === 'waiting_agent';
-          const signal = pendingAgent ? Math.max(unread, 1) : unread;
-          if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
-        }
-        setUnreadByContact(map);
-      });
+      .in('status', ['open', 'waiting_customer', 'waiting_agent']);
+
+    const map: Record<string, number> = {};
+    for (const c of (data ?? []) as {
+      contact_id: string | null;
+      unread_count: number | null;
+      status: string;
+      last_customer_message_at: string | null;
+      last_agent_message_at: string | null;
+    }[]) {
+      if (!c.contact_id) continue;
+
+      const unread = c.unread_count || 0;
+      const pendingByStatus = c.status === 'waiting_agent';
+      const pendingByTimestamps = !!c.last_customer_message_at && (
+        !c.last_agent_message_at ||
+        new Date(c.last_customer_message_at).getTime() > new Date(c.last_agent_message_at).getTime()
+      );
+
+      const signal = (pendingByStatus || pendingByTimestamps) ? Math.max(unread, 1) : unread;
+      if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
+    }
+
+    setUnreadByContact(map);
   }, [tenant]);
 
   useEffect(() => { loadUnreads(); }, [loadUnreads]);
 
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
+
+    let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = setTimeout(() => {
+        loadOpps();
+        loadUnreads();
+      }, 700);
+    };
+
     const channel = supabase
       .channel('pipeline-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => loadOpps())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => { loadUnreads(); loadOpps(); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => loadOpps())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => {
+        loadOpps();
+        scheduleRefresh();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
+        loadUnreads();
+        scheduleRefresh();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => {
+        scheduleRefresh();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    return () => {
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
@@ -594,55 +629,50 @@ export default function PipelinePage() {
     setActiveId(null);
     const { active, over } = event;
     if (!over) return;
+
     const overId = over.id as string;
     const activeOpp = opportunities.find(o => o.id === active.id);
     if (!activeOpp) return;
 
-    if (overId.startsWith('stage-')) {
-      const stageId = overId.replace('stage-', '');
-      if (stageId !== activeOpp.stage_id) {
-        moveOpportunity(activeOpp.id, stageId);
-      }
-    } else {
-      const overOpp = opportunities.find(o => o.id === overId);
-      if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
-        // Cross-stage move
-        moveOpportunity(activeOpp.id, overOpp.stage_id);
-      } else if (overOpp && overOpp.stage_id === activeOpp.stage_id && overOpp.id !== activeOpp.id) {
-        // Same-stage reorder: swap updated_at to reflect new visual order
-        const stageOpps = opportunities
-          .filter(o => o.stage_id === activeOpp.stage_id)
-          .sort((a, b) => {
-            const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
-            const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
-            if (posA !== posB) return posA - posB;
-            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-          });
-        const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
-        const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
-        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-          // Reorder by assigning new position values
-          const reordered = [...stageOpps];
-          const [moved] = reordered.splice(oldIndex, 1);
-          reordered.splice(newIndex, 0, moved);
-          // Assign position values (lower = higher in list)
-          const updates = reordered.map((o, i) => ({ id: o.id, position: i }));
-          // Optimistic update
-          setOpportunities(prev => {
-            const next = [...prev];
-            for (const u of updates) {
-              const idx = next.findIndex(o => o.id === u.id);
-              if (idx !== -1) next[idx] = { ...next[idx], position: u.position };
-            }
-            return next;
-          });
-          // Persist
-          for (const u of updates) {
-            await supabase.from('opportunities').update({ position: u.position }).eq('id', u.id);
-          }
-        }
-      }
+    const overOpp = overId.startsWith('stage-') ? null : opportunities.find(o => o.id === overId);
+    const targetStageId = overId.startsWith('stage-')
+      ? overId.replace('stage-', '')
+      : overOpp?.stage_id;
+
+    if (!targetStageId) return;
+
+    if (targetStageId !== activeOpp.stage_id) {
+      await moveOpportunity(activeOpp.id, targetStageId);
+      return;
     }
+
+    const stageOpps = oppsByStage(activeOpp.stage_id);
+    const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
+    let newIndex = overOpp
+      ? stageOpps.findIndex(o => o.id === overOpp.id)
+      : stageOpps.length - 1;
+
+    if (oldIndex === -1) return;
+    if (newIndex === -1) newIndex = stageOpps.length - 1;
+    if (newIndex === oldIndex) return;
+
+    const reordered = arrayMove(stageOpps, oldIndex, newIndex);
+    const updates = reordered.map((o, index) => ({ id: o.id, position: index + 1 }));
+    const positionById = Object.fromEntries(updates.map(u => [u.id, u.position]));
+
+    setOpportunities(prev => prev.map(o => (
+      positionById[o.id] !== undefined
+        ? { ...o, position: positionById[o.id] as number }
+        : o
+    )));
+
+    await Promise.all(
+      updates.map(u =>
+        supabase.from('opportunities').update({ position: u.position }).eq('id', u.id)
+      )
+    );
+
+    loadOpps();
   };
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
@@ -818,7 +848,7 @@ export default function PipelinePage() {
 
       {/* Kanban */}
       <div className="flex-1 overflow-x-auto p-4 pt-0">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="flex gap-4 h-full min-w-max">
             {stages.map(stage => (
               <DroppableColumn key={stage.id} stage={stage} count={oppsByStage(stage.id).length}
