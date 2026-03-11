@@ -629,55 +629,50 @@ export default function PipelinePage() {
     setActiveId(null);
     const { active, over } = event;
     if (!over) return;
+
     const overId = over.id as string;
     const activeOpp = opportunities.find(o => o.id === active.id);
     if (!activeOpp) return;
 
-    if (overId.startsWith('stage-')) {
-      const stageId = overId.replace('stage-', '');
-      if (stageId !== activeOpp.stage_id) {
-        moveOpportunity(activeOpp.id, stageId);
-      }
-    } else {
-      const overOpp = opportunities.find(o => o.id === overId);
-      if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
-        // Cross-stage move
-        moveOpportunity(activeOpp.id, overOpp.stage_id);
-      } else if (overOpp && overOpp.stage_id === activeOpp.stage_id && overOpp.id !== activeOpp.id) {
-        // Same-stage reorder: swap updated_at to reflect new visual order
-        const stageOpps = opportunities
-          .filter(o => o.stage_id === activeOpp.stage_id)
-          .sort((a, b) => {
-            const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
-            const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
-            if (posA !== posB) return posA - posB;
-            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-          });
-        const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
-        const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
-        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-          // Reorder by assigning new position values
-          const reordered = [...stageOpps];
-          const [moved] = reordered.splice(oldIndex, 1);
-          reordered.splice(newIndex, 0, moved);
-          // Assign position values (lower = higher in list)
-          const updates = reordered.map((o, i) => ({ id: o.id, position: i }));
-          // Optimistic update
-          setOpportunities(prev => {
-            const next = [...prev];
-            for (const u of updates) {
-              const idx = next.findIndex(o => o.id === u.id);
-              if (idx !== -1) next[idx] = { ...next[idx], position: u.position };
-            }
-            return next;
-          });
-          // Persist
-          for (const u of updates) {
-            await supabase.from('opportunities').update({ position: u.position }).eq('id', u.id);
-          }
-        }
-      }
+    const overOpp = overId.startsWith('stage-') ? null : opportunities.find(o => o.id === overId);
+    const targetStageId = overId.startsWith('stage-')
+      ? overId.replace('stage-', '')
+      : overOpp?.stage_id;
+
+    if (!targetStageId) return;
+
+    if (targetStageId !== activeOpp.stage_id) {
+      await moveOpportunity(activeOpp.id, targetStageId);
+      return;
     }
+
+    const stageOpps = oppsByStage(activeOpp.stage_id);
+    const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
+    let newIndex = overOpp
+      ? stageOpps.findIndex(o => o.id === overOpp.id)
+      : stageOpps.length - 1;
+
+    if (oldIndex === -1) return;
+    if (newIndex === -1) newIndex = stageOpps.length - 1;
+    if (newIndex === oldIndex) return;
+
+    const reordered = arrayMove(stageOpps, oldIndex, newIndex);
+    const updates = reordered.map((o, index) => ({ id: o.id, position: index + 1 }));
+    const positionById = Object.fromEntries(updates.map(u => [u.id, u.position]));
+
+    setOpportunities(prev => prev.map(o => (
+      positionById[o.id] !== undefined
+        ? { ...o, position: positionById[o.id] as number }
+        : o
+    )));
+
+    await Promise.all(
+      updates.map(u =>
+        supabase.from('opportunities').update({ position: u.position }).eq('id', u.id)
+      )
+    );
+
+    loadOpps();
   };
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
