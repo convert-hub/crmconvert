@@ -447,7 +447,9 @@ export default function PipelinePage() {
 
   const loadOpps = useCallback(() => {
     if (!selectedPipeline || !tenant) return;
-    supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline).order('updated_at', { ascending: false })
+    supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline)
+      .order('position', { ascending: true })
+      .order('updated_at', { ascending: false })
       .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
   }, [selectedPipeline, tenant]);
 
@@ -526,18 +528,21 @@ export default function PipelinePage() {
     loadMsgCounts();
   }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
 
-  // Load unread counts per contact
+  // Load unread / pending-response signal per contact
   const loadUnreads = useCallback(() => {
     if (!tenant) return;
     supabase.from('conversations')
-      .select('contact_id, unread_count')
+      .select('contact_id, unread_count, status')
       .eq('tenant_id', tenant.id)
-      .gt('unread_count', 0)
       .in('status', ['open', 'waiting_customer', 'waiting_agent'])
       .then(({ data }) => {
         const map: Record<string, number> = {};
-        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null }[]) {
-          if (c.contact_id && c.unread_count) map[c.contact_id] = (map[c.contact_id] || 0) + c.unread_count;
+        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null; status: string }[]) {
+          if (!c.contact_id) continue;
+          const unread = c.unread_count || 0;
+          const pendingAgent = c.status === 'waiting_agent';
+          const signal = pendingAgent ? Math.max(unread, 1) : unread;
+          if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
         }
         setUnreadByContact(map);
       });
@@ -563,8 +568,9 @@ export default function PipelinePage() {
     const fromStageId = opp.stage_id;
     const stage = stages.find(s => s.id === newStageId);
     const newStatus = stage?.is_won ? 'won' : stage?.is_lost ? 'lost' : 'open';
-    setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any } : o));
-    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus }).eq('id', oppId);
+    const nowIso = new Date().toISOString();
+    setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any, position: 0, updated_at: nowIso } : o));
+    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus, position: 0, updated_at: nowIso }).eq('id', oppId);
 
     await supabase.rpc('enqueue_job', {
       _type: 'run_automations',
@@ -606,7 +612,12 @@ export default function PipelinePage() {
         // Same-stage reorder: swap updated_at to reflect new visual order
         const stageOpps = opportunities
           .filter(o => o.stage_id === activeOpp.stage_id)
-          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+          .sort((a, b) => {
+            const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
+            const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
+            if (posA !== posB) return posA - posB;
+            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+          });
         const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
         const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
         if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
@@ -685,7 +696,12 @@ export default function PipelinePage() {
 
   const oppsByStage = (stageId: string) => filteredOpportunities
     .filter(o => o.stage_id === stageId)
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    .sort((a, b) => {
+      const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
+      const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
+      if (posA !== posB) return posA - posB;
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
 
   // Determine the alert status for each card
