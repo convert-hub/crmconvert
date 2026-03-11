@@ -589,32 +589,59 @@ export default function PipelinePage() {
     if (!selectedPipeline || !tenant) return;
 
     let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleRefresh = () => {
+    let pollingTimer: ReturnType<typeof setInterval> | null = null;
+
+    const refreshAll = () => {
+      loadOpps();
+      loadUnreads();
+    };
+
+    const scheduleRefresh = (delay = 700) => {
       if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
       realtimeRefreshTimer = setTimeout(() => {
-        loadOpps();
-        loadUnreads();
-      }, 700);
+        refreshAll();
+      }, delay);
+    };
+
+    // Fallback contínuo para não depender de F5 se o websocket oscilar
+    pollingTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refreshAll();
+      }
+    }, 2000);
+
+    const handleForegroundRefresh = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleRefresh(120);
+      }
     };
 
     const channel = supabase
-      .channel('pipeline-updates')
+      .channel(`pipeline-updates-${tenant.id}-${selectedPipeline}-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => {
-        loadOpps();
-        scheduleRefresh();
+        scheduleRefresh(120);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        loadUnreads();
-        scheduleRefresh();
+        scheduleRefresh(120);
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        scheduleRefresh();
+        scheduleRefresh(120);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          scheduleRefresh(80);
+        }
+      });
+
+    window.addEventListener('focus', handleForegroundRefresh);
+    document.addEventListener('visibilitychange', handleForegroundRefresh);
 
     return () => {
       if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      if (pollingTimer) clearInterval(pollingTimer);
+      window.removeEventListener('focus', handleForegroundRefresh);
+      document.removeEventListener('visibilitychange', handleForegroundRefresh);
       supabase.removeChannel(channel);
     };
   }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
