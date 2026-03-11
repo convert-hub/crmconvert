@@ -528,18 +528,21 @@ export default function PipelinePage() {
     loadMsgCounts();
   }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
 
-  // Load unread counts per contact
+  // Load unread / pending-response signal per contact
   const loadUnreads = useCallback(() => {
     if (!tenant) return;
     supabase.from('conversations')
-      .select('contact_id, unread_count')
+      .select('contact_id, unread_count, status')
       .eq('tenant_id', tenant.id)
-      .gt('unread_count', 0)
       .in('status', ['open', 'waiting_customer', 'waiting_agent'])
       .then(({ data }) => {
         const map: Record<string, number> = {};
-        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null }[]) {
-          if (c.contact_id && c.unread_count) map[c.contact_id] = (map[c.contact_id] || 0) + c.unread_count;
+        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null; status: string }[]) {
+          if (!c.contact_id) continue;
+          const unread = c.unread_count || 0;
+          const pendingAgent = c.status === 'waiting_agent';
+          const signal = pendingAgent ? Math.max(unread, 1) : unread;
+          if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
         }
         setUnreadByContact(map);
       });
