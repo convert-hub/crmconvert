@@ -169,9 +169,10 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
           )}
           {opp.contact?.phone && (
             <div className="relative shrink-0">
-              <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+              <Button variant="ghost" size="icon"
+                className={`h-6 w-6 rounded-lg transition-opacity ${unreadCount > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                 onClick={onWhatsApp} title="Conversar no WhatsApp">
-                <MessageCircle className="h-3.5 w-3.5 text-primary" />
+                <MessageCircle className={`h-3.5 w-3.5 ${unreadCount > 0 ? 'text-destructive' : 'text-primary'}`} />
               </Button>
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground px-1 animate-pulse">
