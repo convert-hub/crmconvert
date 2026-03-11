@@ -169,9 +169,10 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
           )}
           {opp.contact?.phone && (
             <div className="relative shrink-0">
-              <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+              <Button variant="ghost" size="icon"
+                className={`h-6 w-6 rounded-lg transition-opacity ${unreadCount > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                 onClick={onWhatsApp} title="Conversar no WhatsApp">
-                <MessageCircle className="h-3.5 w-3.5 text-primary" />
+                <MessageCircle className={`h-3.5 w-3.5 ${unreadCount > 0 ? 'text-destructive' : 'text-primary'}`} />
               </Button>
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground px-1 animate-pulse">
@@ -583,7 +584,7 @@ export default function PipelinePage() {
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string);
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     setActiveId(null);
     const { active, over } = event;
     if (!over) return;
@@ -599,7 +600,36 @@ export default function PipelinePage() {
     } else {
       const overOpp = opportunities.find(o => o.id === overId);
       if (overOpp && overOpp.stage_id !== activeOpp.stage_id) {
+        // Cross-stage move
         moveOpportunity(activeOpp.id, overOpp.stage_id);
+      } else if (overOpp && overOpp.stage_id === activeOpp.stage_id && overOpp.id !== activeOpp.id) {
+        // Same-stage reorder: swap updated_at to reflect new visual order
+        const stageOpps = opportunities
+          .filter(o => o.stage_id === activeOpp.stage_id)
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+        const oldIndex = stageOpps.findIndex(o => o.id === activeOpp.id);
+        const newIndex = stageOpps.findIndex(o => o.id === overOpp.id);
+        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+          // Reorder by assigning new position values
+          const reordered = [...stageOpps];
+          const [moved] = reordered.splice(oldIndex, 1);
+          reordered.splice(newIndex, 0, moved);
+          // Assign position values (lower = higher in list)
+          const updates = reordered.map((o, i) => ({ id: o.id, position: i }));
+          // Optimistic update
+          setOpportunities(prev => {
+            const next = [...prev];
+            for (const u of updates) {
+              const idx = next.findIndex(o => o.id === u.id);
+              if (idx !== -1) next[idx] = { ...next[idx], position: u.position };
+            }
+            return next;
+          });
+          // Persist
+          for (const u of updates) {
+            await supabase.from('opportunities').update({ position: u.position }).eq('id', u.id);
+          }
+        }
       }
     }
   };
@@ -653,7 +683,9 @@ export default function PipelinePage() {
     toast.success('Oportunidade excluída');
   };
 
-  const oppsByStage = (stageId: string) => filteredOpportunities.filter(o => o.stage_id === stageId);
+  const oppsByStage = (stageId: string) => filteredOpportunities
+    .filter(o => o.stage_id === stageId)
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
 
   // Determine the alert status for each card
