@@ -529,37 +529,72 @@ export default function PipelinePage() {
   }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
 
   // Load unread / pending-response signal per contact
-  const loadUnreads = useCallback(() => {
+  const loadUnreads = useCallback(async () => {
     if (!tenant) return;
-    supabase.from('conversations')
-      .select('contact_id, unread_count, status')
+
+    const { data } = await supabase.from('conversations')
+      .select('contact_id, unread_count, status, last_customer_message_at, last_agent_message_at')
       .eq('tenant_id', tenant.id)
-      .in('status', ['open', 'waiting_customer', 'waiting_agent'])
-      .then(({ data }) => {
-        const map: Record<string, number> = {};
-        for (const c of (data ?? []) as { contact_id: string | null; unread_count: number | null; status: string }[]) {
-          if (!c.contact_id) continue;
-          const unread = c.unread_count || 0;
-          const pendingAgent = c.status === 'waiting_agent';
-          const signal = pendingAgent ? Math.max(unread, 1) : unread;
-          if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
-        }
-        setUnreadByContact(map);
-      });
+      .in('status', ['open', 'waiting_customer', 'waiting_agent']);
+
+    const map: Record<string, number> = {};
+    for (const c of (data ?? []) as {
+      contact_id: string | null;
+      unread_count: number | null;
+      status: string;
+      last_customer_message_at: string | null;
+      last_agent_message_at: string | null;
+    }[]) {
+      if (!c.contact_id) continue;
+
+      const unread = c.unread_count || 0;
+      const pendingByStatus = c.status === 'waiting_agent';
+      const pendingByTimestamps = !!c.last_customer_message_at && (
+        !c.last_agent_message_at ||
+        new Date(c.last_customer_message_at).getTime() > new Date(c.last_agent_message_at).getTime()
+      );
+
+      const signal = (pendingByStatus || pendingByTimestamps) ? Math.max(unread, 1) : unread;
+      if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
+    }
+
+    setUnreadByContact(map);
   }, [tenant]);
 
   useEffect(() => { loadUnreads(); }, [loadUnreads]);
 
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
+
+    let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = setTimeout(() => {
+        loadOpps();
+        loadUnreads();
+      }, 700);
+    };
+
     const channel = supabase
       .channel('pipeline-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => loadOpps())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => { loadUnreads(); loadOpps(); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => loadOpps())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => {
+        loadOpps();
+        scheduleRefresh();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
+        loadUnreads();
+        scheduleRefresh();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => {
+        scheduleRefresh();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    return () => {
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
