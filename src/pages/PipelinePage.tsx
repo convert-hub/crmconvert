@@ -683,7 +683,9 @@ export default function PipelinePage() {
     toast.success('Oportunidade excluída');
   };
 
-  const oppsByStage = (stageId: string) => filteredOpportunities.filter(o => o.stage_id === stageId);
+  const oppsByStage = (stageId: string) => filteredOpportunities
+    .filter(o => o.stage_id === stageId)
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
   const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
 
   // Determine the alert status for each card
