@@ -278,14 +278,14 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
 
   console.log(`webhook-uazapi: saved ${fromMe ? 'outbound' : 'inbound'} message for conversation ${conversation.id}`);
 
-  // Reset inactivity on any open opportunity for this contact
+  // Reset inactivity and bring open opportunities to top on message activity
   try {
     await supabase.from('opportunities')
-      .update({ updated_at: new Date().toISOString() })
+      .update({ updated_at: new Date().toISOString(), position: 0 })
       .eq('contact_id', contact.id)
       .eq('tenant_id', tenantId)
       .eq('status', 'open');
-    console.log(`webhook-uazapi: reset inactivity for contact ${contact.id} opportunities`);
+    console.log(`webhook-uazapi: reset inactivity and bumped opportunities for contact ${contact.id}`);
   } catch (e) {
     console.error('webhook-uazapi: failed to reset opportunity inactivity:', e);
   }
