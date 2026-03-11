@@ -271,6 +271,8 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     updates.status = 'waiting_agent';
   } else {
     updates.last_agent_message_at = new Date().toISOString();
+    updates.unread_count = 0;
+    updates.status = 'waiting_customer';
   }
   await supabase.from('conversations').update(updates).eq('id', conversation.id);
 
