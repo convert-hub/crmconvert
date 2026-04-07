@@ -13,6 +13,7 @@ interface KnowledgeDoc {
   name: string;
   mime_type: string | null;
   file_size: number | null;
+  storage_path: string | null;
   status: string;
   chunk_count: number;
   error: string | null;
