@@ -18,6 +18,7 @@ interface KnowledgeDoc {
   chunk_count: number;
   error: string | null;
   created_at: string;
+  category: string | null;
 }
 
 export default function KnowledgeBaseSettings() {
@@ -25,6 +26,7 @@ export default function KnowledgeBaseSettings() {
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [category, setCategory] = useState('');
 
   const isAdmin = role === 'admin' || role === 'manager';
 
@@ -100,6 +102,7 @@ export default function KnowledgeBaseSettings() {
           storage_path: storagePath,
           status: 'pending',
           created_by: membership?.id || null,
+          category: category.trim() || null,
         })
         .select()
         .single();
@@ -192,18 +195,27 @@ export default function KnowledgeBaseSettings() {
             </CardDescription>
           </div>
           {isAdmin && (
-            <div className="relative">
+            <div className="flex items-center gap-2">
               <input
-                type="file"
-                accept=".txt,.csv,.md,.json,.pdf,.docx"
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                onChange={handleUpload}
-                disabled={uploading}
+                type="text"
+                placeholder="Categoria / Procedimento"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="h-9 rounded-lg border border-input bg-background px-3 text-sm w-48 focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <Button className="rounded-xl" disabled={uploading}>
-                {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
-                Enviar Documento
-              </Button>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".txt,.csv,.md,.json,.pdf,.docx"
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  onChange={handleUpload}
+                  disabled={uploading}
+                />
+                <Button className="rounded-xl" disabled={uploading}>
+                  {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                  Enviar Documento
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -229,6 +241,7 @@ export default function KnowledgeBaseSettings() {
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Documento</TableHead>
+                  <TableHead>Categoria</TableHead>
                   <TableHead>Tamanho</TableHead>
                   <TableHead>Chunks</TableHead>
                   <TableHead>Status</TableHead>
@@ -244,6 +257,7 @@ export default function KnowledgeBaseSettings() {
                         <span className="font-medium text-foreground text-sm">{doc.name}</span>
                       </div>
                     </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{doc.category || '—'}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{formatSize(doc.file_size)}</TableCell>
                     <TableCell className="text-sm font-mono">{doc.chunk_count || '—'}</TableCell>
                     <TableCell>{statusBadge(doc.status, doc.error)}</TableCell>

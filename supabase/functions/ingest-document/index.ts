@@ -203,7 +203,8 @@ serve(async (req) => {
         content,
         embedding: JSON.stringify(embeddings[idx].embedding),
         chunk_index: i + idx,
-        metadata: { char_count: content.length },
+        document_name: doc.name,
+        metadata: { char_count: content.length, category: doc.category || null },
       }));
 
       const { error: insertErr } = await supabase.from("knowledge_chunks").insert(chunkRows);

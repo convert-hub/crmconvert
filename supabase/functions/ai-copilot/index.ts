@@ -149,8 +149,17 @@ serve(async (req) => {
             });
 
             if (chunks && chunks.length > 0) {
-              ragContext = "\n\n--- BASE DE CONHECIMENTO ---\nUse as informações abaixo como referência para responder:\n" +
-                chunks.map((c: any) => c.content).join("\n---\n");
+              const groups = new Map<string, string[]>();
+              for (const c of chunks as any[]) {
+                const key = c.document_name || c.category || "Geral";
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push(c.content);
+              }
+              ragContext = "\n\n--- BASE DE CONHECIMENTO ---\nInformações organizadas por procedimento:\n\n";
+              for (const [name, contents] of groups) {
+                ragContext += `Procedimento: ${name}\n${contents.join("\n---\n")}\n\n`;
+              }
+              ragContext += "INSTRUÇÃO: Identifique sobre qual procedimento o lead pergunta e responda APENAS com informações do procedimento correto. Se não houver na base, diga que vai verificar com a equipe.";
             }
           }
         }
