@@ -860,6 +860,7 @@ export type Database = {
           content: string
           created_at: string
           document_id: string
+          document_name: string | null
           embedding: string | null
           id: string
           metadata: Json | null
@@ -870,6 +871,7 @@ export type Database = {
           content: string
           created_at?: string
           document_id: string
+          document_name?: string | null
           embedding?: string | null
           id?: string
           metadata?: Json | null
@@ -880,6 +882,7 @@ export type Database = {
           content?: string
           created_at?: string
           document_id?: string
+          document_name?: string | null
           embedding?: string | null
           id?: string
           metadata?: Json | null
@@ -904,6 +907,7 @@ export type Database = {
       }
       knowledge_documents: {
         Row: {
+          category: string | null
           chunk_count: number | null
           created_at: string
           created_by: string | null
@@ -918,6 +922,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          category?: string | null
           chunk_count?: number | null
           created_at?: string
           created_by?: string | null
@@ -932,6 +937,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          category?: string | null
           chunk_count?: number | null
           created_at?: string
           created_by?: string | null
@@ -1802,20 +1808,38 @@ export type Database = {
       is_admin_or_manager: { Args: { _tenant_id: string }; Returns: boolean }
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       is_saas_admin: { Args: never; Returns: boolean }
-      search_knowledge: {
-        Args: {
-          _match_count?: number
-          _match_threshold?: number
-          _query_embedding: string
-          _tenant_id: string
-        }
-        Returns: {
-          content: string
-          document_id: string
-          id: string
-          similarity: number
-        }[]
-      }
+      search_knowledge:
+        | {
+            Args: {
+              _match_count?: number
+              _match_threshold?: number
+              _query_embedding: string
+              _tenant_id: string
+            }
+            Returns: {
+              content: string
+              document_id: string
+              id: string
+              similarity: number
+            }[]
+          }
+        | {
+            Args: {
+              _category?: string
+              _match_count?: number
+              _match_threshold?: number
+              _query_embedding: string
+              _tenant_id: string
+            }
+            Returns: {
+              category: string
+              content: string
+              document_id: string
+              document_name: string
+              id: string
+              similarity: number
+            }[]
+          }
     }
     Enums: {
       activity_type:
