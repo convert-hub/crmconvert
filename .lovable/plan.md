@@ -1,37 +1,38 @@
 
 
-## Plano: Corrigir extração de PDF e adicionar botão Reprocessar
+## Plano: Mover extração de PDF para o servidor e simplificar o frontend
 
 ### Problema
-O `ingest-document` usa `fileData.text()` + regex para PDFs, o que não funciona para PDFs binários comprimidos. O documento fica preso em "Processando" e causa `Memory limit exceeded`.
+O `pdfjs-dist` no browser falha silenciosamente e o `EdgeRuntime.waitUntil()` causa `Memory limit exceeded` porque o processamento continua após o request encerrar, sem controle de recursos. O documento fica preso em "Processando".
 
 ### Mudanças
 
-#### 1. `supabase/functions/ingest-document/index.ts`
+#### 1. `supabase/functions/ingest-document/index.ts` — Reescrever
 
-- Adicionar `import pdf from "https://esm.sh/pdf-parse@1.1.1";` no topo
-- Substituir o bloco de extração de texto (linhas 44-75) por:
-  - Para `text/plain`, `text/csv`, `text/markdown`, `application/json`: manter `fileData.text()` como está
-  - Para PDFs (`mime.includes("pdf")`): usar `pdf-parse` com `arrayBuffer()` → `Uint8Array` → `pdf(uint8)` → `pdfResult.text`, com try/catch dedicado e fallback para regex
-  - Para outros tipos: manter fallback com `fileData.text()` + limpeza de caracteres
-- Adicionar `console.log` em pontos-chave: início do processamento, tamanho do texto extraído, quantidade de chunks, cada batch de embeddings
-- No `catch` geral, garantir `console.error` detalhado + atualização de status para "error"
-- Antes de processar, limpar chunks antigos do mesmo documento (para suportar reprocessamento): `DELETE FROM knowledge_chunks WHERE document_id = X`
+- Importar `pdf-parse` via `https://esm.sh/pdf-parse@1.1.1/lib/pdf-parse.js`
+- `extractTextFromStorage`: para PDFs, ler como `arrayBuffer()` → `Uint8Array` → `pdf(uint8)` → `result.text`, com try/catch (retorna string vazia se falhar)
+- `processDocument`: remover parâmetro `preExtractedText`. Sempre extrair do arquivo no storage
+- Handler `serve()`: body aceita apenas `document_id` e `tenant_id`
+- Remover `EdgeRuntime.waitUntil()` — processar de forma síncrona dentro do request
+- Batch de embeddings reduzido para 3 chunks por vez
+- `console.log` em cada etapa (início, texto extraído, chunks, batches, conclusão)
+- Todos os pontos de erro atualizam status para "error" com mensagem descritiva
 
-#### 2. `src/components/settings/KnowledgeBaseSettings.tsx`
+#### 2. `src/components/settings/KnowledgeBaseSettings.tsx` — Simplificar
 
-- Adicionar interface `updated_at` ao tipo `KnowledgeDoc`
-- Criar função `reprocessDocument(doc)` que:
-  - Deleta chunks existentes do documento
-  - Reseta status para "pending" e chunk_count para 0
-  - Chama a edge function `ingest-document` com `document_id` e `tenant_id`
-- Criar helper `isStuckProcessing(doc)`: retorna `true` se status é "processing" e `updated_at` é > 2 minutos atrás
-- Na coluna de ações da tabela, ao lado do botão de deletar, mostrar botão "Reprocessar" (ícone `RefreshCw`) quando `isStuckProcessing(doc)` ou status é "error"
+- Remover função `extractPdfTextInBrowser` e import de `pdfjs-dist`
+- `handleUpload`: remover extração de PDF no browser. Apenas upload → insert → chamar edge function com `{document_id, tenant_id}`
+- `callIngestFunction`: remover parâmetro `extractedText`, body só com `document_id` e `tenant_id`
+- `reprocessDocument`: remover lógica de re-download e extração. Apenas resetar status + chamar `callIngestFunction`
+- Manter todo o resto (UI, listagem, delete, status, botão reprocessar)
+
+#### 3. `package.json` — Remover `pdfjs-dist`
 
 ### Arquivos alterados
 
 | Arquivo | Alteração |
 |---|---|
-| `supabase/functions/ingest-document/index.ts` | PDF via pdf-parse, logs, limpeza de chunks antigos |
-| `src/components/settings/KnowledgeBaseSettings.tsx` | Botão reprocessar para docs stuck/error |
+| `supabase/functions/ingest-document/index.ts` | Reescrito: PDF via pdf-parse no servidor, síncrono, sem waitUntil |
+| `src/components/settings/KnowledgeBaseSettings.tsx` | Removida extração client-side, simplificado upload e reprocessamento |
+| `package.json` | Removido `pdfjs-dist` |
 
