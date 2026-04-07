@@ -834,7 +834,34 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
   }
 
   const history = await getConversationHistory(conversation.id);
-  const systemPrompt = template.content;
+
+  // Fetch opportunity context for variable substitution
+  const { data: opp } = await supabase.from('opportunities')
+    .select('title, value, priority, status, next_action, stage:stages(name)')
+    .eq('tenant_id', tenantId)
+    .eq('contact_id', contact.id)
+    .eq('status', 'open')
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  const oppData = opp?.[0];
+  const oppContext = oppData
+    ? `Oportunidade: "${oppData.title}" — Valor: R$${oppData.value} — Prioridade: ${oppData.priority} — Etapa: ${oppData.stage?.name || "?"}.${oppData.next_action ? ` Próxima ação: ${oppData.next_action}` : ""}`
+    : 'Nenhuma oportunidade aberta';
+
+  // Apply variable substitution like ai-copilot does
+  let systemPrompt = template.content
+    .replace(/\{\{contact_name\}\}/gi, contact?.name || 'Cliente')
+    .replace(/\{\{contact_status\}\}/gi, contact?.status || 'desconhecido')
+    .replace(/\{\{contact_tags\}\}/gi, (contact?.tags || []).join(', ') || 'nenhuma')
+    .replace(/\{\{contact_notes\}\}/gi, contact?.notes || '')
+    .replace(/\{\{channel\}\}/gi, conversation?.channel || 'whatsapp')
+    .replace(/\{\{conversation_status\}\}/gi, conversation?.status || 'aberto')
+    .replace(/\{\{opportunity_context\}\}/gi, oppContext);
+
+  // Append forbidden terms if configured
+  if (template.forbidden_terms?.length) {
+    systemPrompt += `\n\nTermos proibidos (NUNCA use): ${template.forbidden_terms.join(', ')}`;
+  }
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -913,8 +940,12 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
 
     await logAiCall(tenantId, 'qualification', config.model, config.provider, result.tokens, result.duration, { history_length: history.length }, qualification, null);
 
-    if (qualification?.qualified && qualification.confidence >= 0.7) {
-      console.log(`[Worker] Lead ${contact.id} QUALIFIED - handing off to human`);
+    // Use tenant's configurable threshold instead of hardcoded 0.7
+    const { data: tenantData } = await supabase.from('tenants').select('ai_confidence_threshold').eq('id', tenantId).single();
+    const threshold = tenantData?.ai_confidence_threshold ?? 0.7;
+
+    if (qualification?.qualified && qualification.confidence >= threshold) {
+      console.log(`[Worker] Lead ${contact.id} QUALIFIED (confidence ${qualification.confidence} >= threshold ${threshold}) - handing off to human`);
 
       await supabase.from('contacts').update({ status: 'customer' }).eq('id', contact.id);
 

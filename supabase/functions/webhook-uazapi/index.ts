@@ -323,16 +323,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     })();
   }
 
-  // Keyword-based lead creation for inbound messages
-  if (!fromMe && text) {
-    try {
-      await checkKeywordLeadCreation(supabase, tenantId, contact.id, conversation.id, text, contact.name);
-    } catch (e) {
-      console.error('webhook-uazapi: keyword lead creation error:', e);
-    }
-  }
-
-  // Enqueue AI processing for inbound messages
+  // Enqueue AI processing for inbound messages (worker handles keyword lead creation + AI reply)
   if (!fromMe) {
     try {
       await supabase.rpc('enqueue_job', {
@@ -418,61 +409,3 @@ async function handleConnectionEvent(supabase: any, tenantId: string, body: any)
   }
 }
 
-function removeAccents(str: string): string {
-  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-async function checkKeywordLeadCreation(supabase: any, tenantId: string, contactId: string, conversationId: string, messageText: string, contactName: string) {
-  // 1. Check contact status
-  const { data: contact } = await supabase.from('contacts').select('id, name, status').eq('id', contactId).single();
-  if (!contact || contact.status !== 'lead') return;
-
-  // 2. Get tenant keywords
-  const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
-  const keywords = (tenant?.settings as any)?.lead_keywords || [];
-  if (keywords.length === 0) return;
-
-  // 3. Normalize and match
-  const normalizedMessage = removeAccents(messageText.toLowerCase());
-  const matchedKeyword = keywords.find((k: string) => normalizedMessage.includes(removeAccents(k.toLowerCase())));
-  if (!matchedKeyword) return;
-
-  console.log(`webhook-uazapi: keyword match "${matchedKeyword}" for contact ${contactId}`);
-
-  // 4. Check if open opportunity already exists
-  const { data: existingOpps } = await supabase.from('opportunities')
-    .select('id').eq('contact_id', contactId).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
-  if (existingOpps && existingOpps.length > 0) {
-    console.log(`webhook-uazapi: open opportunity already exists for contact ${contactId}, skipping`);
-    return;
-  }
-
-  // 5. Get default pipeline and first stage
-  const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenantId).eq('is_default', true).single();
-  if (!pipeline) { console.log('webhook-uazapi: no default pipeline found'); return; }
-
-  const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-  if (!stage) { console.log('webhook-uazapi: no stages in default pipeline'); return; }
-
-  // 6. Create opportunity
-  await supabase.from('opportunities').insert({
-    tenant_id: tenantId,
-    contact_id: contactId,
-    pipeline_id: pipeline.id,
-    stage_id: stage.id,
-    title: `Lead: ${contact.name || contactName}`,
-    source: 'whatsapp_keyword',
-  });
-
-  // 7. Create notification activity
-  await supabase.from('activities').insert({
-    tenant_id: tenantId,
-    type: 'note',
-    title: 'Lead acionado por palavra-chave',
-    description: `Palavra-chave detectada: "${matchedKeyword}". Mensagem: "${messageText.substring(0, 200)}"`,
-    contact_id: contactId,
-    conversation_id: conversationId,
-  });
-
-  console.log(`webhook-uazapi: created opportunity and activity for contact ${contactId} via keyword "${matchedKeyword}"`);
-}
