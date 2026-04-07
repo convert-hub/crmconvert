@@ -28,6 +28,28 @@ const isStuckProcessing = (doc: KnowledgeDoc) => {
   return Date.now() - updatedAt > 2 * 60 * 1000;
 };
 
+async function extractPdfTextInBrowser(file: File): Promise<string> {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+  
+  const pages: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(' ');
+    if (pageText.trim()) {
+      pages.push(pageText);
+    }
+  }
+  
+  return pages.join('\n\n');
+}
+
 export default function KnowledgeBaseSettings() {
   const { tenant, role } = useAuth();
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
@@ -58,34 +80,48 @@ export default function KnowledgeBaseSettings() {
     return () => clearInterval(interval);
   }, [documents, loadDocuments]);
 
+  const callIngestFunction = async (documentId: string, tenantId: string, extractedText?: string) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const body: any = { document_id: documentId, tenant_id: tenantId };
+    if (extractedText) body.extracted_text = extractedText;
+
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest-document`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Erro desconhecido' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+  };
+
   const reprocessDocument = async (doc: KnowledgeDoc) => {
     if (!tenant) return;
     setReprocessingId(doc.id);
     try {
-      // Delete old chunks
       await supabase.from('knowledge_chunks' as any).delete().eq('document_id', doc.id);
-      // Reset status
       await supabase.from('knowledge_documents' as any).update({ status: 'pending', chunk_count: 0, error: null }).eq('id', doc.id);
       loadDocuments();
 
-      // Trigger ingestion
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest-document`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
-        body: JSON.stringify({ document_id: doc.id, tenant_id: tenant.id }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        toast.error(err.error || 'Erro ao reprocessar documento');
-      } else {
-        toast.success('Reprocessamento iniciado!');
+      // For PDFs, re-download and extract client-side
+      let extractedText: string | undefined;
+      if (doc.mime_type?.includes('pdf') && doc.storage_path) {
+        toast.info('Extraindo texto do PDF...');
+        const { data: fileData } = await supabase.storage.from('crm-files').download(doc.storage_path);
+        if (fileData) {
+          const file = new File([fileData], doc.name, { type: doc.mime_type });
+          extractedText = await extractPdfTextInBrowser(file);
+        }
       }
+
+      await callIngestFunction(doc.id, tenant.id, extractedText);
+      toast.success('Reprocessamento iniciado!');
       loadDocuments();
     } catch (err: any) {
       toast.error(err.message || 'Erro ao reprocessar');
@@ -118,6 +154,15 @@ export default function KnowledgeBaseSettings() {
 
     setUploading(true);
     try {
+      // Extract PDF text client-side before uploading
+      let extractedText: string | undefined;
+      const isPdf = file.type.includes('pdf') || ext === 'pdf';
+      if (isPdf) {
+        toast.info('Extraindo texto do PDF...');
+        extractedText = await extractPdfTextInBrowser(file);
+        console.log(`[KB] PDF text extracted: ${extractedText.length} chars`);
+      }
+
       const storagePath = `${tenant.id}/knowledge/${Date.now()}_${file.name}`;
       const { error: uploadErr } = await supabase.storage
         .from('crm-files')
@@ -153,25 +198,7 @@ export default function KnowledgeBaseSettings() {
       toast.success('Arquivo enviado! Processando...');
       loadDocuments();
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest-document`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
-        body: JSON.stringify({
-          document_id: (doc as any).id,
-          tenant_id: tenant.id,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        toast.error(err.error || 'Erro ao processar documento');
-      }
-
+      await callIngestFunction((doc as any).id, tenant.id, extractedText);
       loadDocuments();
     } catch (err: any) {
       toast.error(err.message || 'Erro ao enviar arquivo');
