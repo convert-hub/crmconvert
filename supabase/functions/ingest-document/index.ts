@@ -59,16 +59,16 @@ async function processDocument(document_id: string, tenant_id: string) {
     } else if (mime.includes("application/json")) {
       text = await fileData.text();
     } else if (mime.includes("pdf")) {
-      // Use pdf-parse for proper PDF text extraction
+      // Use unpdf for proper PDF text extraction
       try {
-        console.log("[ingest] Extracting text from PDF using pdf-parse...");
+        console.log("[ingest] Extracting text from PDF using unpdf...");
         const arrayBuffer = await fileData.arrayBuffer();
         const uint8 = new Uint8Array(arrayBuffer);
-        const pdfResult = await pdf(uint8);
+        const pdfResult = await extractText(uint8);
         text = pdfResult.text || "";
-        console.log(`[ingest] pdf-parse extracted ${text.length} characters`);
+        console.log(`[ingest] unpdf extracted ${text.length} characters`);
       } catch (pdfErr) {
-        console.warn("[ingest] pdf-parse failed, trying regex fallback:", pdfErr);
+        console.warn("[ingest] unpdf failed, trying regex fallback:", pdfErr);
         try {
           const rawText = await fileData.text();
           const readable = rawText.match(/[\x20-\x7E\xC0-\xFF]{20,}/g);
