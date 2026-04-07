@@ -114,7 +114,10 @@ serve(async (req) => {
       ? `Oportunidade: "${(opp as any).title}" — Valor: R$${(opp as any).value} — Prioridade: ${(opp as any).priority} — Etapa: ${(opp as any).stage?.name || "?"}.${(opp as any).next_action ? ` Próxima ação: ${(opp as any).next_action}` : ""}`
       : "";
 
-    // 6. RAG - Search knowledge base for relevant context
+    // 6. Build reversed messages array
+    const reversed = (messages || []).reverse();
+
+    // 6b. RAG - Search knowledge base for relevant context
     let ragContext = "";
     const lastUserMessage = reversed.filter((m: any) => m.direction === "inbound").pop();
     if (lastUserMessage?.content) {
