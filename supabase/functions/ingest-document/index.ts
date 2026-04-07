@@ -6,22 +6,17 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+function getSupabase() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+}
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+async function processDocument(document_id: string, tenant_id: string) {
+  const supabase = getSupabase();
 
   try {
-    const { document_id, tenant_id } = await req.json();
-    if (!document_id || !tenant_id) {
-      return new Response(JSON.stringify({ error: "Missing document_id or tenant_id" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get document
     const { data: doc, error: docErr } = await supabase
       .from("knowledge_documents")
       .select("*")
@@ -30,46 +25,36 @@ serve(async (req) => {
       .single();
 
     if (docErr || !doc) {
-      return new Response(JSON.stringify({ error: "Document not found" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      console.error("Document not found:", docErr);
+      return;
     }
 
-    // Update status to processing
     await supabase.from("knowledge_documents").update({ status: "processing" }).eq("id", document_id);
 
-    // Download file from storage
+    // Download file
     const { data: fileData, error: dlErr } = await supabase.storage
       .from("crm-files")
       .download(doc.storage_path);
 
     if (dlErr || !fileData) {
       await supabase.from("knowledge_documents").update({ status: "error", error: "Failed to download file" }).eq("id", document_id);
-      return new Response(JSON.stringify({ error: "Failed to download file" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return;
     }
 
-    // Extract text based on mime type
+    // Extract text
     let text = "";
     const mime = doc.mime_type || "";
 
     if (mime.includes("text/plain") || mime.includes("text/csv") || mime.includes("text/markdown")) {
       text = await fileData.text();
     } else if (mime.includes("application/json")) {
-      const json = await fileData.text();
-      text = json;
+      text = await fileData.text();
     } else {
-      // For PDF, DOCX etc - extract raw text
-      // Simple approach: read as text, filter binary noise
       try {
         const rawText = await fileData.text();
-        // Try to extract readable content from PDF
         if (mime.includes("pdf")) {
-          // Extract text between stream/endstream or readable sequences
           const readable = rawText.match(/[\x20-\x7E\xC0-\xFF]{20,}/g);
           text = readable ? readable.join("\n") : "";
-          // Also try BT/ET text blocks
           const btBlocks = rawText.match(/BT[\s\S]*?ET/g);
           if (btBlocks) {
             const extracted = btBlocks
@@ -90,16 +75,14 @@ serve(async (req) => {
     }
 
     if (!text || text.trim().length < 10) {
-      await supabase.from("knowledge_documents").update({ 
-        status: "error", 
-        error: "Não foi possível extrair texto do documento. Use arquivos .txt, .csv ou .md para melhores resultados." 
+      await supabase.from("knowledge_documents").update({
+        status: "error",
+        error: "Não foi possível extrair texto do documento. Use arquivos .txt, .csv ou .md para melhores resultados."
       }).eq("id", document_id);
-      return new Response(JSON.stringify({ error: "Could not extract text" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return;
     }
 
-    // Chunk the text (500-1000 tokens ~ 2000-4000 chars with overlap)
+    // Chunk text
     const CHUNK_SIZE = 2000;
     const CHUNK_OVERLAP = 200;
     const chunks: string[] = [];
@@ -108,8 +91,7 @@ serve(async (req) => {
     while (start < text.length) {
       const end = Math.min(start + CHUNK_SIZE, text.length);
       let chunk = text.slice(start, end);
-      
-      // Try to break at sentence boundary
+
       if (end < text.length) {
         const lastPeriod = chunk.lastIndexOf(".");
         const lastNewline = chunk.lastIndexOf("\n");
@@ -122,21 +104,18 @@ serve(async (req) => {
       if (chunk.trim().length > 20) {
         chunks.push(chunk.trim());
       }
-      
+
       start += chunk.length - CHUNK_OVERLAP;
       if (start <= 0 && chunks.length > 0) break;
     }
 
     if (chunks.length === 0) {
       await supabase.from("knowledge_documents").update({ status: "error", error: "Nenhum chunk gerado" }).eq("id", document_id);
-      return new Response(JSON.stringify({ error: "No chunks generated" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return;
     }
 
-    // Get OpenAI API key for embeddings
+    // Get API key
     let apiKey: string | null = null;
-    
     const { data: aiConfig } = await supabase
       .from("ai_configs")
       .select("*, global_api_key:global_api_keys(*)")
@@ -152,22 +131,20 @@ serve(async (req) => {
     }
 
     if (!apiKey) {
-      await supabase.from("knowledge_documents").update({ 
-        status: "error", 
-        error: "Chave de API OpenAI não configurada. Configure nas configurações de IA." 
+      await supabase.from("knowledge_documents").update({
+        status: "error",
+        error: "Chave de API OpenAI não configurada."
       }).eq("id", document_id);
-      return new Response(JSON.stringify({ error: "No OpenAI API key" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return;
     }
 
-    // Generate embeddings in batches
-    const BATCH_SIZE = 20;
+    // Generate embeddings in small batches
+    const BATCH_SIZE = 5;
     let totalChunksInserted = 0;
 
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
       const batch = chunks.slice(i, i + BATCH_SIZE);
-      
+
       const embResponse = await fetch("https://api.openai.com/v1/embeddings", {
         method: "POST",
         headers: {
@@ -184,24 +161,20 @@ serve(async (req) => {
       if (!embResponse.ok) {
         const errText = await embResponse.text();
         console.error("Embeddings error:", errText);
-        await supabase.from("knowledge_documents").update({ 
-          status: "error", 
-          error: `Erro ao gerar embeddings: ${embResponse.status}` 
+        await supabase.from("knowledge_documents").update({
+          status: "error",
+          error: `Erro ao gerar embeddings: ${embResponse.status}`
         }).eq("id", document_id);
-        return new Response(JSON.stringify({ error: "Embeddings failed" }), {
-          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return;
       }
 
       const embResult = await embResponse.json();
-      const embeddings = embResult.data;
 
-      // Insert chunks with embeddings
       const chunkRows = batch.map((content, idx) => ({
         tenant_id,
         document_id,
         content,
-        embedding: JSON.stringify(embeddings[idx].embedding),
+        embedding: JSON.stringify(embResult.data[idx].embedding),
         chunk_index: i + idx,
         document_name: doc.name,
         metadata: { char_count: content.length, category: doc.category || null },
@@ -210,32 +183,49 @@ serve(async (req) => {
       const { error: insertErr } = await supabase.from("knowledge_chunks").insert(chunkRows);
       if (insertErr) {
         console.error("Insert chunks error:", insertErr);
-        await supabase.from("knowledge_documents").update({ 
-          status: "error", 
-          error: "Erro ao salvar chunks: " + insertErr.message 
+        await supabase.from("knowledge_documents").update({
+          status: "error",
+          error: "Erro ao salvar chunks: " + insertErr.message
         }).eq("id", document_id);
-        return new Response(JSON.stringify({ error: "Insert failed" }), {
-          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return;
       }
 
       totalChunksInserted += batch.length;
     }
 
-    // Update document as completed
-    await supabase.from("knowledge_documents").update({ 
-      status: "completed", 
-      chunk_count: totalChunksInserted 
+    await supabase.from("knowledge_documents").update({
+      status: "completed",
+      chunk_count: totalChunksInserted
     }).eq("id", document_id);
 
-    return new Response(JSON.stringify({ 
-      success: true, 
-      chunks: totalChunksInserted,
-      document_id 
-    }), {
+    console.log(`Document ${document_id} processed: ${totalChunksInserted} chunks`);
+  } catch (e) {
+    console.error("processDocument error:", e);
+    const supabase2 = getSupabase();
+    await supabase2.from("knowledge_documents").update({
+      status: "error",
+      error: e instanceof Error ? e.message : "Unknown error"
+    }).eq("id", document_id);
+  }
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  try {
+    const { document_id, tenant_id } = await req.json();
+    if (!document_id || !tenant_id) {
+      return new Response(JSON.stringify({ error: "Missing document_id or tenant_id" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Fire and forget — process in background
+    EdgeRuntime.waitUntil(processDocument(document_id, tenant_id));
+
+    return new Response(JSON.stringify({ success: true, message: "Processing started", document_id }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-
   } catch (e) {
     console.error("ingest-document error:", e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
