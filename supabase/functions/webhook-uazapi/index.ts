@@ -323,16 +323,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     })();
   }
 
-  // Keyword-based lead creation for inbound messages
-  if (!fromMe && text) {
-    try {
-      await checkKeywordLeadCreation(supabase, tenantId, contact.id, conversation.id, text, contact.name);
-    } catch (e) {
-      console.error('webhook-uazapi: keyword lead creation error:', e);
-    }
-  }
-
-  // Enqueue AI processing for inbound messages
+  // Enqueue AI processing for inbound messages (worker handles keyword lead creation + AI reply)
   if (!fromMe) {
     try {
       await supabase.rpc('enqueue_job', {
