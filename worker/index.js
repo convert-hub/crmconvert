@@ -835,6 +835,35 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
 
   const history = await getConversationHistory(conversation.id);
 
+  // RAG - Search knowledge base for relevant context
+  let ragContext = "";
+  try {
+    const embResponse = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: incomingMessage, dimensions: 1536 }),
+    });
+
+    if (embResponse.ok) {
+      const embResult = await embResponse.json();
+      const queryEmbedding = embResult.data?.[0]?.embedding;
+      if (queryEmbedding) {
+        const { data: chunks } = await supabase.rpc('search_knowledge', {
+          _tenant_id: tenantId,
+          _query_embedding: JSON.stringify(queryEmbedding),
+          _match_count: 5,
+          _match_threshold: 0.5,
+        });
+        if (chunks && chunks.length > 0) {
+          ragContext = "\n\n--- BASE DE CONHECIMENTO ---\nUse as informações abaixo como referência para responder:\n" +
+            chunks.map(c => c.content).join("\n---\n");
+        }
+      }
+    }
+  } catch (ragErr) {
+    console.error('[Worker] RAG search error:', ragErr.message);
+  }
+
   // Fetch opportunity context for variable substitution
   const { data: opp } = await supabase.from('opportunities')
     .select('title, value, priority, status, next_action, stage:stages(name)')
@@ -861,6 +890,11 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
   // Append forbidden terms if configured
   if (template.forbidden_terms?.length) {
     systemPrompt += `\n\nTermos proibidos (NUNCA use): ${template.forbidden_terms.join(', ')}`;
+  }
+
+  // Append RAG context
+  if (ragContext) {
+    systemPrompt += ragContext;
   }
 
   const messages = [
