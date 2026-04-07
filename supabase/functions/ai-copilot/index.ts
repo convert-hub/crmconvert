@@ -197,7 +197,12 @@ Regras:
 - Se for uma saudação, retorne uma saudação cordial.`;
     }
 
-    // 8. Call OpenAI API
+    // Append RAG context if available
+    if (ragContext) {
+      systemPrompt += ragContext;
+    }
+
+    // 9. Call OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
