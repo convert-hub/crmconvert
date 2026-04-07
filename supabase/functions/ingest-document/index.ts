@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import pdf from "https://esm.sh/pdf-parse@1.1.1/lib/pdf-parse.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,28 +15,56 @@ function getSupabase() {
 }
 
 async function extractTextFromStorage(supabase: any, storagePath: string, mime: string): Promise<string> {
+  console.log(`[ingest] Downloading file from storage: ${storagePath}`);
   const { data: fileData, error: dlErr } = await supabase.storage
     .from("crm-files")
     .download(storagePath);
 
   if (dlErr || !fileData) {
-    throw new Error("Failed to download file");
+    throw new Error(`Failed to download file: ${dlErr?.message || "no data"}`);
   }
 
+  console.log(`[ingest] File downloaded, MIME: ${mime}, size: ${fileData.size}`);
+
+  // PDF extraction via pdf-parse
+  if (mime.includes("pdf")) {
+    try {
+      console.log("[ingest] Extracting text from PDF via pdf-parse...");
+      const arrayBuffer = await fileData.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuffer);
+      const result = await pdf(uint8);
+      const text = result.text || "";
+      console.log(`[ingest] PDF extracted: ${text.length} chars, ${result.numpages} pages`);
+      return text;
+    } catch (pdfErr) {
+      console.error("[ingest] pdf-parse failed:", pdfErr instanceof Error ? pdfErr.message : pdfErr);
+      return "";
+    }
+  }
+
+  // Text-based files
   if (mime.includes("text/plain") || mime.includes("text/csv") || mime.includes("text/markdown") || mime.includes("application/json")) {
-    return await fileData.text();
+    const text = await fileData.text();
+    console.log(`[ingest] Text file extracted: ${text.length} chars`);
+    return text;
   }
 
-  // Fallback for other types
-  const rawText = await fileData.text();
-  return rawText.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s{3,}/g, "\n");
+  // Fallback: try reading as text
+  try {
+    const rawText = await fileData.text();
+    const cleaned = rawText.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s{3,}/g, "\n");
+    console.log(`[ingest] Fallback text extraction: ${cleaned.length} chars`);
+    return cleaned;
+  } catch {
+    return "";
+  }
 }
 
-async function processDocument(document_id: string, tenant_id: string, preExtractedText?: string) {
+async function processDocument(document_id: string, tenant_id: string) {
   const supabase = getSupabase();
 
   try {
-    console.log(`[ingest] Starting processing for document ${document_id}`);
+    console.log(`[ingest] === START processing document ${document_id} ===`);
 
     const { data: doc, error: docErr } = await supabase
       .from("knowledge_documents")
@@ -46,29 +75,28 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
 
     if (docErr || !doc) {
       console.error("[ingest] Document not found:", docErr);
-      return;
+      await supabase.from("knowledge_documents").update({ status: "error", error: "Documento não encontrado" }).eq("id", document_id);
+      return { success: false, error: "Document not found" };
     }
 
     await supabase.from("knowledge_documents").update({ status: "processing" }).eq("id", document_id);
 
-    // Clean up old chunks for reprocessing
+    // Clean up old chunks
     console.log(`[ingest] Deleting old chunks for document ${document_id}`);
     await supabase.from("knowledge_chunks").delete().eq("document_id", document_id);
 
-    // Get text - either pre-extracted (PDF from client) or from file
+    // Extract text from file
+    const mime = doc.mime_type || "";
     let text = "";
-    if (preExtractedText && preExtractedText.length > 0) {
-      text = preExtractedText;
-      console.log(`[ingest] Using pre-extracted text: ${text.length} characters`);
-    } else {
-      const mime = doc.mime_type || "";
-      console.log(`[ingest] Extracting text from file, MIME: ${mime}, size: ${doc.file_size}`);
-      try {
-        text = await extractTextFromStorage(supabase, doc.storage_path, mime);
-      } catch (e) {
-        console.error("[ingest] Text extraction failed:", e);
-        text = "";
-      }
+    try {
+      text = await extractTextFromStorage(supabase, doc.storage_path, mime);
+    } catch (e) {
+      console.error("[ingest] Text extraction failed:", e);
+      await supabase.from("knowledge_documents").update({
+        status: "error",
+        error: `Falha na extração de texto: ${e instanceof Error ? e.message : "erro desconhecido"}`
+      }).eq("id", document_id);
+      return { success: false, error: "Text extraction failed" };
     }
 
     console.log(`[ingest] Total text length: ${text.length}`);
@@ -78,7 +106,7 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
         status: "error",
         error: "Não foi possível extrair texto do documento. Use arquivos .txt, .csv ou .md para melhores resultados."
       }).eq("id", document_id);
-      return;
+      return { success: false, error: "No text extracted" };
     }
 
     // Chunk text
@@ -112,7 +140,7 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
 
     if (chunks.length === 0) {
       await supabase.from("knowledge_documents").update({ status: "error", error: "Nenhum chunk gerado" }).eq("id", document_id);
-      return;
+      return { success: false, error: "No chunks generated" };
     }
 
     // Get API key
@@ -136,16 +164,18 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
         status: "error",
         error: "Chave de API OpenAI não configurada."
       }).eq("id", document_id);
-      return;
+      return { success: false, error: "No API key" };
     }
 
-    // Generate embeddings in small batches
-    const BATCH_SIZE = 5;
+    // Generate embeddings in small batches (3 at a time to avoid memory limits)
+    const BATCH_SIZE = 3;
     let totalChunksInserted = 0;
 
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
       const batch = chunks.slice(i, i + BATCH_SIZE);
-      console.log(`[ingest] Embedding batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(chunks.length / BATCH_SIZE)} (${batch.length} chunks)`);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
+      console.log(`[ingest] Embedding batch ${batchNum}/${totalBatches} (${batch.length} chunks)`);
 
       const embResponse = await fetch("https://api.openai.com/v1/embeddings", {
         method: "POST",
@@ -162,12 +192,12 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
 
       if (!embResponse.ok) {
         const errText = await embResponse.text();
-        console.error("[ingest] Embeddings API error:", errText);
+        console.error(`[ingest] Embeddings API error (batch ${batchNum}):`, errText);
         await supabase.from("knowledge_documents").update({
           status: "error",
-          error: `Erro ao gerar embeddings: ${embResponse.status}`
+          error: `Erro ao gerar embeddings (batch ${batchNum}): HTTP ${embResponse.status}`
         }).eq("id", document_id);
-        return;
+        return { success: false, error: `Embeddings API error: ${embResponse.status}` };
       }
 
       const embResult = await embResponse.json();
@@ -189,10 +219,11 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
           status: "error",
           error: "Erro ao salvar chunks: " + insertErr.message
         }).eq("id", document_id);
-        return;
+        return { success: false, error: "Insert error" };
       }
 
       totalChunksInserted += batch.length;
+      console.log(`[ingest] Batch ${batchNum} inserted. Total so far: ${totalChunksInserted}`);
     }
 
     await supabase.from("knowledge_documents").update({
@@ -200,14 +231,20 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
       chunk_count: totalChunksInserted
     }).eq("id", document_id);
 
-    console.log(`[ingest] Document ${document_id} completed: ${totalChunksInserted} chunks`);
+    console.log(`[ingest] === COMPLETED document ${document_id}: ${totalChunksInserted} chunks ===`);
+    return { success: true, chunks: totalChunksInserted };
   } catch (e) {
     console.error("[ingest] Critical error:", e instanceof Error ? e.message : e);
-    const supabase2 = getSupabase();
-    await supabase2.from("knowledge_documents").update({
-      status: "error",
-      error: e instanceof Error ? e.message : "Unknown error"
-    }).eq("id", document_id);
+    try {
+      const supabase2 = getSupabase();
+      await supabase2.from("knowledge_documents").update({
+        status: "error",
+        error: e instanceof Error ? e.message : "Erro crítico desconhecido"
+      }).eq("id", document_id);
+    } catch (updateErr) {
+      console.error("[ingest] Failed to update error status:", updateErr);
+    }
+    return { success: false, error: e instanceof Error ? e.message : "Unknown error" };
   }
 }
 
@@ -215,16 +252,20 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { document_id, tenant_id, extracted_text } = await req.json();
+    const { document_id, tenant_id } = await req.json();
     if (!document_id || !tenant_id) {
       return new Response(JSON.stringify({ error: "Missing document_id or tenant_id" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    EdgeRuntime.waitUntil(processDocument(document_id, tenant_id, extracted_text));
+    console.log(`[ingest] Request received for document ${document_id}`);
 
-    return new Response(JSON.stringify({ success: true, message: "Processing started", document_id }), {
+    // Process synchronously — no EdgeRuntime.waitUntil
+    const result = await processDocument(document_id, tenant_id);
+
+    return new Response(JSON.stringify({ success: result.success, message: result.success ? "Processing completed" : result.error, document_id }), {
+      status: result.success ? 200 : 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
