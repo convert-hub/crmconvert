@@ -65,8 +65,10 @@ async function processDocument(document_id: string, tenant_id: string) {
         const arrayBuffer = await fileData.arrayBuffer();
         const uint8 = new Uint8Array(arrayBuffer);
         const pdfResult = await extractText(uint8);
-        text = pdfResult.text || "";
-        console.log(`[ingest] unpdf extracted ${text.length} characters`);
+        // extractText may return text as string or array of page strings
+        const rawPdfText = pdfResult.text;
+        text = Array.isArray(rawPdfText) ? rawPdfText.join("\n") : String(rawPdfText || "");
+        console.log(`[ingest] unpdf extracted ${text.length} characters, pages: ${pdfResult.totalPages}`);
       } catch (pdfErr) {
         console.warn("[ingest] unpdf failed, trying regex fallback:", pdfErr);
         try {
