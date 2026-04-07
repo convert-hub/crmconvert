@@ -114,14 +114,58 @@ serve(async (req) => {
       ? `Oportunidade: "${(opp as any).title}" — Valor: R$${(opp as any).value} — Prioridade: ${(opp as any).priority} — Etapa: ${(opp as any).stage?.name || "?"}.${(opp as any).next_action ? ` Próxima ação: ${(opp as any).next_action}` : ""}`
       : "";
 
-    // 6. Build chat history
+    // 6. Build reversed messages array
     const reversed = (messages || []).reverse();
+
+    // 6b. RAG - Search knowledge base for relevant context
+    let ragContext = "";
+    const lastUserMessage = reversed.filter((m: any) => m.direction === "inbound").pop();
+    if (lastUserMessage?.content) {
+      try {
+        // Generate embedding for the query
+        const embResponse = await fetch("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "text-embedding-3-small",
+            input: lastUserMessage.content,
+            dimensions: 1536,
+          }),
+        });
+
+        if (embResponse.ok) {
+          const embResult = await embResponse.json();
+          const queryEmbedding = embResult.data?.[0]?.embedding;
+
+          if (queryEmbedding) {
+            const { data: chunks } = await supabase.rpc("search_knowledge", {
+              _tenant_id: tenant_id,
+              _query_embedding: JSON.stringify(queryEmbedding),
+              _match_count: 5,
+              _match_threshold: 0.5,
+            });
+
+            if (chunks && chunks.length > 0) {
+              ragContext = "\n\n--- BASE DE CONHECIMENTO ---\nUse as informações abaixo como referência para responder:\n" +
+                chunks.map((c: any) => c.content).join("\n---\n");
+            }
+          }
+        }
+      } catch (ragErr) {
+        console.error("RAG search error:", ragErr);
+      }
+    }
+
+    // 7. Build chat history
     const chatHistory = reversed.map((m: any) => ({
       role: m.direction === "inbound" ? "user" : "assistant",
       content: m.content || "[mídia]",
     }));
 
-    // 7. Build system prompt — use tenant's template or default
+    // 8. Build system prompt — use tenant's template or default
     let systemPrompt: string;
     if (promptTemplate?.content) {
       // Replace variables in template
@@ -156,7 +200,12 @@ Regras:
 - Se for uma saudação, retorne uma saudação cordial.`;
     }
 
-    // 8. Call OpenAI API
+    // Append RAG context if available
+    if (ragContext) {
+      systemPrompt += ragContext;
+    }
+
+    // 9. Call OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {

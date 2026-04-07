@@ -19,3 +19,6 @@ verify_jwt = false
 [functions.check-scheduled-messages]
 verify_jwt = false
 
+[functions.ingest-document]
+verify_jwt = false
+
