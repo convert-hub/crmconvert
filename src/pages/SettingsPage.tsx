@@ -10,11 +10,12 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
 import TagsSettings from '@/components/settings/TagsSettings';
+import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
 
 interface CustomFieldDef {
   key: string;
@@ -361,6 +362,7 @@ export default function SettingsPage() {
           <TabsTrigger value="ai" className="rounded-lg">IA</TabsTrigger>
           <TabsTrigger value="tags" className="rounded-lg"><Tag className="h-3.5 w-3.5 mr-1" />Tags</TabsTrigger>
           <TabsTrigger value="quick_replies" className="rounded-lg"><Zap className="h-3.5 w-3.5 mr-1" />Respostas Rápidas</TabsTrigger>
+          <TabsTrigger value="knowledge" className="rounded-lg"><Brain className="h-3.5 w-3.5 mr-1" />Base de Conhecimento</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
         </TabsList>
 
@@ -635,6 +637,10 @@ export default function SettingsPage() {
 
         <TabsContent value="quick_replies" className="space-y-4 pt-4">
           <QuickRepliesSettings />
+        </TabsContent>
+
+        <TabsContent value="knowledge" className="space-y-4 pt-4">
+          <KnowledgeBaseSettings />
         </TabsContent>
 
         <TabsContent value="integrations" className="space-y-4 pt-4">
