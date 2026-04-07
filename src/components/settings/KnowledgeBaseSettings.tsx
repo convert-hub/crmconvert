@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Upload, Trash2, Loader2, FileText, CheckCircle2, AlertCircle, Brain } from 'lucide-react';
+import { Upload, Trash2, Loader2, FileText, CheckCircle2, AlertCircle, Brain, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface KnowledgeDoc {
@@ -18,14 +18,22 @@ interface KnowledgeDoc {
   chunk_count: number;
   error: string | null;
   created_at: string;
+  updated_at: string;
   category: string | null;
 }
+
+const isStuckProcessing = (doc: KnowledgeDoc) => {
+  if (doc.status !== 'processing' && doc.status !== 'pending') return false;
+  const updatedAt = new Date(doc.updated_at).getTime();
+  return Date.now() - updatedAt > 2 * 60 * 1000;
+};
 
 export default function KnowledgeBaseSettings() {
   const { tenant, role } = useAuth();
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [reprocessingId, setReprocessingId] = useState<string | null>(null);
   const [category, setCategory] = useState('');
 
   const isAdmin = role === 'admin' || role === 'manager';
@@ -43,13 +51,48 @@ export default function KnowledgeBaseSettings() {
 
   useEffect(() => { loadDocuments(); }, [loadDocuments]);
 
-  // Poll for processing documents
   useEffect(() => {
     const processing = documents.some(d => d.status === 'pending' || d.status === 'processing');
     if (!processing) return;
     const interval = setInterval(loadDocuments, 3000);
     return () => clearInterval(interval);
   }, [documents, loadDocuments]);
+
+  const reprocessDocument = async (doc: KnowledgeDoc) => {
+    if (!tenant) return;
+    setReprocessingId(doc.id);
+    try {
+      // Delete old chunks
+      await supabase.from('knowledge_chunks' as any).delete().eq('document_id', doc.id);
+      // Reset status
+      await supabase.from('knowledge_documents' as any).update({ status: 'pending', chunk_count: 0, error: null }).eq('id', doc.id);
+      loadDocuments();
+
+      // Trigger ingestion
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest-document`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ document_id: doc.id, tenant_id: tenant.id }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error(err.error || 'Erro ao reprocessar documento');
+      } else {
+        toast.success('Reprocessamento iniciado!');
+      }
+      loadDocuments();
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao reprocessar');
+    } finally {
+      setReprocessingId(null);
+    }
+  };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -82,7 +125,6 @@ export default function KnowledgeBaseSettings() {
 
       if (uploadErr) throw uploadErr;
 
-      // Get membership ID
       const { data: membership } = await supabase
         .from('tenant_memberships')
         .select('id')
@@ -91,7 +133,6 @@ export default function KnowledgeBaseSettings() {
         .eq('is_active', true)
         .single();
 
-      // Create document record
       const { data: doc, error: docErr } = await supabase
         .from('knowledge_documents' as any)
         .insert({
@@ -112,7 +153,6 @@ export default function KnowledgeBaseSettings() {
       toast.success('Arquivo enviado! Processando...');
       loadDocuments();
 
-      // Trigger ingestion
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest-document`, {
         method: 'POST',
@@ -144,7 +184,6 @@ export default function KnowledgeBaseSettings() {
   const deleteDocument = async (id: string, storagePath?: string) => {
     if (!confirm('Excluir documento e todos os seus chunks?')) return;
     
-    // Delete chunks first, then document
     await supabase.from('knowledge_chunks' as any).delete().eq('document_id', id);
     await supabase.from('knowledge_documents' as any).delete().eq('id', id);
     
@@ -263,13 +302,26 @@ export default function KnowledgeBaseSettings() {
                     <TableCell>{statusBadge(doc.status, doc.error)}</TableCell>
                     <TableCell>
                       {isAdmin && (
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          onClick={() => deleteDocument(doc.id, doc.storage_path as string | undefined)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          {(doc.status === 'error' || isStuckProcessing(doc)) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => reprocessDocument(doc)}
+                              disabled={reprocessingId === doc.id}
+                              title="Reprocessar documento"
+                            >
+                              <RefreshCw className={`h-4 w-4 text-amber-600 ${reprocessingId === doc.id ? 'animate-spin' : ''}`} />
+                            </Button>
+                          )}
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={() => deleteDocument(doc.id, doc.storage_path as string | undefined)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

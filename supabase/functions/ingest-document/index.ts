@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import pdf from "https://esm.sh/pdf-parse@1.1.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +18,8 @@ async function processDocument(document_id: string, tenant_id: string) {
   const supabase = getSupabase();
 
   try {
+    console.log(`[ingest] Starting processing for document ${document_id}`);
+
     const { data: doc, error: docErr } = await supabase
       .from("knowledge_documents")
       .select("*")
@@ -25,11 +28,15 @@ async function processDocument(document_id: string, tenant_id: string) {
       .single();
 
     if (docErr || !doc) {
-      console.error("Document not found:", docErr);
+      console.error("[ingest] Document not found:", docErr);
       return;
     }
 
     await supabase.from("knowledge_documents").update({ status: "processing" }).eq("id", document_id);
+
+    // Clean up old chunks for reprocessing support
+    console.log(`[ingest] Deleting old chunks for document ${document_id}`);
+    await supabase.from("knowledge_chunks").delete().eq("document_id", document_id);
 
     // Download file
     const { data: fileData, error: dlErr } = await supabase.storage
@@ -37,6 +44,7 @@ async function processDocument(document_id: string, tenant_id: string) {
       .download(doc.storage_path);
 
     if (dlErr || !fileData) {
+      console.error("[ingest] Failed to download file:", dlErr);
       await supabase.from("knowledge_documents").update({ status: "error", error: "Failed to download file" }).eq("id", document_id);
       return;
     }
@@ -44,15 +52,25 @@ async function processDocument(document_id: string, tenant_id: string) {
     // Extract text
     let text = "";
     const mime = doc.mime_type || "";
+    console.log(`[ingest] File MIME type: ${mime}, size: ${doc.file_size}`);
 
     if (mime.includes("text/plain") || mime.includes("text/csv") || mime.includes("text/markdown")) {
       text = await fileData.text();
     } else if (mime.includes("application/json")) {
       text = await fileData.text();
-    } else {
+    } else if (mime.includes("pdf")) {
+      // Use pdf-parse for proper PDF text extraction
       try {
-        const rawText = await fileData.text();
-        if (mime.includes("pdf")) {
+        console.log("[ingest] Extracting text from PDF using pdf-parse...");
+        const arrayBuffer = await fileData.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+        const pdfResult = await pdf(uint8);
+        text = pdfResult.text || "";
+        console.log(`[ingest] pdf-parse extracted ${text.length} characters`);
+      } catch (pdfErr) {
+        console.warn("[ingest] pdf-parse failed, trying regex fallback:", pdfErr);
+        try {
+          const rawText = await fileData.text();
           const readable = rawText.match(/[\x20-\x7E\xC0-\xFF]{20,}/g);
           text = readable ? readable.join("\n") : "";
           const btBlocks = rawText.match(/BT[\s\S]*?ET/g);
@@ -66,13 +84,23 @@ async function processDocument(document_id: string, tenant_id: string) {
               .join("\n");
             if (extracted.length > text.length) text = extracted;
           }
-        } else {
-          text = rawText.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s{3,}/g, "\n");
+          console.log(`[ingest] Regex fallback extracted ${text.length} characters`);
+        } catch (fallbackErr) {
+          console.error("[ingest] Regex fallback also failed:", fallbackErr);
+          text = "";
         }
+      }
+    } else {
+      // Fallback for other file types
+      try {
+        const rawText = await fileData.text();
+        text = rawText.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s{3,}/g, "\n");
       } catch {
         text = "";
       }
     }
+
+    console.log(`[ingest] Total extracted text length: ${text.length}`);
 
     if (!text || text.trim().length < 10) {
       await supabase.from("knowledge_documents").update({
@@ -109,6 +137,8 @@ async function processDocument(document_id: string, tenant_id: string) {
       if (start <= 0 && chunks.length > 0) break;
     }
 
+    console.log(`[ingest] Generated ${chunks.length} chunks`);
+
     if (chunks.length === 0) {
       await supabase.from("knowledge_documents").update({ status: "error", error: "Nenhum chunk gerado" }).eq("id", document_id);
       return;
@@ -144,6 +174,7 @@ async function processDocument(document_id: string, tenant_id: string) {
 
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
       const batch = chunks.slice(i, i + BATCH_SIZE);
+      console.log(`[ingest] Sending embedding batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(chunks.length / BATCH_SIZE)} (${batch.length} chunks)`);
 
       const embResponse = await fetch("https://api.openai.com/v1/embeddings", {
         method: "POST",
@@ -160,7 +191,7 @@ async function processDocument(document_id: string, tenant_id: string) {
 
       if (!embResponse.ok) {
         const errText = await embResponse.text();
-        console.error("Embeddings error:", errText);
+        console.error("[ingest] Embeddings API error:", errText);
         await supabase.from("knowledge_documents").update({
           status: "error",
           error: `Erro ao gerar embeddings: ${embResponse.status}`
@@ -182,7 +213,7 @@ async function processDocument(document_id: string, tenant_id: string) {
 
       const { error: insertErr } = await supabase.from("knowledge_chunks").insert(chunkRows);
       if (insertErr) {
-        console.error("Insert chunks error:", insertErr);
+        console.error("[ingest] Insert chunks error:", insertErr);
         await supabase.from("knowledge_documents").update({
           status: "error",
           error: "Erro ao salvar chunks: " + insertErr.message
@@ -198,9 +229,9 @@ async function processDocument(document_id: string, tenant_id: string) {
       chunk_count: totalChunksInserted
     }).eq("id", document_id);
 
-    console.log(`Document ${document_id} processed: ${totalChunksInserted} chunks`);
+    console.log(`[ingest] Document ${document_id} processed successfully: ${totalChunksInserted} chunks`);
   } catch (e) {
-    console.error("processDocument error:", e);
+    console.error("[ingest] processDocument critical error:", e instanceof Error ? e.message : e, e instanceof Error ? e.stack : "");
     const supabase2 = getSupabase();
     await supabase2.from("knowledge_documents").update({
       status: "error",
@@ -227,7 +258,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.error("ingest-document error:", e);
+    console.error("[ingest] Request error:", e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
