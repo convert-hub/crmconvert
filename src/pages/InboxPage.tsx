@@ -246,6 +246,7 @@ export default function InboxPage() {
                 channel={selectedData?.channel}
                 status={selectedData?.status}
                 statusColors={statusColors}
+                aiActivated={(selectedData?.metadata as any)?.ai_activated === true}
                 onNameSaved={(newName) => {
                   setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
                 }}
