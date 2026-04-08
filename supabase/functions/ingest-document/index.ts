@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { extractText, getDocumentProxy } from "npm:unpdf";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,22 +25,7 @@ async function extractTextFromStorage(supabase: any, storagePath: string, mime: 
 
   console.log(`[ingest] File downloaded, MIME: ${mime}, size: ${fileData.size}`);
 
-  // PDF extraction via unpdf (serverless-optimized)
-  if (mime.includes("pdf")) {
-    try {
-      console.log("[ingest] Extracting text from PDF via unpdf...");
-      const arrayBuffer = await fileData.arrayBuffer();
-      const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
-      const { text } = await extractText(pdf, { mergePages: true });
-      console.log(`[ingest] PDF extracted: ${text.length} chars`);
-      return text;
-    } catch (pdfErr) {
-      console.error("[ingest] unpdf failed:", pdfErr instanceof Error ? pdfErr.message : pdfErr);
-      return "";
-    }
-  }
-
-  // Text-based files
+  // Text-based files only on server side
   if (mime.includes("text/plain") || mime.includes("text/csv") || mime.includes("text/markdown") || mime.includes("application/json")) {
     const text = await fileData.text();
     console.log(`[ingest] Text file extracted: ${text.length} chars`);
@@ -59,7 +43,7 @@ async function extractTextFromStorage(supabase: any, storagePath: string, mime: 
   }
 }
 
-async function processDocument(document_id: string, tenant_id: string) {
+async function processDocument(document_id: string, tenant_id: string, preExtractedText?: string) {
   const supabase = getSupabase();
 
   try {
@@ -84,18 +68,24 @@ async function processDocument(document_id: string, tenant_id: string) {
     console.log(`[ingest] Deleting old chunks for document ${document_id}`);
     await supabase.from("knowledge_chunks").delete().eq("document_id", document_id);
 
-    // Extract text from file
+    // Use pre-extracted text (from browser for PDFs) or extract on server
     const mime = doc.mime_type || "";
     let text = "";
-    try {
-      text = await extractTextFromStorage(supabase, doc.storage_path, mime);
-    } catch (e) {
-      console.error("[ingest] Text extraction failed:", e);
-      await supabase.from("knowledge_documents").update({
-        status: "error",
-        error: `Falha na extração de texto: ${e instanceof Error ? e.message : "erro desconhecido"}`
-      }).eq("id", document_id);
-      return { success: false, error: "Text extraction failed" };
+
+    if (preExtractedText && preExtractedText.trim().length > 10) {
+      console.log(`[ingest] Using pre-extracted text: ${preExtractedText.length} chars`);
+      text = preExtractedText;
+    } else {
+      try {
+        text = await extractTextFromStorage(supabase, doc.storage_path, mime);
+      } catch (e) {
+        console.error("[ingest] Text extraction failed:", e);
+        await supabase.from("knowledge_documents").update({
+          status: "error",
+          error: `Falha na extração de texto: ${e instanceof Error ? e.message : "erro desconhecido"}`
+        }).eq("id", document_id);
+        return { success: false, error: "Text extraction failed" };
+      }
     }
 
     console.log(`[ingest] Total text length: ${text.length}`);
@@ -251,16 +241,16 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { document_id, tenant_id } = await req.json();
+    const { document_id, tenant_id, extracted_text } = await req.json();
     if (!document_id || !tenant_id) {
       return new Response(JSON.stringify({ error: "Missing document_id or tenant_id" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[ingest] Request received for document ${document_id}`);
+    console.log(`[ingest] Request received for document ${document_id}, has extracted_text: ${!!extracted_text}`);
 
-    const result = await processDocument(document_id, tenant_id);
+    const result = await processDocument(document_id, tenant_id, extracted_text);
 
     return new Response(JSON.stringify({ success: result.success, message: result.success ? "Processing completed" : result.error, document_id }), {
       status: result.success ? 200 : 500,
