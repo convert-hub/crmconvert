@@ -273,7 +273,13 @@ const handlers = {
     // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
     if (!fromMe && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
-        await handleAiAutoReply(tenant_id, conversation, contact, text);
+        // Transcribe audio if message has no text but has audio
+        let effectiveText = text || '';
+        if (!text && mediaType && mediaType.toLowerCase().includes('audio') && mediaUrl && savedMsg?.id) {
+          const transcription = await transcribeAudio(tenant_id, mediaUrl, savedMsg.id);
+          if (transcription) effectiveText = transcription;
+        }
+        await handleAiAutoReply(tenant_id, conversation, contact, effectiveText);
       } catch (err) {
         console.error('[Worker] AI auto-reply error:', err.message);
       }
