@@ -62,11 +62,34 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   const isVideo = mediaType.includes('video');
   const isDocument = mediaType.includes('document') || mediaType.includes('pdf');
   const providerMsgId = (msg as any).provider_message_id;
+  const isOutbound = msg.direction === 'outbound';
+
+  const unavailableMessage = isAudio
+    ? 'Áudio expirado ou indisponível no WhatsApp'
+    : isImage
+      ? 'Imagem expirada ou indisponível no WhatsApp'
+      : isVideo
+        ? 'Vídeo expirado ou indisponível no WhatsApp'
+        : 'Documento expirado ou indisponível no WhatsApp';
+
+  const downloadDocument = (src: string) => {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = `documento-${Date.now()}`;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   const loadMedia = async () => {
     if (!providerMsgId || loading) return;
     const cached = mediaCache.get(providerMsgId);
-    if (cached) { setMediaData(cached); return; }
+    if (cached) {
+      setMediaData(cached);
+      if (isDocument && cached !== 'expired') downloadDocument(cached);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -78,6 +101,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
       const error = res.error;
 
       if (error || data?.ok === false || data?.error) {
+        mediaCache.set(providerMsgId, 'expired');
         setMediaData('expired');
         return;
       }
@@ -95,10 +119,18 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
         result = `data:${mime};base64,${data.data.base64}`;
       }
 
-      if (result) { mediaCache.set(providerMsgId, result); setMediaData(result); }
+      if (result) {
+        mediaCache.set(providerMsgId, result);
+        setMediaData(result);
+        if (isDocument) downloadDocument(result);
+        return;
+      }
+
+      mediaCache.set(providerMsgId, 'expired');
+      setMediaData('expired');
     } catch (e: any) {
-      // Silently handle media errors (no instance, expired, etc.)
       console.warn('Media load failed (non-critical):', e?.message || e);
+      mediaCache.set(providerMsgId, 'expired');
       setMediaData('expired');
     } finally {
       setLoading(false);
@@ -106,8 +138,6 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   };
 
   useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId]);
-
-  const isOutbound = msg.direction === 'outbound';
 
   if (isAudio) {
     return (
@@ -119,7 +149,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
           </div>
         ) : mediaData === 'expired' ? (
           <div className={cn("flex items-center gap-2 text-xs py-1 opacity-60", isOutbound ? "text-white/70" : "text-muted-foreground")}>
-            <Mic className="h-3.5 w-3.5" /> Áudio indisponível
+            <Mic className="h-3.5 w-3.5" /> {unavailableMessage}
           </div>
         ) : mediaData ? (
           <AudioPlayer src={mediaData} isOutbound={isOutbound} />
@@ -138,7 +168,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
         {loading ? (
           <div className="h-40 w-full flex items-center justify-center bg-muted/20 rounded-lg"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : mediaData === 'expired' ? (
-          <div className="h-20 w-full flex items-center justify-center bg-muted/20 rounded-lg text-xs text-muted-foreground">Imagem indisponível</div>
+          <div className="h-20 w-full flex items-center justify-center bg-muted/20 rounded-lg px-3 text-center text-xs text-muted-foreground">{unavailableMessage}</div>
         ) : mediaData ? (
           <>
             <img src={mediaData} alt="Imagem" className="rounded-lg max-h-60 w-auto cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setLightboxOpen(true)} />
@@ -154,7 +184,13 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   if (isVideo) {
     return (
       <div className="max-w-[280px]">
-        {mediaData ? <video src={mediaData} controls className="rounded-lg max-h-60 w-auto" /> : (
+        {loading ? (
+          <div className="h-40 w-full flex items-center justify-center bg-muted/20 rounded-lg"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : mediaData === 'expired' ? (
+          <div className="h-20 w-full flex items-center justify-center bg-muted/20 rounded-lg px-3 text-center text-xs text-muted-foreground">{unavailableMessage}</div>
+        ) : mediaData ? (
+          <video src={mediaData} controls className="rounded-lg max-h-60 w-auto" />
+        ) : (
           <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs"><Play className="h-3 w-3 mr-1" /> Carregar vídeo</Button>
         )}
       </div>
@@ -163,9 +199,25 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
 
   if (isDocument) {
     return (
-      <div className="flex items-center gap-2">
-        <FileText className="h-4 w-4" /><span className="text-xs">Documento</span>
-        <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs"><Download className="h-3 w-3" /></Button>
+      <div className="max-w-[280px] rounded-lg border border-border/60 bg-muted/20 p-3">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4" />
+          <span className="text-xs">Documento</span>
+        </div>
+        <div className="mt-2">
+          {loading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Carregando documento...</span>
+            </div>
+          ) : mediaData === 'expired' ? (
+            <div className="text-xs text-muted-foreground">{unavailableMessage}</div>
+          ) : mediaData ? (
+            <Button size="sm" variant="ghost" onClick={() => downloadDocument(mediaData)} className="text-xs"><Download className="h-3 w-3 mr-1" /> Baixar documento novamente</Button>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={loadMedia} className="text-xs"><Download className="h-3 w-3 mr-1" /> Baixar documento</Button>
+          )}
+        </div>
       </div>
     );
   }
