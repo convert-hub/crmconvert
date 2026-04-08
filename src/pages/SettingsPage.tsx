@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
@@ -30,8 +30,44 @@ interface AiConfig { id: string; task_type: string; provider: string; model: str
 
 // TODO: reativar qa_review e stage_classifier quando backend for implementado
 const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qualification: 'Qualificação' };
+const removeAccents = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
+function KeywordTester({ keywords }: { keywords: string[] }) {
+  const [testPhrase, setTestPhrase] = useState('');
+  const [result, setResult] = useState<{ matched: boolean; keyword?: string } | null>(null);
+
+  const handleTest = () => {
+    if (!testPhrase.trim()) return;
+    const normalized = removeAccents(testPhrase.toLowerCase().trim());
+    const match = keywords.find(k => normalized.includes(removeAccents(k.toLowerCase())));
+    setResult(match ? { matched: true, keyword: match } : { matched: false });
+  };
+
+  return (
+    <div className="border border-border rounded-xl p-3 space-y-2 bg-muted/30">
+      <Label className="text-xs text-muted-foreground">Testar frase</Label>
+      <div className="flex gap-2">
+        <Input
+          value={testPhrase}
+          onChange={e => { setTestPhrase(e.target.value); setResult(null); }}
+          placeholder="Digite uma frase para testar..."
+          className="rounded-xl flex-1 text-sm"
+          onKeyDown={e => e.key === 'Enter' && handleTest()}
+        />
+        <Button variant="outline" size="sm" onClick={handleTest} className="rounded-xl">
+          <Search className="h-4 w-4 mr-1" />Testar
+        </Button>
+      </div>
+      {result && (
+        <p className={`text-sm font-medium ${result.matched ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+          {result.matched ? `✓ Faria match com: "${result.keyword}"` : '✗ Nenhum match encontrado'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+
   const [waStatus, setWaStatus] = useState<'loading' | 'no_instance' | 'disconnected' | 'connecting' | 'connected' | 'error'>('loading');
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [phone, setPhone] = useState<string | null>(null);
