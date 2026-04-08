@@ -233,13 +233,16 @@ const handlers = {
       conversation = newConv;
     }
 
-    // Save message
-    await supabase.from('messages').insert({
+    // Save message (include media info if present)
+    const msgInsert = {
       tenant_id, conversation_id: conversation.id,
       direction: fromMe ? 'outbound' : 'inbound',
-      content: text, provider_message_id: messageId,
+      content: text || null, provider_message_id: messageId,
       provider_metadata: msg,
-    });
+    };
+    if (mediaType) msgInsert.media_type = mediaType;
+    if (mediaUrl) msgInsert.media_url = mediaUrl;
+    const { data: savedMsg } = await supabase.from('messages').insert(msgInsert).select('id').single();
 
     // Update conversation timestamps
     const updates = { last_message_at: new Date().toISOString() };
