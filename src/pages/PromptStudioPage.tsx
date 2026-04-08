@@ -15,9 +15,10 @@ import { toast } from 'sonner';
 
 const TASK_TYPES = [
   { value: 'message_generation', label: 'Geração de Mensagens' },
-  { value: 'qa_review', label: 'QA / Review' },
   { value: 'qualification', label: 'Qualificação' },
-  { value: 'stage_classifier', label: 'Classificador de Etapa' },
+  // TODO: reativar quando backend for implementado
+  // { value: 'qa_review', label: 'QA / Review' },
+  // { value: 'stage_classifier', label: 'Classificador de Etapa' },
 ];
 
 interface PromptTemplate {

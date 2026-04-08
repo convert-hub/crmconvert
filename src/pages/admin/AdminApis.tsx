@@ -219,11 +219,10 @@ export default function AdminApis() {
   };
 
   const activeGlobalKeys = globalKeys.filter(k => k.is_active);
+  // TODO: reativar qa_review e stage_classifier quando backend for implementado
   const taskTypeLabels: Record<string, string> = {
     message_generation: 'Geração de Mensagem',
-    qa_review: 'QA Review',
     qualification: 'Qualificação',
-    stage_classifier: 'Classificador de Estágio',
   };
 
   if (loading) return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
@@ -404,9 +403,10 @@ export default function AdminApis() {
                       <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="message_generation">Geração de Mensagem</SelectItem>
-                        <SelectItem value="qa_review">QA Review</SelectItem>
                         <SelectItem value="qualification">Qualificação</SelectItem>
-                        <SelectItem value="stage_classifier">Classificador de Estágio</SelectItem>
+                        {/* TODO: reativar quando backend for implementado */}
+                        {/* <SelectItem value="qa_review">QA Review</SelectItem> */}
+                        {/* <SelectItem value="stage_classifier">Classificador de Estágio</SelectItem> */}
                       </SelectContent>
                     </Select>
                   </div>
