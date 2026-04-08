@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import pdf from "npm:pdf-parse@1.1.1/lib/pdf-parse.js";
+import { extractText, getDocumentProxy } from "npm:unpdf";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,18 +26,17 @@ async function extractTextFromStorage(supabase: any, storagePath: string, mime: 
 
   console.log(`[ingest] File downloaded, MIME: ${mime}, size: ${fileData.size}`);
 
-  // PDF extraction via pdf-parse
+  // PDF extraction via unpdf (serverless-optimized)
   if (mime.includes("pdf")) {
     try {
-      console.log("[ingest] Extracting text from PDF via pdf-parse...");
+      console.log("[ingest] Extracting text from PDF via unpdf...");
       const arrayBuffer = await fileData.arrayBuffer();
-      const uint8 = new Uint8Array(arrayBuffer);
-      const result = await pdf(uint8);
-      const text = result.text || "";
-      console.log(`[ingest] PDF extracted: ${text.length} chars, ${result.numpages} pages`);
+      const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
+      const { text } = await extractText(pdf, { mergePages: true });
+      console.log(`[ingest] PDF extracted: ${text.length} chars`);
       return text;
     } catch (pdfErr) {
-      console.error("[ingest] pdf-parse failed:", pdfErr instanceof Error ? pdfErr.message : pdfErr);
+      console.error("[ingest] unpdf failed:", pdfErr instanceof Error ? pdfErr.message : pdfErr);
       return "";
     }
   }
@@ -167,7 +166,7 @@ async function processDocument(document_id: string, tenant_id: string) {
       return { success: false, error: "No API key" };
     }
 
-    // Generate embeddings in small batches (3 at a time to avoid memory limits)
+    // Generate embeddings in small batches
     const BATCH_SIZE = 3;
     let totalChunksInserted = 0;
 
@@ -261,7 +260,6 @@ serve(async (req) => {
 
     console.log(`[ingest] Request received for document ${document_id}`);
 
-    // Process synchronously — no EdgeRuntime.waitUntil
     const result = await processDocument(document_id, tenant_id);
 
     return new Response(JSON.stringify({ success: result.success, message: result.success ? "Processing completed" : result.error, document_id }), {
