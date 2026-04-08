@@ -627,6 +627,191 @@ const handlers = {
 
     return { sent: true, scheduled_message_id };
   },
+
+  async ingest_document(payload) {
+    const { document_id, tenant_id } = payload;
+    if (!document_id || !tenant_id) throw new Error('Missing document_id or tenant_id');
+
+    console.log(`[Worker] ingest_document: starting for ${document_id}`);
+
+    try {
+      // Get document metadata
+      const { data: doc, error: docErr } = await supabase
+        .from('knowledge_documents')
+        .select('*')
+        .eq('id', document_id)
+        .eq('tenant_id', tenant_id)
+        .single();
+
+      if (docErr || !doc) {
+        await supabase.from('knowledge_documents').update({ status: 'error', error: 'Documento não encontrado' }).eq('id', document_id);
+        throw new Error('Document not found');
+      }
+
+      // Download file from storage
+      console.log(`[Worker] ingest_document: downloading ${doc.storage_path}`);
+      const { data: fileData, error: dlErr } = await supabase.storage
+        .from('crm-files')
+        .download(doc.storage_path);
+
+      if (dlErr || !fileData) {
+        await supabase.from('knowledge_documents').update({ status: 'error', error: 'Falha no download do arquivo' }).eq('id', document_id);
+        throw new Error('Download failed: ' + (dlErr?.message || 'no data'));
+      }
+
+      // Extract text
+      const mime = doc.mime_type || '';
+      let text = '';
+
+      if (mime.includes('pdf') || doc.name?.toLowerCase().endsWith('.pdf')) {
+        console.log(`[Worker] ingest_document: extracting PDF text`);
+        try {
+          const pdfParse = require('pdf-parse');
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          const result = await pdfParse(buffer);
+          text = result.text || '';
+          console.log(`[Worker] ingest_document: PDF extracted ${text.length} chars`);
+        } catch (pdfErr) {
+          console.error('[Worker] ingest_document: PDF parse error:', pdfErr.message);
+          await supabase.from('knowledge_documents').update({
+            status: 'error',
+            error: 'Erro ao extrair texto do PDF: ' + pdfErr.message,
+          }).eq('id', document_id);
+          throw pdfErr;
+        }
+      } else {
+        text = await fileData.text();
+        console.log(`[Worker] ingest_document: text file ${text.length} chars`);
+      }
+
+      if (!text || text.trim().length < 10) {
+        await supabase.from('knowledge_documents').update({
+          status: 'error',
+          error: 'Texto insuficiente extraído do documento.',
+        }).eq('id', document_id);
+        return { success: false, message: 'Insufficient text' };
+      }
+
+      // Chunk text with safe algorithm
+      const CHUNK_SIZE = 2000;
+      const CHUNK_OVERLAP = 200;
+      const chunks = [];
+      let start = 0;
+
+      while (start < text.length) {
+        const end = Math.min(start + CHUNK_SIZE, text.length);
+        let chunk = text.slice(start, end);
+
+        // Try to break at sentence/paragraph boundary
+        if (end < text.length) {
+          const bp = Math.max(chunk.lastIndexOf('.'), chunk.lastIndexOf('\n'));
+          if (bp > CHUNK_SIZE * 0.5) {
+            chunk = chunk.slice(0, bp + 1);
+          }
+        }
+
+        if (chunk.trim().length > 20) {
+          chunks.push(chunk.trim());
+        }
+
+        // Advance cursor - NEVER stay at same position
+        const nextStart = start + Math.max(chunk.length - CHUNK_OVERLAP, 1);
+        if (nextStart <= start) break; // Safety guard
+        start = nextStart;
+
+        // Final segment guard
+        if (end >= text.length) break;
+      }
+
+      console.log(`[Worker] ingest_document: ${chunks.length} chunks created`);
+
+      if (chunks.length === 0) {
+        await supabase.from('knowledge_documents').update({ status: 'error', error: 'Nenhum chunk gerado' }).eq('id', document_id);
+        return { success: false, message: 'No chunks' };
+      }
+
+      // Get API key for embeddings
+      let apiKey = null;
+      const { data: aiConfig } = await supabase
+        .from('ai_configs')
+        .select('*, global_api_key:global_api_keys(*)')
+        .eq('tenant_id', tenant_id)
+        .eq('task_type', 'message_generation')
+        .maybeSingle();
+      if (aiConfig) apiKey = aiConfig.api_key_encrypted || aiConfig.global_api_key?.api_key_encrypted || null;
+      if (!apiKey) apiKey = process.env.OPENAI_API_KEY || null;
+
+      if (!apiKey) {
+        await supabase.from('knowledge_documents').update({ status: 'error', error: 'API key não configurada para embeddings' }).eq('id', document_id);
+        return { success: false, message: 'No API key' };
+      }
+
+      // Generate embeddings in batches of 3
+      const BATCH_SIZE = 3;
+      let inserted = 0;
+
+      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const batch = chunks.slice(i, i + BATCH_SIZE);
+        console.log(`[Worker] ingest_document: embedding batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(chunks.length / BATCH_SIZE)}`);
+
+        const resp = await fetch('https://api.openai.com/v1/embeddings', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'text-embedding-3-small', input: batch, dimensions: 1536 }),
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text();
+          console.error('[Worker] ingest_document: embedding error:', errText);
+          await supabase.from('knowledge_documents').update({
+            status: 'error',
+            error: `Erro de embedding: HTTP ${resp.status}`,
+          }).eq('id', document_id);
+          throw new Error(`Embedding error: HTTP ${resp.status}`);
+        }
+
+        const result = await resp.json();
+        const rows = batch.map((content, idx) => ({
+          tenant_id,
+          document_id,
+          content,
+          embedding: JSON.stringify(result.data[idx].embedding),
+          chunk_index: i + idx,
+          document_name: doc.name,
+          metadata: { char_count: content.length, category: doc.category || null },
+        }));
+
+        const { error: insErr } = await supabase.from('knowledge_chunks').insert(rows);
+        if (insErr) {
+          console.error('[Worker] ingest_document: insert error:', insErr);
+          await supabase.from('knowledge_documents').update({
+            status: 'error',
+            error: 'Erro ao salvar chunks: ' + insErr.message,
+          }).eq('id', document_id);
+          throw new Error('Insert error: ' + insErr.message);
+        }
+        inserted += batch.length;
+      }
+
+      // Mark as completed
+      await supabase.from('knowledge_documents').update({
+        status: 'completed',
+        chunk_count: inserted,
+      }).eq('id', document_id);
+
+      console.log(`[Worker] ingest_document: DONE - ${inserted} chunks for ${document_id}`);
+      return { success: true, document_id, chunks: inserted };
+
+    } catch (err) {
+      console.error(`[Worker] ingest_document: fatal error for ${document_id}:`, err.message);
+      // Ensure status is error
+      await supabase.from('knowledge_documents').update({
+        status: 'error',
+        error: err.message || 'Erro desconhecido no processamento',
+      }).eq('id', document_id);
+      throw err;
+    }
+  },
 };
 
 // Helpers
