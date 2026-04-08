@@ -67,7 +67,7 @@ function KeywordTester({ keywords }: { keywords: string[] }) {
   );
 }
 
-
+function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   const [waStatus, setWaStatus] = useState<'loading' | 'no_instance' | 'disconnected' | 'connecting' | 'connected' | 'error'>('loading');
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [phone, setPhone] = useState<string | null>(null);
