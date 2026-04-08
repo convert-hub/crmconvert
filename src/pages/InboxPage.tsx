@@ -18,12 +18,13 @@ import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
 
-function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
+function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated }: {
   contact?: Contact;
   channel?: string;
   status?: string;
   statusColors: Record<string, string>;
   onNameSaved: (name: string) => void;
+  aiActivated?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(contact?.name ?? '');
@@ -71,7 +72,12 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
         )}
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
       </div>
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        {aiActivated && (
+          <Badge variant="outline" className="rounded-full bg-violet-500/10 text-violet-600 border-violet-500/20 gap-1 text-xs">
+            <Bot className="h-3 w-3" />IA Ativa
+          </Badge>
+        )}
         <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
       </div>
     </div>
