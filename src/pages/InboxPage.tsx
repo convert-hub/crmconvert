@@ -8,7 +8,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Search, MessageSquare, Plus, Pencil, Trash2, Kanban } from 'lucide-react';
+import { Search, MessageSquare, Plus, Pencil, Trash2, Kanban, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels, channelLabels } from '@/lib/labels';
 import { formatDistanceToNow } from 'date-fns';
@@ -18,12 +18,13 @@ import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
 
-function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
+function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated }: {
   contact?: Contact;
   channel?: string;
   status?: string;
   statusColors: Record<string, string>;
   onNameSaved: (name: string) => void;
+  aiActivated?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(contact?.name ?? '');
@@ -71,7 +72,12 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved }: {
         )}
         <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
       </div>
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        {aiActivated && (
+          <Badge variant="outline" className="rounded-full bg-violet-500/10 text-violet-600 border-violet-500/20 gap-1 text-xs">
+            <Bot className="h-3 w-3" />IA Ativa
+          </Badge>
+        )}
         <Badge variant="outline" className={`rounded-full ${statusColors[status ?? ''] ?? ''}`}>{conversationStatusLabels[status ?? ''] ?? status}</Badge>
       </div>
     </div>
@@ -214,7 +220,14 @@ export default function InboxPage() {
                     <span className="text-xs text-muted-foreground">{channelLabels[conv.channel] ?? conv.channel}</span>
                     {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
                   </div>
-                  <Badge variant="outline" className={`text-[10px] mt-1.5 rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <Badge variant="outline" className={`text-[10px] rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
+                    {(conv.metadata as any)?.ai_activated === true && (
+                      <Badge variant="outline" className="text-[10px] rounded-full bg-violet-500/10 text-violet-600 border-violet-500/20 gap-0.5">
+                        <Bot className="h-2.5 w-2.5" />IA
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -233,6 +246,7 @@ export default function InboxPage() {
                 channel={selectedData?.channel}
                 status={selectedData?.status}
                 statusColors={statusColors}
+                aiActivated={(selectedData?.metadata as any)?.ai_activated === true}
                 onNameSaved={(newName) => {
                   setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
                 }}

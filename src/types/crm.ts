@@ -124,6 +124,7 @@ export interface Conversation {
   last_message_at: string | null;
   last_customer_message_at: string | null;
   last_agent_message_at: string | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
   // joined
   contact?: Contact;
