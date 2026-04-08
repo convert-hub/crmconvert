@@ -296,7 +296,8 @@ serve(async (req) => {
         console.log('UAZAPI send response:', sendRes.status, JSON.stringify(sendData));
 
         if (!sendRes.ok) {
-          const errMsg = sendData.error || sendData.message || `Falha ao enviar: ${sendRes.status}`;
+          const rawErr = sendData.error || sendData.message || `Falha ao enviar: ${sendRes.status}`;
+          const errMsg = typeof rawErr === 'string' ? rawErr : JSON.stringify(rawErr);
           // Return 400 for client errors (invalid number, etc.), 502 for upstream issues
           const isClientError = errMsg.includes('not on WhatsApp') || errMsg.includes('invalid') || sendRes.status === 400 || sendRes.status === 404;
           return jsonResponse({ error: errMsg, details: sendData }, isClientError ? 400 : 502);
