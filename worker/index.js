@@ -150,7 +150,22 @@ const handlers = {
       // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, message_text || '');
+          // Transcribe audio if message has no text
+          let effectiveMessageText = message_text || '';
+          if (!message_text && !data?.fromMe) {
+            const { data: lastMsg } = await supabase.from('messages')
+              .select('id, media_type, media_url')
+              .eq('conversation_id', conversation_id)
+              .eq('direction', 'inbound')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+            if (lastMsg && lastMsg.media_type && lastMsg.media_type.toLowerCase().includes('audio') && lastMsg.media_url) {
+              const transcription = await transcribeAudio(tenant_id, lastMsg.media_url, lastMsg.id);
+              if (transcription) effectiveMessageText = transcription;
+            }
+          }
+          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveMessageText);
         } catch (err) {
           console.error('[Worker] AI auto-reply error:', err.message);
         }
