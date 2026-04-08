@@ -28,7 +28,8 @@ interface Member { id: string; user_id: string; role: string; is_active: boolean
 interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_minutes: number | null; }
 interface AiConfig { id: string; task_type: string; provider: string; model: string; daily_limit: number; monthly_limit: number; daily_usage: number; monthly_usage: number; }
 
-const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qa_review: 'QA / Review', qualification: 'Qualificação', stage_classifier: 'Classificador de Etapa' };
+// TODO: reativar qa_review e stage_classifier quando backend for implementado
+const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qualification: 'Qualificação' };
 
 function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   const [waStatus, setWaStatus] = useState<'loading' | 'no_instance' | 'disconnected' | 'connecting' | 'connected' | 'error'>('loading');
@@ -381,12 +382,12 @@ export default function SettingsPage() {
 
           <Card className="glass-card rounded-2xl">
             <CardHeader>
-              <CardTitle>Palavras-chave para Leads</CardTitle>
-              <CardDescription>Mensagens do WhatsApp contendo essas palavras criarão automaticamente uma oportunidade no pipeline para contatos com status "lead"</CardDescription>
+              <CardTitle>Palavras-chave e Frases para Leads</CardTitle>
+              <CardDescription>Mensagens do WhatsApp contendo essas palavras ou frases criarão automaticamente uma oportunidade no pipeline para contatos com status "lead". Aceita tanto palavras individuais quanto frases completas (ex: "quero comprar", "qual o preço", "tenho interesse").</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap gap-2">
-                {leadKeywords.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma palavra-chave configurada.</p>}
+                {leadKeywords.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma palavra-chave ou frase configurada.</p>}
                 {leadKeywords.map(kw => (
                   <Badge key={kw} variant="secondary" className="rounded-full text-sm gap-1 px-3 py-1">
                     {kw}
@@ -403,12 +404,15 @@ export default function SettingsPage() {
                   <Input
                     value={newKeyword}
                     onChange={e => setNewKeyword(e.target.value)}
-                    placeholder="Ex: preço, orçamento, comprar..."
+                    placeholder="Ex: preço, quero comprar, qual o valor, tenho interesse..."
                     className="rounded-xl flex-1"
                     onKeyDown={e => e.key === 'Enter' && addKeyword()}
                   />
                   <Button onClick={addKeyword} className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Adicionar</Button>
                 </div>
+              )}
+              {leadKeywords.length > 0 && (
+                <KeywordTester keywords={leadKeywords} />
               )}
             </CardContent>
           </Card>
