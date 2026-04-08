@@ -75,6 +75,14 @@ async function processDocument(document_id: string, tenant_id: string, preExtrac
     if (preExtractedText && preExtractedText.trim().length > 10) {
       console.log(`[ingest] Using pre-extracted text: ${preExtractedText.length} chars`);
       text = preExtractedText;
+    } else if (mime.includes("pdf")) {
+      // PDFs must be extracted in the browser due to edge function memory limits
+      console.error("[ingest] PDF without pre-extracted text - cannot process on server");
+      await supabase.from("knowledge_documents").update({
+        status: "error",
+        error: "PDF precisa ser reprocessado pela interface. Clique em Reprocessar."
+      }).eq("id", document_id);
+      return { success: false, error: "PDF requires browser extraction" };
     } else {
       try {
         text = await extractTextFromStorage(supabase, doc.storage_path, mime);
