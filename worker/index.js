@@ -134,21 +134,25 @@ const handlers = {
         return { skipped: true, reason: 'conversation or contact not found' };
       }
 
-      // Only auto-reply if no human agent assigned
-      if (!conv.assigned_to) {
+      // 1. FIRST: Check keyword and activate AI if needed
+      if (message_text && !data?.fromMe) {
         try {
-          await handleAiAutoReply(tenant_id, conv, contact, message_text || '');
+          await checkKeywordAndActivateAi(tenant_id, contact_id, conversation_id, message_text);
         } catch (err) {
-          console.error('[Worker] AI auto-reply error:', err.message);
+          console.error('[Worker] Keyword/AI activation error:', err.message);
         }
       }
 
-      // Keyword-based lead creation for inbound messages
-      if (message_text && !data?.fromMe) {
+      // 2. SECOND: Re-fetch fresh conversation and contact from DB
+      const { data: freshConv } = await supabase.from('conversations').select('*').eq('id', conversation_id).single();
+      const { data: freshContact } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
+
+      // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+      if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          await checkKeywordLeadCreation(tenant_id, contact_id, conversation_id, message_text);
+          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, message_text || '');
         } catch (err) {
-          console.error('[Worker] Keyword lead creation error:', err.message);
+          console.error('[Worker] AI auto-reply error:', err.message);
         }
       }
 
@@ -229,8 +233,23 @@ const handlers = {
     }
     await supabase.from('conversations').update(updates).eq('id', conversation.id);
 
-    // AI auto-reply for inbound
-    if (!fromMe && !conversation.assigned_to) {
+    // 1. FIRST: Check keyword and activate AI if needed
+    if (!fromMe && text) {
+      try {
+        await checkKeywordAndActivateAi(tenant_id, contact.id, conversation.id, text);
+      } catch (err) {
+        console.error('[Worker] Keyword/AI activation error:', err.message);
+      }
+    }
+
+    // 2. SECOND: Re-fetch fresh conversation and contact from DB
+    const { data: freshConv2 } = await supabase.from('conversations').select('*').eq('id', conversation.id).single();
+    const { data: freshContact2 } = await supabase.from('contacts').select('*').eq('id', contact.id).single();
+    if (freshConv2) conversation = freshConv2;
+    if (freshContact2) contact = freshContact2;
+
+    // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+    if (!fromMe && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
         await handleAiAutoReply(tenant_id, conversation, contact, text);
       } catch (err) {
@@ -238,14 +257,8 @@ const handlers = {
       }
     }
 
-    // Keyword-based lead creation for inbound messages (legacy flow)
+    // Trigger chatbot flows for inbound messages
     if (!fromMe && text) {
-      try {
-        await checkKeywordLeadCreation(tenant_id, contact.id, conversation.id, text);
-      } catch (err) {
-        console.error('[Worker] Keyword lead creation error:', err.message);
-      }
-
       try {
         await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, text);
       } catch (err) {
