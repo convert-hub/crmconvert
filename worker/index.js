@@ -197,9 +197,13 @@ const handlers = {
     const messageId = msg.messageid || msg.id || msg.key?.id || '';
     const sender = msg.sender || msg.chatid || msg.key?.remoteJid || '';
     
+    // Extract media info from UAZAPI payload
+    const mediaType = msg.mediaType || msg.type || msg.message_type || '';
+    const mediaUrl = msg.mediaUrl || msg.media?.url || msg.content?.url || '';
+
     const phone = normalizePhone(sender.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, ''));
 
-    if (!phone || !text) {
+    if (!phone || (!text && !mediaUrl)) {
       return { skipped: true, reason: 'no phone or content' };
     }
 
