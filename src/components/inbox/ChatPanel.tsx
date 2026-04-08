@@ -77,7 +77,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
       const data = res.data;
       const error = res.error;
 
-      if (error || data?.error) {
+      if (error || data?.ok === false || data?.error) {
         setMediaData('expired');
         return;
       }

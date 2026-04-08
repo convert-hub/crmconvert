@@ -438,12 +438,13 @@ serve(async (req) => {
         if (!dlRes.ok) {
           const errText = await dlRes.text();
           console.error('UAZAPI download media error:', dlRes.status, errText);
-          // Return 404 for expired/unavailable media so frontend can show user-friendly error
+          // Return 200 with ok:false so Supabase SDK doesn't throw global error; frontend checks data.ok
           const isExpired = dlRes.status === 404 || dlRes.status === 500 || errText.includes('download failed') || errText.includes('not found') || errText.includes('Message not found');
           return jsonResponse({ 
+            ok: false,
             error: isExpired ? 'Mídia expirada ou indisponível no WhatsApp' : `Falha ao baixar mídia: ${dlRes.status}`,
             expired: isExpired,
-          }, isExpired ? 404 : 502);
+          });
         }
 
         // Check if response is JSON (URL/link) or binary (file data)
