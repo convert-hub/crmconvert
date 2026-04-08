@@ -50,9 +50,39 @@ serve(async (req) => {
     }
     const audioBlob = await audioResponse.blob();
 
-    // 3. Enviar para OpenAI Whisper API
+    // 3. Detectar extensão correta pelo Content-Type
+    const mimeToExt: Record<string, string> = {
+      'audio/ogg': 'ogg',
+      'audio/mpeg': 'mp3',
+      'audio/mp4': 'm4a',
+      'audio/mp3': 'mp3',
+      'audio/wav': 'wav',
+      'audio/x-wav': 'wav',
+      'audio/webm': 'webm',
+      'audio/flac': 'flac',
+      'video/mp4': 'mp4',
+      'application/ogg': 'ogg',
+      'audio/opus': 'ogg',
+    };
+
+    const rawContentType = audioResponse.headers.get("content-type") || "";
+    const baseMime = rawContentType.split(";")[0].trim().toLowerCase();
+    let fileExt = mimeToExt[baseMime] || "";
+
+    if (!fileExt) {
+      const urlExt = media_url.split("?")[0].split(".").pop()?.toLowerCase() || "";
+      if (Object.values(mimeToExt).includes(urlExt)) {
+        fileExt = urlExt;
+      } else {
+        fileExt = "ogg";
+      }
+    }
+
+    console.log("transcribe-audio: detected content-type:", baseMime, "-> ext:", fileExt);
+
+    // 4. Enviar para OpenAI Whisper API
     const formData = new FormData();
-    formData.append("file", audioBlob, "audio.ogg");
+    formData.append("file", audioBlob, `audio.${fileExt}`);
     formData.append("model", "whisper-1");
     formData.append("language", "pt");
 
