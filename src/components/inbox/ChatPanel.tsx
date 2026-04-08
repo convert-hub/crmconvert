@@ -77,18 +77,8 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
       const data = res.data;
       const error = res.error;
 
-      if (error) {
-        // Try to parse error response body for expired flag
-        try {
-          const errBody = typeof error === 'object' && 'context' in error ? await (error as any).context?.json?.() : null;
-          if (errBody?.expired) { setMediaData('expired'); return; }
-        } catch { /* ignore parse errors */ }
+      if (error || data?.error) {
         setMediaData('expired');
-        return;
-      }
-
-      if (data?.error) {
-        setMediaData(data.expired ? 'expired' : 'expired');
         return;
       }
 
