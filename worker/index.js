@@ -150,7 +150,22 @@ const handlers = {
       // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, message_text || '');
+          // Transcribe audio if message has no text
+          let effectiveMessageText = message_text || '';
+          if (!message_text && !data?.fromMe) {
+            const { data: lastMsg } = await supabase.from('messages')
+              .select('id, media_type, media_url')
+              .eq('conversation_id', conversation_id)
+              .eq('direction', 'inbound')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+            if (lastMsg && lastMsg.media_type && lastMsg.media_type.toLowerCase().includes('audio') && lastMsg.media_url) {
+              const transcription = await transcribeAudio(tenant_id, lastMsg.media_url, lastMsg.id);
+              if (transcription) effectiveMessageText = transcription;
+            }
+          }
+          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveMessageText);
         } catch (err) {
           console.error('[Worker] AI auto-reply error:', err.message);
         }
@@ -182,9 +197,13 @@ const handlers = {
     const messageId = msg.messageid || msg.id || msg.key?.id || '';
     const sender = msg.sender || msg.chatid || msg.key?.remoteJid || '';
     
+    // Extract media info from UAZAPI payload
+    const mediaType = msg.mediaType || msg.type || msg.message_type || '';
+    const mediaUrl = msg.mediaUrl || msg.media?.url || msg.content?.url || '';
+
     const phone = normalizePhone(sender.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, ''));
 
-    if (!phone || !text) {
+    if (!phone || (!text && !mediaUrl)) {
       return { skipped: true, reason: 'no phone or content' };
     }
 
@@ -214,13 +233,16 @@ const handlers = {
       conversation = newConv;
     }
 
-    // Save message
-    await supabase.from('messages').insert({
+    // Save message (include media info if present)
+    const msgInsert = {
       tenant_id, conversation_id: conversation.id,
       direction: fromMe ? 'outbound' : 'inbound',
-      content: text, provider_message_id: messageId,
+      content: text || null, provider_message_id: messageId,
       provider_metadata: msg,
-    });
+    };
+    if (mediaType) msgInsert.media_type = mediaType;
+    if (mediaUrl) msgInsert.media_url = mediaUrl;
+    const { data: savedMsg } = await supabase.from('messages').insert(msgInsert).select('id').single();
 
     // Update conversation timestamps
     const updates = { last_message_at: new Date().toISOString() };
@@ -251,7 +273,13 @@ const handlers = {
     // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
     if (!fromMe && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
-        await handleAiAutoReply(tenant_id, conversation, contact, text);
+        // Transcribe audio if message has no text but has audio
+        let effectiveText = text || '';
+        if (!text && mediaType && mediaType.toLowerCase().includes('audio') && mediaUrl && savedMsg?.id) {
+          const transcription = await transcribeAudio(tenant_id, mediaUrl, savedMsg.id);
+          if (transcription) effectiveText = transcription;
+        }
+        await handleAiAutoReply(tenant_id, conversation, contact, effectiveText);
       } catch (err) {
         console.error('[Worker] AI auto-reply error:', err.message);
       }
@@ -882,6 +910,37 @@ async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, 
       _tenant_id: tenantId,
       _idempotency_key: `flow-${flow.id}-${conversationId}-${Date.now()}`,
     });
+  }
+}
+
+// ── Transcribe audio via Whisper edge function ──
+async function transcribeAudio(tenantId, mediaUrl, messageId) {
+  try {
+    console.log('[Worker] Transcribing audio for message', messageId);
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/transcribe-audio`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        media_url: mediaUrl,
+        message_id: messageId,
+        tenant_id: tenantId,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.transcription) {
+      console.log('[Worker] Audio transcription failed or empty:', data.error || 'no transcription');
+      return null;
+    }
+
+    console.log('[Worker] Audio transcription success:', data.transcription.substring(0, 100));
+    return data.transcription;
+  } catch (err) {
+    console.error('[Worker] Audio transcription error:', err.message);
+    return null; // Fail-safe — does not impact normal flow
   }
 }
 

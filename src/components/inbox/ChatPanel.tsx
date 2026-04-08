@@ -152,7 +152,14 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
             <Mic className="h-3.5 w-3.5" /> {unavailableMessage}
           </div>
         ) : mediaData ? (
-          <AudioPlayer src={mediaData} isOutbound={isOutbound} />
+          <>
+            <AudioPlayer src={mediaData} isOutbound={isOutbound} />
+            {(msg as any).provider_metadata?.audio_transcription && (
+              <p className={cn("text-xs italic mt-1 opacity-70", isOutbound ? "text-white/70" : "text-muted-foreground")}>
+                📝 {(msg as any).provider_metadata.audio_transcription}
+              </p>
+            )}
+          </>
         ) : (
           <button onClick={loadMedia} className={cn("flex items-center gap-2 text-xs py-1 opacity-70 hover:opacity-100 transition-opacity", isOutbound ? "text-white" : "text-foreground")}>
             <Mic className="h-3.5 w-3.5" /> Carregar áudio
