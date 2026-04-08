@@ -1,43 +1,62 @@
 
 
-## Plano: Desativar task types não funcionais e melhorar UX de keywords para leads
+## Plano: Sistema de ativação de IA por keyword (chave de ignição)
 
-### Parte 1 — Ocultar `qa_review` e `stage_classifier` da UI
+### Resumo
 
-**3 arquivos editados, sem alteração no banco:**
+A IA só responde automaticamente quando uma keyword configurada é detectada na conversa. Uma vez ativada (`metadata.ai_activated = true`), a IA continua respondendo até um humano assumir (`assigned_to`). Todas as alterações são no `worker/index.js`.
+
+### Alterações em `worker/index.js`
+
+#### 1. Criar `checkKeywordAndActivateAi` (substitui `checkKeywordLeadCreation`)
+
+Nova função que:
+- Busca `lead_keywords` do tenant
+- Normaliza e faz match
+- Seta `metadata.ai_activated = true` + `ai_activated_at` + `ai_activated_keyword` na conversa
+- Converte contato para lead se necessário
+- Cria oportunidade no pipeline padrão (se não existir uma aberta)
+- Cria activity de notificação
+- Retorna `true` se keyword bateu
+
+#### 2. Refatorar `process_uazapi_message` — path `already_saved` (linhas 137-153)
+
+Ordem atual: `handleAiAutoReply` → `checkKeywordLeadCreation`
+
+Nova ordem:
+1. `checkKeywordAndActivateAi` (keyword check primeiro)
+2. Re-buscar conversa atualizada do banco
+3. `handleAiAutoReply` somente se `ai_activated === true` E `!assigned_to`
+
+#### 3. Refatorar `process_uazapi_message` — path legacy (linhas 232-254)
+
+Mesma lógica: keyword check primeiro, re-buscar dados, depois auto-reply condicional.
+
+#### 4. Guard clauses em `handleAiAutoReply` (linha 1003)
+
+Adicionar no início:
+- Se `conversation.metadata?.ai_activated !== true` → skip
+- Se `contact.status !== 'lead'` → skip
+
+#### 5. Remover `checkKeywordLeadCreation` (linhas 875-933)
+
+Substituída completamente por `checkKeywordAndActivateAi`.
+
+### O que NÃO muda
+
+- AI Copilot (sugestão no chat) — continua para todos
+- Flows/automações — mesma posição
+- Edge function `ai-generate` — sem alteração
+- Settings UI (lead_keywords) — sem alteração
+- Webhook functions — sem alteração
+
+### Arquivo alterado
 
 | Arquivo | Alteração |
 |---|---|
-| `src/pages/PromptStudioPage.tsx` | Remover `qa_review` e `stage_classifier` do array `TASK_TYPES` (linhas 18, 20). Adicionar comentário TODO |
-| `src/pages/SettingsPage.tsx` | Remover `qa_review` e `stage_classifier` de `AI_TASK_LABELS` (linha 31). Adicionar comentário TODO |
-| `src/pages/admin/AdminApis.tsx` | Remover `qa_review` e `stage_classifier` de `taskTypeLabels` (linhas 224, 226) e dos `<SelectItem>` (linhas 407, 409). Adicionar comentário TODO |
+| `worker/index.js` | Nova função, refatorar 2 paths, guard clauses, remover função antiga |
 
-### Parte 2 — Melhorar UX de palavras-chave para leads
+### Nota
 
-**Arquivo: `src/pages/SettingsPage.tsx`**
-
-1. **Atualizar textos** (linhas 384-386, 406):
-   - CardTitle: "Palavras-chave e Frases para Leads"
-   - CardDescription: explicitar que aceita frases completas (ex: "quero comprar", "qual o preço")
-   - Placeholder do input: `Ex: preço, quero comprar, qual o valor, tenho interesse...`
-
-2. **Adicionar campo "Testar frase"** abaixo do input de adicionar keyword:
-   - Input com placeholder "Digite uma frase para testar..."
-   - Botão "Testar"
-   - Lógica client-side: normaliza a frase (lowercase, remove acentos via `normalize('NFD').replace(...)`) e verifica `includes` contra cada keyword cadastrada
-   - Exibe resultado: "Faria match com: [keyword]" em verde, ou "Nenhum match" em vermelho
-   - Usa a mesma lógica de normalização do worker para consistência
-
-3. **Função auxiliar `removeAccents`** inline no componente:
-   ```typescript
-   const removeAccents = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-   ```
-
-### Arquivos alterados
-
-| Arquivo | Alteração |
-|---|---|
-| `src/pages/PromptStudioPage.tsx` | Ocultar 2 task types |
-| `src/pages/SettingsPage.tsx` | Ocultar 2 task types + melhorar UX keywords + campo testar frase |
-| `src/pages/admin/AdminApis.tsx` | Ocultar 2 task types |
+Requer rebuild do container Docker do worker para entrar em vigor em produção.
 
