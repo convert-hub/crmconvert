@@ -885,64 +885,69 @@ async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, 
   }
 }
 
-async function checkKeywordLeadCreation(tenantId, contactId, conversationId, messageText) {
-  // 1. Check contact status
-  const { data: contact } = await supabase.from('contacts').select('id, name, status').eq('id', contactId).single();
-  if (!contact || contact.status !== 'lead') return;
-
-  // 2. Get tenant keywords
+async function checkKeywordAndActivateAi(tenantId, contactId, conversationId, messageText) {
+  // 1. Get tenant keywords
   const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
   const keywords = tenant?.settings?.lead_keywords || [];
-  if (keywords.length === 0) return;
+  if (keywords.length === 0) return false;
 
-  // 3. Normalize and match
+  // 2. Normalize and match
   const normalizedMessage = removeAccents(messageText.toLowerCase());
   const matchedKeyword = keywords.find(k => normalizedMessage.includes(removeAccents(k.toLowerCase())));
-  if (!matchedKeyword) return;
+  if (!matchedKeyword) return false;
 
-  console.log(`[Worker] Keyword match "${matchedKeyword}" for contact ${contactId}`);
+  console.log(`[Worker] Keyword match "${matchedKeyword}" for contact ${contactId} in conversation ${conversationId}`);
 
-  // 4. Check if open opportunity already exists
-  const { data: existingOpps } = await supabase.from('opportunities')
-    .select('id').eq('contact_id', contactId).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
-  if (existingOpps && existingOpps.length > 0) {
-    console.log(`[Worker] Open opportunity already exists for contact ${contactId}, skipping`);
-    return;
+  // 3. Activate AI on conversation (set metadata.ai_activated = true)
+  const { data: conv } = await supabase.from('conversations').select('metadata').eq('id', conversationId).single();
+  const currentMetadata = conv?.metadata || {};
+  await supabase.from('conversations').update({
+    metadata: { ...currentMetadata, ai_activated: true, ai_activated_at: new Date().toISOString(), ai_activated_keyword: matchedKeyword }
+  }).eq('id', conversationId);
+
+  // 4. Ensure contact is a lead (convert if necessary)
+  const { data: contact } = await supabase.from('contacts').select('id, name, status')
+    .eq('id', contactId).eq('tenant_id', tenantId).single();
+
+  if (contact && contact.status !== 'lead') {
+    await supabase.from('contacts').update({ status: 'lead' }).eq('id', contactId);
+    console.log(`[Worker] Contact ${contactId} converted to lead via keyword "${matchedKeyword}"`);
   }
 
-  // 5. Get default pipeline and first stage
-  const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenantId).eq('is_default', true).single();
-  if (!pipeline) { console.log('[Worker] No default pipeline found'); return; }
+  // 5. Create opportunity if none open
+  const { data: existingOpps } = await supabase.from('opportunities')
+    .select('id').eq('contact_id', contactId).eq('tenant_id', tenantId).eq('status', 'open').limit(1);
 
-  const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-  if (!stage) { console.log('[Worker] No stages in default pipeline'); return; }
+  if (existingOpps && existingOpps.length > 0) {
+    console.log(`[Worker] Open opportunity already exists for contact ${contactId}, skipping`);
+  } else {
+    const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenantId).eq('is_default', true).single();
+    if (pipeline) {
+      const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
+      if (stage) {
+        const { data: existingByKey } = await supabase.from('opportunities')
+          .select('id').eq('contact_id', contactId).eq('tenant_id', tenantId).eq('source', 'whatsapp_keyword').limit(1);
+        if (!existingByKey || existingByKey.length === 0) {
+          await supabase.from('opportunities').insert({
+            tenant_id: tenantId, contact_id: contactId,
+            pipeline_id: pipeline.id, stage_id: stage.id,
+            title: `Lead: ${contact?.name || 'Sem nome'}`, source: 'whatsapp_keyword',
+          });
+        }
+      }
+    }
 
-  // 6. Create opportunity with idempotency
-  const idempKey = `kw_opp_${contactId}_${new Date().toISOString().slice(0, 10)}`;
-  const { data: existingByKey } = await supabase.from('opportunities')
-    .select('id').eq('tenant_id', tenantId).eq('contact_id', contactId).eq('source', 'whatsapp_keyword').eq('status', 'open').limit(1);
-  if (existingByKey && existingByKey.length > 0) return;
+    // Create notification activity
+    await supabase.from('activities').insert({
+      tenant_id: tenantId, type: 'note',
+      title: 'Lead acionado por palavra-chave',
+      description: `Palavra-chave detectada: "${matchedKeyword}". IA ativada na conversa. Mensagem: "${messageText.substring(0, 200)}"`,
+      contact_id: contactId, conversation_id: conversationId,
+    });
+    console.log(`[Worker] Created opportunity and activity for contact ${contactId} via keyword "${matchedKeyword}"`);
+  }
 
-  await supabase.from('opportunities').insert({
-    tenant_id: tenantId,
-    contact_id: contactId,
-    pipeline_id: pipeline.id,
-    stage_id: stage.id,
-    title: `Lead: ${contact.name}`,
-    source: 'whatsapp_keyword',
-  });
-
-  // 7. Create notification activity
-  await supabase.from('activities').insert({
-    tenant_id: tenantId,
-    type: 'note',
-    title: 'Lead acionado por palavra-chave',
-    description: `Palavra-chave detectada: "${matchedKeyword}". Mensagem: "${messageText.substring(0, 200)}"`,
-    contact_id: contactId,
-    conversation_id: conversationId,
-  });
-
-  console.log(`[Worker] Created opportunity and activity for contact ${contactId} via keyword "${matchedKeyword}"`);
+  return true; // keyword matched and AI activated
 }
 
 // AI Functions
@@ -1014,6 +1019,15 @@ async function logAiCall(tenantId, taskType, model, provider, tokens, duration, 
 }
 
 async function handleAiAutoReply(tenantId, conversation, contact, incomingMessage) {
+  // Guard: only reply if AI is activated by keyword
+  if (conversation.metadata?.ai_activated !== true) {
+    console.log('[Worker] AI auto-reply skipped: conversation not activated by keyword');
+    return;
+  }
+  if (contact.status !== 'lead') {
+    console.log('[Worker] AI auto-reply skipped: contact status is', contact.status);
+    return;
+  }
   try {
     const response = await fetch(`${SUPABASE_URL}/functions/v1/ai-generate`, {
       method: 'POST',
