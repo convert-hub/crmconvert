@@ -976,7 +976,8 @@ async function getConversationHistory(conversationId, limit = 20) {
 
 async function getPromptTemplate(tenantId, taskType) {
   const { data } = await supabase.from('prompt_templates').select('*')
-    .eq('tenant_id', tenantId).eq('task_type', taskType).eq('is_active', true).limit(1);
+    .eq('tenant_id', tenantId).eq('task_type', taskType).eq('is_active', true)
+    .order('version', { ascending: false }).limit(1);
   return data?.[0] || null;
 }
 
@@ -1000,139 +1001,62 @@ async function logAiCall(tenantId, taskType, model, provider, tokens, duration, 
 }
 
 async function handleAiAutoReply(tenantId, conversation, contact, incomingMessage) {
-  const config = await getAiConfig(tenantId, 'message_generation');
-  if (!config) {
-    console.log('[Worker] No AI config for message_generation or limits reached');
-    return;
-  }
-
-  let apiKey = config.api_key_encrypted || config.global_api_key?.api_key_encrypted || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.log('[Worker] No API key for message_generation');
-    return;
-  }
-
-  const template = await getPromptTemplate(tenantId, 'message_generation');
-  if (!template) {
-    console.log('[Worker] No active prompt_template for message_generation, skipping auto-reply');
-    return;
-  }
-
-  const history = await getConversationHistory(conversation.id);
-
-  // RAG - Search knowledge base for relevant context
-  let ragContext = "";
   try {
-    const embResponse = await fetch('https://api.openai.com/v1/embeddings', {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/ai-generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: incomingMessage, dimensions: 1536 }),
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversation_id: conversation.id,
+        tenant_id: tenantId,
+        mode: 'auto_reply',
+        incoming_message: incomingMessage,
+      }),
     });
 
-    if (embResponse.ok) {
-      const embResult = await embResponse.json();
-      const queryEmbedding = embResult.data?.[0]?.embedding;
-      if (queryEmbedding) {
-        const { data: chunks } = await supabase.rpc('search_knowledge', {
-          _tenant_id: tenantId,
-          _query_embedding: JSON.stringify(queryEmbedding),
-          _match_count: 5,
-          _match_threshold: 0.5,
-        });
-        if (chunks && chunks.length > 0) {
-          const groups = new Map();
-          for (const c of chunks) {
-            const key = c.document_name || c.category || "Geral";
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(c.content);
-          }
-          ragContext = "\n\n--- BASE DE CONHECIMENTO ---\nInformações organizadas por procedimento:\n\n";
-          for (const [name, contents] of groups) {
-            ragContext += `Procedimento: ${name}\n${contents.join("\n---\n")}\n\n`;
-          }
-          ragContext += "INSTRUÇÃO: Identifique sobre qual procedimento o lead pergunta e responda APENAS com informações do procedimento correto. Se não houver na base, diga que vai verificar com a equipe.";
-        }
-      }
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error(`[Worker] ai-generate error (${response.status}):`, data.error);
+      return;
     }
-  } catch (ragErr) {
-    console.error('[Worker] RAG search error:', ragErr.message);
-  }
 
-  // Fetch opportunity context for variable substitution
-  const { data: opp } = await supabase.from('opportunities')
-    .select('title, value, priority, status, next_action, stage:stages(name)')
-    .eq('tenant_id', tenantId)
-    .eq('contact_id', contact.id)
-    .eq('status', 'open')
-    .order('updated_at', { ascending: false })
-    .limit(1);
-  const oppData = opp?.[0];
-  const oppContext = oppData
-    ? `Oportunidade: "${oppData.title}" — Valor: R$${oppData.value} — Prioridade: ${oppData.priority} — Etapa: ${oppData.stage?.name || "?"}.${oppData.next_action ? ` Próxima ação: ${oppData.next_action}` : ""}`
-    : 'Nenhuma oportunidade aberta';
+    if (!data.suggestion) {
+      console.log('[Worker] ai-generate returned empty suggestion, skipping auto-reply');
+      return;
+    }
 
-  // Apply variable substitution like ai-copilot does
-  let systemPrompt = template.content
-    .replace(/\{\{contact_name\}\}/gi, contact?.name || 'Cliente')
-    .replace(/\{\{contact_status\}\}/gi, contact?.status || 'desconhecido')
-    .replace(/\{\{contact_tags\}\}/gi, (contact?.tags || []).join(', ') || 'nenhuma')
-    .replace(/\{\{contact_notes\}\}/gi, contact?.notes || '')
-    .replace(/\{\{channel\}\}/gi, conversation?.channel || 'whatsapp')
-    .replace(/\{\{conversation_status\}\}/gi, conversation?.status || 'aberto')
-    .replace(/\{\{opportunity_context\}\}/gi, oppContext);
-
-  // Append forbidden terms if configured
-  if (template.forbidden_terms?.length) {
-    systemPrompt += `\n\nTermos proibidos (NUNCA use): ${template.forbidden_terms.join(', ')}`;
-  }
-
-  // Append RAG context
-  if (ragContext) {
-    systemPrompt += ragContext;
-  }
-
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history,
-  ];
-
-  try {
-    const result = await callOpenAI(apiKey, config.model || 'gpt-4o-mini', messages);
-
-    await incrementAiUsage(config.id);
-    await logAiCall(tenantId, 'message_generation', config.model, config.provider, result.tokens, result.duration, { message: incomingMessage }, { reply: result.content }, null);
-
-    if (result.content) {
-      // Send via WhatsApp
-      await supabase.rpc('enqueue_job', {
-        _type: 'send_whatsapp',
-        _payload: JSON.stringify({
-          tenant_id: tenantId,
-          phone: contact.phone,
-          message: result.content,
-          conversation_id: conversation.id,
-        }),
-        _tenant_id: tenantId,
-      });
-
-      // Save AI message to DB
-      await supabase.from('messages').insert({
+    // Send via WhatsApp
+    await supabase.rpc('enqueue_job', {
+      _type: 'send_whatsapp',
+      _payload: JSON.stringify({
         tenant_id: tenantId,
+        phone: contact.phone,
+        message: data.suggestion,
         conversation_id: conversation.id,
-        direction: 'outbound',
-        content: result.content,
-        is_ai_generated: true,
-      });
+      }),
+      _tenant_id: tenantId,
+    });
 
-      // Run qualification check
-      await checkQualification(tenantId, conversation, contact, history.concat([
-        { role: 'user', content: incomingMessage },
-        { role: 'assistant', content: result.content },
-      ]));
-    }
+    // Save AI message to DB
+    await supabase.from('messages').insert({
+      tenant_id: tenantId,
+      conversation_id: conversation.id,
+      direction: 'outbound',
+      content: data.suggestion,
+      is_ai_generated: true,
+    });
+
+    // Run qualification check with history
+    const history = await getConversationHistory(conversation.id);
+    await checkQualification(tenantId, conversation, contact, history.concat([
+      { role: 'user', content: incomingMessage },
+      { role: 'assistant', content: data.suggestion },
+    ]));
   } catch (err) {
-    await logAiCall(tenantId, 'message_generation', config.model, config.provider, 0, 0, { message: incomingMessage }, null, err.message);
-    throw err;
+    console.error('[Worker] handleAiAutoReply error:', err.message);
   }
 }
 
