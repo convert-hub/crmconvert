@@ -885,6 +885,37 @@ async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, 
   }
 }
 
+// ── Transcribe audio via Whisper edge function ──
+async function transcribeAudio(tenantId, mediaUrl, messageId) {
+  try {
+    console.log('[Worker] Transcribing audio for message', messageId);
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/transcribe-audio`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        media_url: mediaUrl,
+        message_id: messageId,
+        tenant_id: tenantId,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.transcription) {
+      console.log('[Worker] Audio transcription failed or empty:', data.error || 'no transcription');
+      return null;
+    }
+
+    console.log('[Worker] Audio transcription success:', data.transcription.substring(0, 100));
+    return data.transcription;
+  } catch (err) {
+    console.error('[Worker] Audio transcription error:', err.message);
+    return null; // Fail-safe — does not impact normal flow
+  }
+}
+
 async function checkKeywordAndActivateAi(tenantId, contactId, conversationId, messageText) {
   // 1. Get tenant keywords
   const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
