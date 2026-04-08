@@ -1,74 +1,49 @@
 
 
-## Plano: Transcrição de áudio (Speech-to-Text) com OpenAI Whisper
+## Plano: Corrigir transcrição de áudio (formato de arquivo inválido)
 
-### Resumo
+### Problema
 
-Quando o contato envia áudio, o worker transcreve via Whisper antes de passar para a IA. A transcrição é salva no `provider_metadata` da mensagem e exibida na UI abaixo do player de áudio.
-
-### 1. Nova edge function `supabase/functions/transcribe-audio/index.ts`
-
-- Recebe `media_url`, `message_id`, `tenant_id`
-- Obtém API key via hierarquia existente (tenant ai_config → global_api_key → env OPENAI_API_KEY)
-- Baixa o áudio da URL
-- Envia para `https://api.openai.com/v1/audio/transcriptions` (modelo `whisper-1`, language `pt`)
-- Salva transcrição em `messages.provider_metadata.audio_transcription`
-- Retorna `{ transcription: "..." }`
-- CORS headers padrão
-
-### 2. Nova função `transcribeAudio()` no `worker/index.js`
-
-- Função auxiliar isolada que chama a edge function `transcribe-audio` via fetch
-- Retorna `null` em caso de falha (fail-safe, não impacta fluxo)
-
-### 3. Integrar transcrição nos dois paths de auto-reply
-
-**Path 1 — `already_saved` (linha ~151-153):**
-- Antes de `handleAiAutoReply`, verificar se `message_text` está vazio
-- Se vazio, buscar última mensagem inbound da conversa
-- Se `media_type` contém "audio", chamar `transcribeAudio`
-- Usar transcrição como `effectiveMessageText`
-
-**Path 2 — Legacy (linha ~187-254):**
-- Problema: a linha 187 faz `if (!phone || !text) return` — áudios sem texto são descartados
-- Solução: relaxar a condição para `if (!phone) return` (permitir mensagens sem texto se tiverem mídia)
-- Extrair `mediaType` e `mediaUrl` do payload UAZAPI
-- Antes do `handleAiAutoReply` (linha 254), se não há texto mas há áudio, transcrever
-- Usar transcrição como `effectiveText`
-
-**Nota importante**: No path legacy, o campo `text` vazio faz o worker ignorar a mensagem inteira (linha 187). É necessário ajustar essa condição para permitir mensagens de áudio (que não têm texto). A mídia será extraída dos campos `msg.mediaUrl` ou `msg.media?.url` do payload UAZAPI.
-
-### 4. Exibir transcrição na UI — `ChatPanel.tsx`
-
-No componente `MediaBubble`, após o `AudioPlayer` (linha 155), adicionar:
-
-```tsx
-{(msg as any).provider_metadata?.audio_transcription && (
-  <p className="text-xs italic opacity-70 mt-1">
-    📝 {(msg as any).provider_metadata.audio_transcription}
-  </p>
-)}
+Os logs da edge function `transcribe-audio` mostram:
+```
+Whisper error 400: Invalid file format. Supported formats: ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm']
 ```
 
-A transcrição aparece automaticamente quando o `provider_metadata` é atualizado (via realtime subscription que já escuta UPDATE na tabela messages).
+O áudio é baixado do WhatsApp como blob e enviado ao Whisper sempre como `"audio.ogg"`, sem preservar o content-type real. O Whisper rejeita o arquivo, a transcrição falha, e a IA recebe mensagem vazia -- respondendo "não consigo ouvir áudios".
 
-### Arquivos alterados
+### Solução
+
+Alterar `supabase/functions/transcribe-audio/index.ts` para:
+
+1. Capturar o `Content-Type` da resposta HTTP ao baixar o áudio do WhatsApp
+2. Mapear o MIME type para a extensão correta (ex: `audio/ogg` -> `.ogg`, `audio/mp4` -> `.m4a`, `audio/mpeg` -> `.mp3`)
+3. Usar a extensão correta no `formData.append("file", audioBlob, "audio.EXT")`
+4. Se o Content-Type não for reconhecido, tentar inferir da URL ou usar fallback `.ogg`
+
+### Detalhes técnicos
+
+Mapa de MIME types para extensões Whisper:
+```typescript
+const mimeToExt: Record<string, string> = {
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/mp3': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/webm': 'webm',
+  'audio/flac': 'flac',
+  'video/mp4': 'mp4',
+  'application/ogg': 'ogg',
+  'audio/opus': 'ogg',  // WhatsApp PTT uses opus in ogg container
+};
+```
+
+WhatsApp frequentemente envia áudios PTT (push-to-talk) como `audio/ogg; codecs=opus`. O código deve fazer split no `;` antes de buscar no mapa.
+
+### Arquivo alterado
 
 | Arquivo | Alteração |
 |---|---|
-| `supabase/functions/transcribe-audio/index.ts` | **Novo** — edge function de transcrição |
-| `worker/index.js` | Nova função `transcribeAudio`, integração nos 2 paths, relaxar guard clause do legacy path |
-| `src/components/inbox/ChatPanel.tsx` | Exibir transcrição abaixo do AudioPlayer |
-
-### O que NÃO muda
-
-- `ai-generate`, `ai-copilot`, `uazapi-proxy` — sem alteração
-- `handleAiAutoReply` — recebe texto como sempre
-- Webhook functions — sem alteração
-- AudioPlayer/AudioRecorder — sem alteração
-- Flows/Automações — sem alteração
-
-### Nota
-
-Requer rebuild do container Docker do worker e deploy da edge function para funcionar em produção.
+| `supabase/functions/transcribe-audio/index.ts` | Detectar content-type real, mapear para extensão correta |
 
