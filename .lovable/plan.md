@@ -1,39 +1,69 @@
 
 
-## Plano: Corrigir RAG e adicionar filtro por categoria no Prompt Studio
+## Plano: Delete Contextual com Confirmação de Cascade
 
-### 1. Migration: adicionar coluna `knowledge_category`
+### Diagnóstico
+
+A FK `conversations.contact_id` atual é `ON DELETE CASCADE` (não SET NULL como desejado). Isso significa que deletar um contato já deleta todas as conversas automaticamente, mas sem aviso ao usuário. Vamos mudar para SET NULL para dar controle ao usuário.
+
+### 1. Migration: Alterar FK `conversations.contact_id`
+
+Trocar `ON DELETE CASCADE` por `ON DELETE SET NULL`:
 
 ```sql
-ALTER TABLE public.prompt_templates
-  ADD COLUMN IF NOT EXISTS knowledge_category text DEFAULT NULL;
+ALTER TABLE public.conversations DROP CONSTRAINT conversations_contact_id_fkey;
+ALTER TABLE public.conversations ADD CONSTRAINT conversations_contact_id_fkey 
+  FOREIGN KEY (contact_id) REFERENCES public.contacts(id) ON DELETE SET NULL;
 ```
 
-### 2. Corrigir `supabase/functions/ai-generate/index.ts`
+### 2. Novo componente `src/components/shared/CascadeDeleteDialog.tsx`
 
-- Linha 95: incluir `knowledge_category` no select do promptTemplate
-- Linha 181: passar `_category: promptTemplate?.knowledge_category || null` no `search_knowledge`
-- Linha 199: reescrever instrução RAG para responder diretamente em vez de perguntar ao lead qual procedimento
+Dialog reutilizável com checkboxes para entidades vinculadas. Recebe lista de `linkedEntities` com type, label, count, icon, checked. Entidades com count 0 não aparecem. Marcar "Contato" auto-marca todos os outros.
 
-### 3. Atualizar `src/pages/PromptStudioPage.tsx`
+### 3. Novo hook `src/hooks/useCascadeDelete.ts`
 
-- Adicionar estado `knowledgeCategory` e `categories` (lista de categorias distintas dos `knowledge_documents`)
-- Carregar categorias via query em `knowledge_documents` no `useEffect`
-- Adicionar Select de categoria no dialog de criação/edição
-- Incluir `knowledge_category` nos inserts e updates do `handleSave`
-- Incluir na interface `PromptTemplate`, em `openEdit`, em `resetForm`, e em `handleDuplicate`
+Funções:
+- `getConversationLinked(id)` — conta atividades, oportunidades, outras conversas do contato
+- `getContactLinked(id)` — conta conversas, oportunidades, atividades
+- `getOpportunityLinked(id)` — conta atividades, conversas do contato
+- `deleteConversationCascade(id, contactId, toDelete[])` — delete ordenado
+- `deleteContactCascade(id, toDelete[])` — delete ordenado
+- `deleteOpportunityCascade(id, contactId, toDelete[])` — delete ordenado
+
+Ordem segura: activities → conversations → opportunities → contact
+
+### 4. Alterar `src/pages/InboxPage.tsx`
+
+- Remover `confirmDeleteConversation` e o AlertDialog simples
+- `handleDeleteConversation` vira async: busca vínculos antes de abrir o dialog
+- Usar `CascadeDeleteDialog` com entidades do contato vinculado
+
+### 5. Alterar `src/pages/PipelinePage.tsx`
+
+- Remover `confirmDeleteOpportunity` e o AlertDialog simples
+- `handleDeleteOpportunity` vira async: busca vínculos antes de abrir o dialog
+- Usar `CascadeDeleteDialog`
+
+### 6. Alterar `src/pages/ContactsPage.tsx`
+
+- Substituir `handleDelete` (que usa `confirm()`) por `CascadeDeleteDialog`
+- Adicionar estados para o dialog e dados de cascade
+- Somente admin/manager pode deletar (já controlado por RLS)
 
 ### Arquivos
 
 | Arquivo | Alteração |
 |---|---|
-| Nova migration SQL | `ADD COLUMN knowledge_category` |
-| `supabase/functions/ai-generate/index.ts` | Select com campo, filtro por categoria, instrução RAG corrigida |
-| `src/pages/PromptStudioPage.tsx` | UI: Select de categoria + lógica de save |
+| Nova migration SQL | Alterar FK para SET NULL |
+| `src/components/shared/CascadeDeleteDialog.tsx` | Novo componente |
+| `src/hooks/useCascadeDelete.ts` | Novo hook |
+| `src/pages/InboxPage.tsx` | Substituir AlertDialog |
+| `src/pages/PipelinePage.tsx` | Substituir AlertDialog |
+| `src/pages/ContactsPage.tsx` | Substituir `confirm()` por CascadeDeleteDialog |
 
 ### O que NÃO muda
 
-- RPC `search_knowledge` (já aceita `_category`)
-- `knowledge_documents` (já tem `category`)
-- KnowledgeBaseSettings, ingest-document
+- RLS policies, permissões de role
+- Fluxo de criação de entidades
+- Messages cascade (já automático via FK)
 
