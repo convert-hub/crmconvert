@@ -620,7 +620,43 @@ export default function SettingsPage() {
 
         <TabsContent value="team" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">
-            <CardHeader><CardTitle>Membros da Equipe</CardTitle><CardDescription>Gerencie usuários e papéis</CardDescription></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div><CardTitle>Membros da Equipe</CardTitle><CardDescription>Gerencie usuários e papéis</CardDescription></div>
+              {isAdmin && (
+                <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+                  <DialogTrigger asChild><Button size="sm" className="rounded-xl"><UserPlus className="h-4 w-4 mr-1" />Convidar Membro</Button></DialogTrigger>
+                  <DialogContent className="rounded-2xl">
+                    <DialogHeader><DialogTitle>Convidar Novo Membro</DialogTitle></DialogHeader>
+                    <div className="space-y-4 pt-2">
+                      <div className="space-y-2">
+                        <Label>Nome completo</Label>
+                        <Input value={inviteName} onChange={e => setInviteName(e.target.value)} placeholder="Nome do membro" className="rounded-xl" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Email</Label>
+                        <Input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="email@exemplo.com" className="rounded-xl" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cargo</Label>
+                        <Select value={inviteRole} onValueChange={setInviteRole}>
+                          <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="admin">Admin</SelectItem>
+                            <SelectItem value="manager">Gerente</SelectItem>
+                            <SelectItem value="attendant">Atendente</SelectItem>
+                            <SelectItem value="readonly">Somente Leitura</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Button onClick={handleInviteMember} disabled={inviteLoading || !inviteEmail.trim() || !inviteName.trim()} className="w-full rounded-xl">
+                        {inviteLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Enviar Convite
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </CardHeader>
             <CardContent className="space-y-4">
               <Table>
                 <TableHeader><TableRow className="hover:bg-transparent"><TableHead>Nome</TableHead><TableHead>Papel</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
@@ -645,7 +681,6 @@ export default function SettingsPage() {
                   ))}
                 </TableBody>
               </Table>
-              <p className="text-xs text-muted-foreground">Para convidar novos membros, crie a conta no Supabase Auth e adicione via SQL ou API.</p>
             </CardContent>
           </Card>
         </TabsContent>
