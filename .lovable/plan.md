@@ -1,78 +1,87 @@
 
-Diagnóstico atual
+Diagnóstico confirmado
 
-O fluxo não está correto hoje. Pela leitura do código, existem 4 pontos que explicam por que a IA ainda responde “não consigo ouvir áudios”:
-
-1. A transcrição acontece tarde demais no `worker/index.js`:
-   - ela só roda dentro do bloco de auto-reply, quando `metadata.ai_activated === true`
-   - então áudio não entra em keyword activation nem em flows antes disso
-
-2. Se a transcrição falha, o worker continua chamando a IA com texto vazio:
-   - isso deixa o `ai-generate` enxergar só o placeholder da mídia (`[AudioMessage]` / `[mídia]`)
-
-3. O `ai-generate` recebe `incoming_message`, mas hoje usa isso só no RAG:
-   - a conversa enviada ao OpenAI continua vindo do histórico salvo no banco
-   - para áudio, esse histórico ainda contém o placeholder, não a transcrição
-
-4. A `transcribe-audio` está baixando a URL bruta do WhatsApp:
-   - os logs mostram `application/octet-stream` + `Invalid file format`
-   - isso indica que a fonte do áudio precisa ser resolvida pelo fluxo normal de download da UAZAPI, não só por `fetch(media_url)`
+- O código-fonte atual já tenta transcrever antes da IA, mas os dados em produção mostram outro comportamento:
+  - a mensagem inbound ficou como `[AudioMessage]`
+  - `provider_metadata.audio_transcription` continuou `null`
+  - a IA gerou 2 respostas iguais para o mesmo áudio
+  - houve 2 jobs `process_uazapi_message` para o mesmo evento
+- Isso indica 2 problemas ao mesmo tempo:
+  1. o worker em produção provavelmente não está rodando exatamente a lógica nova
+  2. a transcrição ainda não está resolvendo a mídia corretamente em todos os casos
+- O `ai-generate` e a UI já estão preparados; o gargalo real está antes deles.
 
 Plano de correção
 
-1. Centralizar a “mensagem efetiva” no worker
-   - criar um helper para resolver o texto real da entrada:
-     - se for texto, usa o texto
-     - se for áudio, transcreve
-   - esse helper deve rodar antes de:
-     - `checkKeywordAndActivateAi`
-     - `handleAiAutoReply`
-     - `triggerMessageReceivedFlows`
+1. Sincronizar o runtime do worker
+- Garantir que o worker em produção esteja com a versão atual do `worker/index.js`
+- Adicionar logs claros no worker para cada áudio:
+  - `message_id`
+  - se é áudio
+  - se transcreveu
+  - se pulou IA por falta de transcrição
+  - se respondeu
 
-2. Mover a transcrição para antes das decisões de negócio
-   - no `process_uazapi_message`, calcular `effectiveText` logo após localizar a mensagem inbound
-   - assim áudio passa a participar do fluxo completo, e não só do trecho de auto-reply já ativado
+2. Tornar o fluxo baseado na mensagem exata
+- No `webhook-uazapi`, enfileirar `process_uazapi_message` com o `message_id` salvo no banco
+- No worker, parar de buscar “a última inbound da conversa”
+- Sempre carregar a mensagem exata pelo `message_id`
+- Isso evita pegar a mensagem errada e reduz corrida entre o evento inicial e o `FileDownloaded`
 
-3. Corrigir a fonte do áudio em `transcribe-audio`
-   - usar a mensagem salva para buscar `provider_message_id`
-   - baixar a mídia pela lógica da UAZAPI (`/message/download`, com `base64` / `fileURL` / `mimetype`), reaproveitando o mesmo padrão do `uazapi-proxy`
-   - deixar `media_url` bruto só como fallback
-   - continuar salvando `provider_metadata.audio_transcription`
+3. Corrigir o download da mídia na `transcribe-audio`
+- Hoje a função usa `/message/download` com contrato diferente do caminho que já funciona no `uazapi-proxy`
+- Ajustar para espelhar a lógica já validada:
+  - usar `id`
+  - tentar `owner:messageId`
+  - fallback para `messageId` curto
+  - aceitar resposta em `base64`, `fileURL` ou binário
+- Manter `media_url` bruto apenas como fallback final
 
-4. Impedir que áudio sem transcrição vá para a IA
-   - se a mensagem for áudio e a transcrição vier vazia/erro, não chamar `handleAiAutoReply`
-   - para não perder a resposta automática, reprocessar quando a mídia estiver pronta:
-     - opção principal: reenfileirar no `webhook-uazapi` ao receber status `FileDownloaded`
-     - isso garante a ordem correta: mídia pronta → transcrição → IA
+4. Bloquear resposta da IA sem transcrição válida
+- Se a mensagem for áudio e a transcrição não existir, o worker não deve chamar `handleAiAutoReply`
+- Em vez disso, ele só encerra e espera o retry do `FileDownloaded`
+- Isso elimina a resposta errada “não consigo ouvir áudio”
 
-5. Fazer o `ai-generate` realmente usar a transcrição
-   - em `mode: "auto_reply"`, se existir `incoming_message`, substituir ou anexar esse texto como última mensagem inbound enviada ao OpenAI
-   - hoje ele só usa `incoming_message` para RAG; após o ajuste, o modelo passa a responder com base no áudio transcrito de fato
+5. Impedir resposta duplicada
+- O mesmo áudio hoje está sendo processado 2 vezes
+- Antes de responder, o worker deve checar se aquela mensagem já foi processada
+- Marcar no `provider_metadata` da própria mensagem algo como:
+  - `audio_ai_processed_at`
+  - ou `audio_reply_sent: true`
+- O retry por `FileDownloaded` só deve rodar se ainda não houver transcrição e ainda não houver resposta enviada para aquela mensagem
 
-6. Aplicar o texto transcrito ao restante do fluxo
-   - `checkKeywordAndActivateAi` deve usar `effectiveText`
-   - `triggerMessageReceivedFlows` também deve usar `effectiveText`
-   - isso permite:
-     - áudio ativar IA por keyword
-     - áudio disparar flows baseados em mensagem recebida
+6. Validar ponta a ponta
+- Cenário 1: áudio novo ainda não disponível
+  - primeira execução não responde
+  - `FileDownloaded` reenfileira
+  - transcreve
+  - envia 1 única resposta
+- Cenário 2: áudio já disponível
+  - transcreve na primeira tentativa
+  - salva `audio_transcription`
+  - IA responde com base no conteúdo falado
+- Cenário 3: falha real de mídia
+  - não envia resposta automática errada
+  - mantém comportamento controlado sem duplicidade
 
 Arquivos envolvidos
 
 - `worker/index.js`
 - `supabase/functions/transcribe-audio/index.ts`
-- `supabase/functions/ai-generate/index.ts`
 - `supabase/functions/webhook-uazapi/index.ts`
 
 Detalhes técnicos
 
-- Melhor regra no `ai-generate`: se a última inbound do histórico for placeholder/`null`, trocar pelo `incoming_message`; se não houver placeholder, anexar uma última mensagem `user` sintética.
-- Melhor regra no worker: para áudio, sem transcrição válida não existe chamada de IA.
-- A UI já está preparada para exibir `provider_metadata.audio_transcription`, então o foco aqui é corrigir o backend e a ordem do fluxo.
-- Não precisa migration de banco.
+- Não precisa migration; dá para usar `provider_metadata` para flags de processamento
+- O ajuste principal é operacional:
+  - usar a mensagem exata
+  - espelhar o download correto da UAZAPI
+  - garantir idempotência por mensagem
+- O `ai-generate` pode ficar como está, porque ele já aceita `incoming_message`
 
-Validação final
+Resultado esperado
 
-- Conversa já ativada + áudio: transcreve, salva no metadata, mostra no inbox e responde sobre o conteúdo falado
-- Conversa não ativada + áudio com keyword: transcreve, ativa IA e responde
-- Transcrição falhou ou mídia ainda não pronta: IA não responde “não consigo ouvir áudios”; fluxo aguarda/reprocessa
-- Texto normal continua igual, sem regressão
+- Áudio gera no máximo 1 resposta automática
+- A transcrição passa a ser salva no banco
+- A IA responde sobre o conteúdo falado, não sobre o placeholder `[AudioMessage]`
+- Se a mídia ainda não estiver pronta, o sistema espera o retry em vez de inventar que “não consegue ouvir áudio”
