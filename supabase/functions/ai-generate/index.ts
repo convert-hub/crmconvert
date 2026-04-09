@@ -211,6 +211,21 @@ serve(async (req) => {
       content: m.content || "[mídia]",
     }));
 
+    // 8b. In auto_reply mode, inject incoming_message into chat history
+    // This ensures the LLM sees the actual transcribed audio text instead of "[AudioMessage]"
+    if (effectiveMode === "auto_reply" && incoming_message) {
+      // Find and replace the last inbound placeholder with actual transcription
+      for (let i = chatHistory.length - 1; i >= 0; i--) {
+        if (chatHistory[i].role === "user") {
+          const content = chatHistory[i].content;
+          if (!content || content === "[mídia]" || content.startsWith("[Audio") || content.startsWith("[audio")) {
+            chatHistory[i].content = incoming_message;
+          }
+          break;
+        }
+      }
+    }
+
     // 9. Build system prompt
     let systemPrompt: string;
     if (promptTemplate?.content) {
