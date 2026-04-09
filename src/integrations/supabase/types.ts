@@ -1241,6 +1241,7 @@ export type Database = {
           forbidden_terms: string[] | null
           id: string
           is_active: boolean | null
+          knowledge_category: string | null
           name: string
           task_type: Database["public"]["Enums"]["ai_task_type"]
           tenant_id: string
@@ -1255,6 +1256,7 @@ export type Database = {
           forbidden_terms?: string[] | null
           id?: string
           is_active?: boolean | null
+          knowledge_category?: string | null
           name: string
           task_type: Database["public"]["Enums"]["ai_task_type"]
           tenant_id: string
@@ -1269,6 +1271,7 @@ export type Database = {
           forbidden_terms?: string[] | null
           id?: string
           is_active?: boolean | null
+          knowledge_category?: string | null
           name?: string
           task_type?: Database["public"]["Enums"]["ai_task_type"]
           tenant_id?: string
