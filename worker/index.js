@@ -116,11 +116,11 @@ const handlers = {
   },
 
   async process_uazapi_message(payload) {
-    const { tenant_id, conversation_id, contact_id, message_text, already_saved, data } = payload;
+    const { tenant_id, conversation_id, contact_id, message_text, message_id, already_saved, data } = payload;
 
     // If the webhook already saved the message (new flow), only handle AI auto-reply
     if (already_saved) {
-      console.log(`[Worker] Message already saved by webhook, checking AI auto-reply for conv=${conversation_id}`);
+      console.log(`[Worker] Message already saved by webhook, checking AI auto-reply for conv=${conversation_id} msg=${message_id || 'unknown'}`);
       
       if (!conversation_id || !contact_id) {
         return { skipped: true, reason: 'missing conversation_id or contact_id' };
@@ -134,23 +134,50 @@ const handlers = {
         return { skipped: true, reason: 'conversation or contact not found' };
       }
 
-      // 0. RESOLVE EFFECTIVE TEXT: transcribe audio BEFORE any business logic
+      // 0. RESOLVE EFFECTIVE TEXT: use exact message_id if available
       let effectiveText = message_text || '';
-      if (!effectiveText && !data?.fromMe) {
-        const { data: lastMsg } = await supabase.from('messages')
-          .select('id, media_type, media_url')
+      let targetMsg = null;
+
+      if (message_id) {
+        // Load exact message by ID
+        const { data: msg } = await supabase.from('messages')
+          .select('id, media_type, media_url, content, provider_metadata')
+          .eq('id', message_id)
+          .single();
+        targetMsg = msg;
+      } else if (!effectiveText && !data?.fromMe) {
+        // Fallback: find last inbound message
+        const { data: msg } = await supabase.from('messages')
+          .select('id, media_type, media_url, content, provider_metadata')
           .eq('conversation_id', conversation_id)
           .eq('direction', 'inbound')
           .order('created_at', { ascending: false })
           .limit(1)
           .single();
-        if (lastMsg && lastMsg.media_type && lastMsg.media_type.toLowerCase().includes('audio')) {
-          const transcription = await transcribeAudio(tenant_id, lastMsg.media_url, lastMsg.id);
+        targetMsg = msg;
+      }
+
+      // Check idempotency: if this audio was already processed, skip
+      if (targetMsg?.provider_metadata?.audio_reply_sent) {
+        console.log(`[Worker] Message ${targetMsg.id} already processed (audio_reply_sent=true), skipping`);
+        return { conversation_id, contact_id, ai_processed: false, reason: 'already_processed' };
+      }
+
+      // Transcribe audio if needed
+      const isAudio = targetMsg?.media_type && targetMsg.media_type.toLowerCase().includes('audio');
+      if (!effectiveText && targetMsg && isAudio) {
+        // Check if transcription already exists
+        if (targetMsg.provider_metadata?.audio_transcription) {
+          effectiveText = targetMsg.provider_metadata.audio_transcription;
+          console.log('[Worker] Using existing transcription:', effectiveText.substring(0, 80));
+        } else {
+          console.log(`[Worker] Transcribing audio message ${targetMsg.id}...`);
+          const transcription = await transcribeAudio(tenant_id, targetMsg.media_url, targetMsg.id);
           if (transcription) {
             effectiveText = transcription;
-            console.log('[Worker] Audio transcribed before business logic:', transcription.substring(0, 80));
+            console.log('[Worker] Audio transcribed successfully:', transcription.substring(0, 80));
           } else {
-            console.log('[Worker] Audio transcription failed/empty, skipping AI for this message');
+            console.log(`[Worker] Audio transcription failed/empty for ${targetMsg.id}, skipping AI`);
             return { conversation_id, contact_id, ai_processed: false, reason: 'audio_transcription_failed' };
           }
         }
@@ -173,6 +200,13 @@ const handlers = {
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
           await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
+          // Mark this audio message as processed to prevent duplicates
+          if (targetMsg && isAudio) {
+            const currentMeta = targetMsg.provider_metadata || {};
+            await supabase.from('messages').update({
+              provider_metadata: { ...currentMeta, audio_reply_sent: true, audio_reply_sent_at: new Date().toISOString() },
+            }).eq('id', targetMsg.id);
+          }
         } catch (err) {
           console.error('[Worker] AI auto-reply error:', err.message);
         }
