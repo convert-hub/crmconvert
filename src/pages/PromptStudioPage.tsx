@@ -16,15 +16,12 @@ import { toast } from 'sonner';
 const TASK_TYPES = [
   { value: 'message_generation', label: 'Geração de Mensagens' },
   { value: 'qualification', label: 'Qualificação' },
-  // TODO: reativar quando backend for implementado
-  // { value: 'qa_review', label: 'QA / Review' },
-  // { value: 'stage_classifier', label: 'Classificador de Etapa' },
 ];
 
 interface PromptTemplate {
   id: string; name: string; task_type: string; content: string;
   variables: string[]; forbidden_terms: string[]; version: number;
-  is_active: boolean; created_at: string;
+  is_active: boolean; created_at: string; knowledge_category: string | null;
 }
 
 export default function PromptStudioPage() {
@@ -38,20 +35,32 @@ export default function PromptStudioPage() {
   const [variables, setVariables] = useState('');
   const [forbiddenTerms, setForbiddenTerms] = useState('');
   const [isActive, setIsActive] = useState(true);
+  const [knowledgeCategory, setKnowledgeCategory] = useState<string | null>(null);
+  const [categories, setCategories] = useState<string[]>([]);
 
   const load = () => {
     if (!tenant) return;
     supabase.from('prompt_templates').select('*').eq('tenant_id', tenant.id).order('task_type').order('version', { ascending: false })
       .then(({ data }) => setTemplates((data as unknown as PromptTemplate[]) ?? []));
   };
-  useEffect(() => { load(); }, [tenant]);
 
-  const resetForm = () => { setName(''); setTaskType('message_generation'); setContent(''); setVariables(''); setForbiddenTerms(''); setIsActive(true); setEditId(null); };
+  const loadCategories = () => {
+    if (!tenant) return;
+    supabase.from('knowledge_documents').select('category').eq('tenant_id', tenant.id).not('category', 'is', null)
+      .then(({ data }) => {
+        const cats = [...new Set(data?.map(d => d.category).filter(Boolean) as string[])];
+        setCategories(cats);
+      });
+  };
+
+  useEffect(() => { load(); loadCategories(); }, [tenant]);
+
+  const resetForm = () => { setName(''); setTaskType('message_generation'); setContent(''); setVariables(''); setForbiddenTerms(''); setIsActive(true); setEditId(null); setKnowledgeCategory(null); };
 
   const openEdit = (t: PromptTemplate) => {
     setEditId(t.id); setName(t.name); setTaskType(t.task_type); setContent(t.content);
     setVariables(t.variables?.join(', ') ?? ''); setForbiddenTerms(t.forbidden_terms?.join(', ') ?? '');
-    setIsActive(t.is_active); setDialogOpen(true);
+    setIsActive(t.is_active); setKnowledgeCategory(t.knowledge_category); setDialogOpen(true);
   };
 
   const handleSave = async () => {
@@ -64,18 +73,18 @@ export default function PromptStudioPage() {
       const contentChanged = existing && (existing.content !== content || existing.name !== name || existing.task_type !== taskType);
       
       if (contentChanged) {
-        // Content changed → create new version, deactivate old
         const newVersion = (existing?.version ?? 0) + 1;
         await supabase.from('prompt_templates').update({ is_active: false }).eq('id', editId);
         const { error } = await supabase.from('prompt_templates').insert({
           tenant_id: tenant.id, name, task_type: taskType as any, content, variables: vars,
           forbidden_terms: forbidden, version: newVersion, is_active: isActive,
+          knowledge_category: knowledgeCategory,
         });
         if (error) toast.error(error.message); else toast.success(`Prompt v${newVersion} salvo`);
       } else {
-        // Only metadata changed (active toggle, variables, forbidden terms) → update in place
         const { error } = await supabase.from('prompt_templates').update({
           variables: vars, forbidden_terms: forbidden, is_active: isActive,
+          knowledge_category: knowledgeCategory,
         }).eq('id', editId);
         if (error) toast.error(error.message); else toast.success('Prompt atualizado');
       }
@@ -83,6 +92,7 @@ export default function PromptStudioPage() {
       const { error } = await supabase.from('prompt_templates').insert({
         tenant_id: tenant.id, name, task_type: taskType as any, content, variables: vars,
         forbidden_terms: forbidden, version: 1, is_active: isActive,
+        knowledge_category: knowledgeCategory,
       });
       if (error) toast.error(error.message); else toast.success('Prompt criado');
     }
@@ -96,6 +106,7 @@ export default function PromptStudioPage() {
     await supabase.from('prompt_templates').insert({
       tenant_id: tenant.id, name: `${t.name} (cópia)`, task_type: t.task_type as any,
       content: t.content, variables: t.variables, forbidden_terms: t.forbidden_terms, version: 1, is_active: false,
+      knowledge_category: t.knowledge_category,
     });
     toast.success('Prompt duplicado'); load();
   };
@@ -127,6 +138,17 @@ export default function PromptStudioPage() {
                 <div className="space-y-2"><Label>Variáveis</Label><Input value={variables} onChange={e => setVariables(e.target.value)} placeholder="contact_name, stage_name" className="rounded-xl" /></div>
                 <div className="space-y-2"><Label>Termos proibidos</Label><Input value={forbiddenTerms} onChange={e => setForbiddenTerms(e.target.value)} placeholder="garantia, gratuito" className="rounded-xl" /></div>
               </div>
+              <div className="space-y-2">
+                <Label>Categoria da Base de Conhecimento</Label>
+                <Select value={knowledgeCategory || "all"} onValueChange={v => setKnowledgeCategory(v === "all" ? null : v)}>
+                  <SelectTrigger className="rounded-xl"><SelectValue placeholder="Todas as categorias" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas as categorias</SelectItem>
+                    {categories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Filtra quais documentos da base de conhecimento este agente pode consultar.</p>
+              </div>
               <div className="flex items-center gap-2"><Switch checked={isActive} onCheckedChange={setIsActive} /><Label>Ativo</Label></div>
               <Button className="w-full rounded-xl" onClick={handleSave}>Salvar</Button>
             </div>
@@ -150,6 +172,7 @@ export default function PromptStudioPage() {
                   </div>
                   <div className="flex items-center gap-2 mt-1">
                     <Badge className="text-xs rounded-full">{TASK_TYPES.find(x => x.value === t.task_type)?.label ?? t.task_type}</Badge>
+                    {t.knowledge_category && <Badge variant="outline" className="text-xs rounded-full">{t.knowledge_category}</Badge>}
                     {t.forbidden_terms?.length > 0 && <span className="text-xs text-muted-foreground">{t.forbidden_terms.length} termos proibidos</span>}
                   </div>
                 </div>

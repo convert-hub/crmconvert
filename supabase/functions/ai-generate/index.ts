@@ -92,7 +92,7 @@ serve(async (req) => {
     // 2. Load tenant prompt template for message_generation
     const { data: promptTemplate } = await supabase
       .from("prompt_templates")
-      .select("content, forbidden_terms, variables")
+      .select("content, forbidden_terms, variables, knowledge_category")
       .eq("tenant_id", tenant_id)
       .eq("task_type", "message_generation")
       .eq("is_active", true)
@@ -178,11 +178,13 @@ serve(async (req) => {
           const queryEmbedding = embResult.data?.[0]?.embedding;
 
           if (queryEmbedding) {
+            const knowledgeCategory = promptTemplate?.knowledge_category || null;
             const { data: chunks } = await supabase.rpc("search_knowledge", {
               _tenant_id: tenant_id,
               _query_embedding: JSON.stringify(queryEmbedding),
               _match_count: 5,
               _match_threshold: 0.5,
+              _category: knowledgeCategory,
             });
 
             if (chunks && chunks.length > 0) {
@@ -196,7 +198,7 @@ serve(async (req) => {
               for (const [name, contents] of groups) {
                 ragContext += `Procedimento: ${name}\n${contents.join("\n---\n")}\n\n`;
               }
-              ragContext += "INSTRUÇÃO: Identifique sobre qual procedimento o lead pergunta e responda APENAS com informações do procedimento correto. Se não houver na base, diga que vai verificar com a equipe.";
+              ragContext += "\nINSTRUÇÃO: Use as informações acima da base de conhecimento para responder diretamente à pergunta do lead. NÃO pergunte ao lead sobre qual procedimento ele tem interesse se ele já mencionou. Responda com as informações relevantes encontradas. Se a pergunta for genérica e houver múltiplos procedimentos possíveis, apresente brevemente as opções disponíveis. Se não houver informação na base, diga que vai verificar com a equipe.";
             }
           }
         }
