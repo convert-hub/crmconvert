@@ -7,10 +7,11 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban, CheckSquare, MessageSquare, Target } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
+import { useCascadeDelete, type OpportunityLinked } from '@/hooks/useCascadeDelete';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import OpportunityDetail from '@/components/crm/OpportunityDetail';
 import CreateOpportunityDialog from '@/components/crm/CreateOpportunityDialog';
@@ -724,6 +725,9 @@ export default function PipelinePage() {
     loadOpps();
   };
 
+  const { getOpportunityLinked, deleteOpportunityCascade, loading: cascadeLoading } = useCascadeDelete();
+  const [cascadeData, setCascadeData] = useState<OpportunityLinked | null>(null);
+
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!canDeleteOpportunity) {
@@ -731,46 +735,8 @@ export default function PipelinePage() {
       return;
     }
     setDeleteOppId(oppId);
-  };
-
-  const confirmDeleteOpportunity = async () => {
-    if (!deleteOppId) return;
-    if (!canDeleteOpportunity) {
-      setDeleteOppId(null);
-      toast.error('Você não tem permissão para excluir oportunidades');
-      return;
-    }
-
-    const oppId = deleteOppId;
-    setDeleteOppId(null);
-
-    const { error } = await supabase.from('opportunities').delete().eq('id', oppId);
-    if (error) {
-      toast.error(`Erro ao excluir: ${error.message}`);
-      loadOpps();
-      return;
-    }
-
-    const { data: remaining, error: checkError } = await supabase
-      .from('opportunities')
-      .select('id')
-      .eq('id', oppId)
-      .maybeSingle();
-
-    if (checkError) {
-      toast.error(`Erro ao validar exclusão: ${checkError.message}`);
-      loadOpps();
-      return;
-    }
-
-    if (remaining) {
-      toast.error('A exclusão não foi concluída');
-      loadOpps();
-      return;
-    }
-
-    setOpportunities(prev => prev.filter(o => o.id !== oppId));
-    toast.success('Oportunidade excluída');
+    const linked = await getOpportunityLinked(oppId);
+    setCascadeData(linked);
   };
 
   const oppsByStage = (stageId: string) => filteredOpportunities
@@ -968,22 +934,30 @@ export default function PipelinePage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteOppId} onOpenChange={(open) => { if (!open) setDeleteOppId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir oportunidade</AlertDialogTitle>
-            <AlertDialogDescription>
-              Tem certeza que deseja excluir esta oportunidade permanentemente? Esta ação não pode ser desfeita.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeleteOpportunity} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CascadeDeleteDialog
+        open={!!deleteOppId}
+        onOpenChange={(open) => { if (!open) { setDeleteOppId(null); setCascadeData(null); } }}
+        title="Excluir oportunidade"
+        description="Esta oportunidade será excluída permanentemente."
+        linkedEntities={cascadeData ? [
+          { type: "activities", label: "Atividades desta oportunidade", count: cascadeData.activities, icon: <CheckSquare className="h-4 w-4" />, checked: true },
+          { type: "conversations", label: `Conversas de ${cascadeData.contactName || "este contato"}`, count: cascadeData.conversations, icon: <MessageSquare className="h-4 w-4" />, checked: false },
+          { type: "contact", label: `Contato: ${cascadeData.contactName || "Desconhecido"}`, count: cascadeData.contactId ? 1 : 0, icon: <User className="h-4 w-4" />, checked: false },
+        ] : []}
+        onConfirm={async (toDelete) => {
+          if (!deleteOppId) return;
+          const oppId = deleteOppId;
+          const contactId = cascadeData?.contactId || null;
+          const success = await deleteOpportunityCascade(oppId, contactId, toDelete);
+          if (success) {
+            setOpportunities(prev => prev.filter(o => o.id !== oppId));
+            if (toDelete.includes("contact")) loadOpps();
+          }
+          setDeleteOppId(null);
+          setCascadeData(null);
+        }}
+        isLoading={cascadeLoading}
+      />
     </div>
   );
 }
