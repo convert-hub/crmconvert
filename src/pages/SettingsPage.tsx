@@ -358,6 +358,7 @@ export default function SettingsPage() {
     }
   };
 
+  const addStage = async () => {
     if (!tenant || !newStageName.trim()) return;
     const { data: pipelines } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant.id).eq('is_default', true).limit(1);
     if (!pipelines || pipelines.length === 0) {
