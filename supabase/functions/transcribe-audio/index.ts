@@ -40,7 +40,7 @@ serve(async (req) => {
       });
     }
 
-    // 2. Get provider_message_id from the message to download via UAZAPI
+    // 2. Download audio via UAZAPI (mirrors uazapi-proxy download_media logic)
     let audioBlob: Blob | null = null;
     let detectedMime = "";
 
@@ -57,7 +57,7 @@ serve(async (req) => {
         // Get WhatsApp instance for this tenant
         const { data: instance } = await supabase
           .from("whatsapp_instances")
-          .select("api_url, api_token_encrypted")
+          .select("api_url, api_token_encrypted, phone_number")
           .eq("tenant_id", tenant_id)
           .eq("is_active", true)
           .limit(1)
@@ -66,15 +66,28 @@ serve(async (req) => {
         if (instance) {
           const apiBase = instance.api_url.replace(/\/+$/, "");
           const token = instance.api_token_encrypted || "";
+          const instancePhone = (instance.phone_number || "").replace(/\D/g, "");
 
-          console.log("transcribe-audio: downloading via UAZAPI, msgId:", providerMessageId);
+          // Mirror uazapi-proxy: try owner:messageId first, then short messageId
+          const fullId = instancePhone ? `${instancePhone}:${providerMessageId}` : providerMessageId;
+          console.log("transcribe-audio: downloading via UAZAPI, fullId:", fullId);
 
           try {
-            const dlResponse = await fetch(`${apiBase}/message/download`, {
+            let dlResponse = await fetch(`${apiBase}/message/download`, {
               method: "POST",
               headers: { "Content-Type": "application/json", token },
-              body: JSON.stringify({ messageid: providerMessageId }),
+              body: JSON.stringify({ id: fullId }),
             });
+
+            // Fallback: try short ID if full ID failed
+            if (!dlResponse.ok && instancePhone) {
+              console.log(`transcribe-audio: full ID failed (${dlResponse.status}), trying short ID: ${providerMessageId}`);
+              dlResponse = await fetch(`${apiBase}/message/download`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", token },
+                body: JSON.stringify({ id: providerMessageId }),
+              });
+            }
 
             if (dlResponse.ok) {
               const contentType = dlResponse.headers.get("content-type") || "";
@@ -82,11 +95,17 @@ serve(async (req) => {
               if (contentType.includes("application/json")) {
                 // UAZAPI returns JSON with fileURL or base64
                 const dlData = await dlResponse.json();
-                const fileURL = dlData.fileURL;
+                const fileURL = dlData.fileURL || dlData.url || dlData.link;
                 const base64 = dlData.base64;
                 detectedMime = dlData.mimetype || "";
 
-                if (fileURL) {
+                if (base64) {
+                  console.log("transcribe-audio: using base64 from UAZAPI, mime:", detectedMime);
+                  const binaryStr = atob(base64);
+                  const bytes = new Uint8Array(binaryStr.length);
+                  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+                  audioBlob = new Blob([bytes], { type: detectedMime || "audio/ogg" });
+                } else if (fileURL) {
                   console.log("transcribe-audio: downloading from UAZAPI fileURL, mime:", detectedMime);
                   const fileResp = await fetch(fileURL);
                   if (fileResp.ok) {
@@ -95,17 +114,12 @@ serve(async (req) => {
                       detectedMime = fileResp.headers.get("content-type")?.split(";")[0]?.trim() || "";
                     }
                   }
-                } else if (base64) {
-                  console.log("transcribe-audio: using base64 from UAZAPI, mime:", detectedMime);
-                  const binaryStr = atob(base64);
-                  const bytes = new Uint8Array(binaryStr.length);
-                  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-                  audioBlob = new Blob([bytes], { type: detectedMime || "audio/ogg" });
                 }
               } else {
                 // Direct binary response
                 audioBlob = await dlResponse.blob();
                 detectedMime = contentType.split(";")[0].trim();
+                console.log("transcribe-audio: got binary response, mime:", detectedMime, "size:", audioBlob.size);
               }
             } else {
               console.log("transcribe-audio: UAZAPI download failed, status:", dlResponse.status);
@@ -151,7 +165,7 @@ serve(async (req) => {
       "audio/opus": "ogg",
     };
 
-    const baseMime = (detectedMime || "").toLowerCase();
+    const baseMime = (detectedMime || "").toLowerCase().split(";")[0].trim();
     let fileExt = mimeToExt[baseMime] || "";
 
     if (!fileExt && media_url) {
