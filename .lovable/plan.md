@@ -1,49 +1,78 @@
 
+Diagnóstico atual
 
-## Plano: Corrigir transcrição de áudio (formato de arquivo inválido)
+O fluxo não está correto hoje. Pela leitura do código, existem 4 pontos que explicam por que a IA ainda responde “não consigo ouvir áudios”:
 
-### Problema
+1. A transcrição acontece tarde demais no `worker/index.js`:
+   - ela só roda dentro do bloco de auto-reply, quando `metadata.ai_activated === true`
+   - então áudio não entra em keyword activation nem em flows antes disso
 
-Os logs da edge function `transcribe-audio` mostram:
-```
-Whisper error 400: Invalid file format. Supported formats: ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm']
-```
+2. Se a transcrição falha, o worker continua chamando a IA com texto vazio:
+   - isso deixa o `ai-generate` enxergar só o placeholder da mídia (`[AudioMessage]` / `[mídia]`)
 
-O áudio é baixado do WhatsApp como blob e enviado ao Whisper sempre como `"audio.ogg"`, sem preservar o content-type real. O Whisper rejeita o arquivo, a transcrição falha, e a IA recebe mensagem vazia -- respondendo "não consigo ouvir áudios".
+3. O `ai-generate` recebe `incoming_message`, mas hoje usa isso só no RAG:
+   - a conversa enviada ao OpenAI continua vindo do histórico salvo no banco
+   - para áudio, esse histórico ainda contém o placeholder, não a transcrição
 
-### Solução
+4. A `transcribe-audio` está baixando a URL bruta do WhatsApp:
+   - os logs mostram `application/octet-stream` + `Invalid file format`
+   - isso indica que a fonte do áudio precisa ser resolvida pelo fluxo normal de download da UAZAPI, não só por `fetch(media_url)`
 
-Alterar `supabase/functions/transcribe-audio/index.ts` para:
+Plano de correção
 
-1. Capturar o `Content-Type` da resposta HTTP ao baixar o áudio do WhatsApp
-2. Mapear o MIME type para a extensão correta (ex: `audio/ogg` -> `.ogg`, `audio/mp4` -> `.m4a`, `audio/mpeg` -> `.mp3`)
-3. Usar a extensão correta no `formData.append("file", audioBlob, "audio.EXT")`
-4. Se o Content-Type não for reconhecido, tentar inferir da URL ou usar fallback `.ogg`
+1. Centralizar a “mensagem efetiva” no worker
+   - criar um helper para resolver o texto real da entrada:
+     - se for texto, usa o texto
+     - se for áudio, transcreve
+   - esse helper deve rodar antes de:
+     - `checkKeywordAndActivateAi`
+     - `handleAiAutoReply`
+     - `triggerMessageReceivedFlows`
 
-### Detalhes técnicos
+2. Mover a transcrição para antes das decisões de negócio
+   - no `process_uazapi_message`, calcular `effectiveText` logo após localizar a mensagem inbound
+   - assim áudio passa a participar do fluxo completo, e não só do trecho de auto-reply já ativado
 
-Mapa de MIME types para extensões Whisper:
-```typescript
-const mimeToExt: Record<string, string> = {
-  'audio/ogg': 'ogg',
-  'audio/mpeg': 'mp3',
-  'audio/mp4': 'm4a',
-  'audio/mp3': 'mp3',
-  'audio/wav': 'wav',
-  'audio/x-wav': 'wav',
-  'audio/webm': 'webm',
-  'audio/flac': 'flac',
-  'video/mp4': 'mp4',
-  'application/ogg': 'ogg',
-  'audio/opus': 'ogg',  // WhatsApp PTT uses opus in ogg container
-};
-```
+3. Corrigir a fonte do áudio em `transcribe-audio`
+   - usar a mensagem salva para buscar `provider_message_id`
+   - baixar a mídia pela lógica da UAZAPI (`/message/download`, com `base64` / `fileURL` / `mimetype`), reaproveitando o mesmo padrão do `uazapi-proxy`
+   - deixar `media_url` bruto só como fallback
+   - continuar salvando `provider_metadata.audio_transcription`
 
-WhatsApp frequentemente envia áudios PTT (push-to-talk) como `audio/ogg; codecs=opus`. O código deve fazer split no `;` antes de buscar no mapa.
+4. Impedir que áudio sem transcrição vá para a IA
+   - se a mensagem for áudio e a transcrição vier vazia/erro, não chamar `handleAiAutoReply`
+   - para não perder a resposta automática, reprocessar quando a mídia estiver pronta:
+     - opção principal: reenfileirar no `webhook-uazapi` ao receber status `FileDownloaded`
+     - isso garante a ordem correta: mídia pronta → transcrição → IA
 
-### Arquivo alterado
+5. Fazer o `ai-generate` realmente usar a transcrição
+   - em `mode: "auto_reply"`, se existir `incoming_message`, substituir ou anexar esse texto como última mensagem inbound enviada ao OpenAI
+   - hoje ele só usa `incoming_message` para RAG; após o ajuste, o modelo passa a responder com base no áudio transcrito de fato
 
-| Arquivo | Alteração |
-|---|---|
-| `supabase/functions/transcribe-audio/index.ts` | Detectar content-type real, mapear para extensão correta |
+6. Aplicar o texto transcrito ao restante do fluxo
+   - `checkKeywordAndActivateAi` deve usar `effectiveText`
+   - `triggerMessageReceivedFlows` também deve usar `effectiveText`
+   - isso permite:
+     - áudio ativar IA por keyword
+     - áudio disparar flows baseados em mensagem recebida
 
+Arquivos envolvidos
+
+- `worker/index.js`
+- `supabase/functions/transcribe-audio/index.ts`
+- `supabase/functions/ai-generate/index.ts`
+- `supabase/functions/webhook-uazapi/index.ts`
+
+Detalhes técnicos
+
+- Melhor regra no `ai-generate`: se a última inbound do histórico for placeholder/`null`, trocar pelo `incoming_message`; se não houver placeholder, anexar uma última mensagem `user` sintética.
+- Melhor regra no worker: para áudio, sem transcrição válida não existe chamada de IA.
+- A UI já está preparada para exibir `provider_metadata.audio_transcription`, então o foco aqui é corrigir o backend e a ordem do fluxo.
+- Não precisa migration de banco.
+
+Validação final
+
+- Conversa já ativada + áudio: transcreve, salva no metadata, mostra no inbox e responde sobre o conteúdo falado
+- Conversa não ativada + áudio com keyword: transcreve, ativa IA e responde
+- Transcrição falhou ou mídia ainda não pronta: IA não responde “não consigo ouvir áudios”; fluxo aguarda/reprocessa
+- Texto normal continua igual, sem regressão
