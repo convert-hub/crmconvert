@@ -9,7 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban } from 'lucide-react';
+import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban, MessageSquare, Target, CheckSquare } from 'lucide-react';
+import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
+import { useCascadeDelete, type ContactLinked } from '@/hooks/useCascadeDelete';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
@@ -35,6 +37,9 @@ export default function ContactsPage() {
   const [registeredTags, setRegisteredTags] = useState<TagDef[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
+  const [deleteContactId, setDeleteContactId] = useState<string | null>(null);
+  const [contactCascadeData, setContactCascadeData] = useState<ContactLinked | null>(null);
+  const { getContactLinked, deleteContactCascade, loading: cascadeLoading } = useCascadeDelete();
 
   useEffect(() => {
     if (!tenant) return;
@@ -96,11 +101,9 @@ export default function ContactsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza? Isso excluirá também todas as conversas e mensagens deste contato.')) return;
-    const { error } = await supabase.from('contacts').delete().eq('id', id);
-    if (error) { toast.error(error.message); return; }
-    toast.success('Contato removido');
-    loadContacts();
+    setDeleteContactId(id);
+    const linked = await getContactLinked(id);
+    setContactCascadeData(linked);
   };
 
   const exportCSV = () => {
@@ -294,6 +297,26 @@ export default function ContactsPage() {
           onCreated={() => toast.success('Card criado no pipeline!')}
         />
       )}
+
+      <CascadeDeleteDialog
+        open={!!deleteContactId}
+        onOpenChange={(open) => { if (!open) { setDeleteContactId(null); setContactCascadeData(null); } }}
+        title="Excluir contato"
+        description="O contato será excluído permanentemente."
+        linkedEntities={contactCascadeData ? [
+          { type: "conversations", label: "Conversas", count: contactCascadeData.conversations, icon: <MessageSquare className="h-4 w-4" />, checked: true },
+          { type: "opportunities", label: "Oportunidades", count: contactCascadeData.opportunities, icon: <Target className="h-4 w-4" />, checked: true },
+          { type: "activities", label: "Atividades", count: contactCascadeData.activities, icon: <CheckSquare className="h-4 w-4" />, checked: true },
+        ] : []}
+        onConfirm={async (toDelete) => {
+          if (!deleteContactId) return;
+          const success = await deleteContactCascade(deleteContactId, toDelete);
+          if (success) loadContacts();
+          setDeleteContactId(null);
+          setContactCascadeData(null);
+        }}
+        isLoading={cascadeLoading}
+      />
     </div>
   );
 }

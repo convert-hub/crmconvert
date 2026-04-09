@@ -4,7 +4,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Conversation, Contact } from '@/types/crm';
 import { Badge } from '@/components/ui/badge';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
+import { useCascadeDelete, type ConversationLinked } from '@/hooks/useCascadeDelete';
+import { User, Target, CheckSquare } from 'lucide-react';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -135,20 +137,14 @@ export default function InboxPage() {
     });
   }, [selectedConv]);
 
-  const handleDeleteConversation = (convId: string, e: React.MouseEvent) => {
+  const { getConversationLinked, deleteConversationCascade, loading: cascadeLoading } = useCascadeDelete();
+  const [cascadeData, setCascadeData] = useState<ConversationLinked | null>(null);
+
+  const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDeleteConvId(convId);
-  };
-
-  const confirmDeleteConversation = async () => {
-    if (!deleteConvId) return;
-    const convId = deleteConvId;
-    setDeleteConvId(null);
-    const { error } = await supabase.from('conversations').delete().eq('id', convId);
-    if (error) { toast.error(error.message); return; }
-    toast.success('Conversa excluída');
-    if (selectedConv === convId) { setSelectedConv(null); }
-    setConversations(prev => prev.filter(c => c.id !== convId));
+    const linked = await getConversationLinked(convId);
+    setCascadeData(linked);
   };
 
   const filtered = conversations.filter(c => {
@@ -290,22 +286,37 @@ export default function InboxPage() {
         />
       )}
 
-      <AlertDialog open={!!deleteConvId} onOpenChange={(open) => { if (!open) setDeleteConvId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir conversa</AlertDialogTitle>
-            <AlertDialogDescription>
-              Tem certeza que deseja excluir esta conversa e todas as mensagens? Esta ação não pode ser desfeita.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeleteConversation} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CascadeDeleteDialog
+        open={!!deleteConvId}
+        onOpenChange={(open) => { if (!open) { setDeleteConvId(null); setCascadeData(null); } }}
+        title="Excluir conversa"
+        description="Esta conversa e todas as suas mensagens serão excluídas permanentemente."
+        linkedEntities={cascadeData ? [
+          { type: "activities", label: "Atividades desta conversa", count: cascadeData.activities, icon: <CheckSquare className="h-4 w-4" />, checked: true },
+          { type: "opportunities", label: "Oportunidades do contato", count: cascadeData.opportunities, icon: <Target className="h-4 w-4" />, checked: false },
+          { type: "conversations", label: `Outras conversas de ${cascadeData.contactName || "este contato"}`, count: cascadeData.conversations, icon: <MessageSquare className="h-4 w-4" />, checked: false },
+          { type: "contact", label: `Contato: ${cascadeData.contactName || "Desconhecido"}`, count: cascadeData.contactId ? 1 : 0, icon: <User className="h-4 w-4" />, checked: false },
+        ] : []}
+        onConfirm={async (toDelete) => {
+          if (!deleteConvId) return;
+          const convId = deleteConvId;
+          const contactId = cascadeData?.contactId || null;
+          const success = await deleteConversationCascade(convId, contactId, toDelete);
+          if (success) {
+            if (selectedConv === convId) setSelectedConv(null);
+            if (toDelete.includes("contact") && contactId) {
+              setConversations(prev => prev.filter(c => c.contact_id !== contactId));
+            } else if (toDelete.includes("conversations") && contactId) {
+              setConversations(prev => prev.filter(c => c.contact_id !== contactId));
+            } else {
+              setConversations(prev => prev.filter(c => c.id !== convId));
+            }
+          }
+          setDeleteConvId(null);
+          setCascadeData(null);
+        }}
+        isLoading={cascadeLoading}
+      />
     </div>
   );
 }
