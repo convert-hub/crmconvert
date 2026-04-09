@@ -254,6 +254,11 @@ export default function SettingsPage() {
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [inviteRole, setInviteRole] = useState('attendant');
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [aiTaskType, setAiTaskType] = useState('message_generation');
   const [aiProvider, setAiProvider] = useState('openai');
   const [aiModel, setAiModel] = useState('gpt-4o-mini');
