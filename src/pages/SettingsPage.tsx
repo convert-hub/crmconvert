@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
@@ -254,6 +254,11 @@ export default function SettingsPage() {
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [inviteRole, setInviteRole] = useState('attendant');
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [aiTaskType, setAiTaskType] = useState('message_generation');
   const [aiProvider, setAiProvider] = useState('openai');
   const [aiModel, setAiModel] = useState('gpt-4o-mini');
@@ -325,6 +330,33 @@ export default function SettingsPage() {
   };
   const updateMemberRole = async (memberId: string, newRole: string) => { await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', memberId); toast.success('Papel atualizado'); loadAll(); };
   const removeMember = async (memberId: string) => { await supabase.from('tenant_memberships').update({ is_active: false }).eq('id', memberId); toast.success('Membro desativado'); loadAll(); };
+
+  const handleInviteMember = async () => {
+    if (!inviteEmail.trim() || !inviteName.trim() || !tenant) return;
+    setInviteLoading(true);
+    try {
+      const res = await supabase.functions.invoke('invite-member', {
+        body: { email: inviteEmail.trim(), full_name: inviteName.trim(), role: inviteRole },
+        headers: { 'x-tenant-id': tenant.id },
+      });
+      if (res.error) throw res.error;
+      const result = res.data;
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success(result.message);
+        setInviteDialogOpen(false);
+        setInviteEmail('');
+        setInviteName('');
+        setInviteRole('attendant');
+        loadAll();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao convidar membro');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
 
   const addStage = async () => {
     if (!tenant || !newStageName.trim()) return;
@@ -588,7 +620,43 @@ export default function SettingsPage() {
 
         <TabsContent value="team" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">
-            <CardHeader><CardTitle>Membros da Equipe</CardTitle><CardDescription>Gerencie usuários e papéis</CardDescription></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div><CardTitle>Membros da Equipe</CardTitle><CardDescription>Gerencie usuários e papéis</CardDescription></div>
+              {isAdmin && (
+                <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+                  <DialogTrigger asChild><Button size="sm" className="rounded-xl"><UserPlus className="h-4 w-4 mr-1" />Convidar Membro</Button></DialogTrigger>
+                  <DialogContent className="rounded-2xl">
+                    <DialogHeader><DialogTitle>Convidar Novo Membro</DialogTitle></DialogHeader>
+                    <div className="space-y-4 pt-2">
+                      <div className="space-y-2">
+                        <Label>Nome completo</Label>
+                        <Input value={inviteName} onChange={e => setInviteName(e.target.value)} placeholder="Nome do membro" className="rounded-xl" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Email</Label>
+                        <Input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="email@exemplo.com" className="rounded-xl" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cargo</Label>
+                        <Select value={inviteRole} onValueChange={setInviteRole}>
+                          <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="admin">Admin</SelectItem>
+                            <SelectItem value="manager">Gerente</SelectItem>
+                            <SelectItem value="attendant">Atendente</SelectItem>
+                            <SelectItem value="readonly">Somente Leitura</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Button onClick={handleInviteMember} disabled={inviteLoading || !inviteEmail.trim() || !inviteName.trim()} className="w-full rounded-xl">
+                        {inviteLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Enviar Convite
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </CardHeader>
             <CardContent className="space-y-4">
               <Table>
                 <TableHeader><TableRow className="hover:bg-transparent"><TableHead>Nome</TableHead><TableHead>Papel</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
@@ -613,7 +681,6 @@ export default function SettingsPage() {
                   ))}
                 </TableBody>
               </Table>
-              <p className="text-xs text-muted-foreground">Para convidar novos membros, crie a conta no Supabase Auth e adicione via SQL ou API.</p>
             </CardContent>
           </Card>
         </TabsContent>
