@@ -331,7 +331,33 @@ export default function SettingsPage() {
   const updateMemberRole = async (memberId: string, newRole: string) => { await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', memberId); toast.success('Papel atualizado'); loadAll(); };
   const removeMember = async (memberId: string) => { await supabase.from('tenant_memberships').update({ is_active: false }).eq('id', memberId); toast.success('Membro desativado'); loadAll(); };
 
-  const addStage = async () => {
+  const handleInviteMember = async () => {
+    if (!inviteEmail.trim() || !inviteName.trim() || !tenant) return;
+    setInviteLoading(true);
+    try {
+      const res = await supabase.functions.invoke('invite-member', {
+        body: { email: inviteEmail.trim(), full_name: inviteName.trim(), role: inviteRole },
+        headers: { 'x-tenant-id': tenant.id },
+      });
+      if (res.error) throw res.error;
+      const result = res.data;
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success(result.message);
+        setInviteDialogOpen(false);
+        setInviteEmail('');
+        setInviteName('');
+        setInviteRole('attendant');
+        loadAll();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao convidar membro');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
     if (!tenant || !newStageName.trim()) return;
     const { data: pipelines } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant.id).eq('is_default', true).limit(1);
     if (!pipelines || pipelines.length === 0) {
