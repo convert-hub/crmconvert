@@ -1,37 +1,36 @@
 
 
-## Plano: Correções de robustez no fluxo de transcrição de áudio
+## Plano: Convite de Membros via Plataforma
 
-### 3 alterações cirúrgicas, sem mudança de lógica
+### 1. Nova Edge Function `supabase/functions/invite-member/index.ts`
 
-### 1. Idempotência real no enqueue (`webhook-uazapi`)
+- Recebe `{ email, full_name, role }` + header `x-tenant-id`
+- Valida JWT do chamador via `supabase.auth.getUser(token)`
+- Verifica que chamador é admin do tenant via service role client
+- Fluxo:
+  - Se usuário já existe no auth e já é membro ativo: retorna 409
+  - Se existe mas inativo: reativa com novo role
+  - Se existe mas não é membro: cria membership
+  - Se não existe: `auth.admin.inviteUserByEmail` + cria profile + cria membership
+- Usa `SUPABASE_SERVICE_ROLE_KEY` para operações admin
+- CORS headers padrão
 
-- Linha 340: trocar `uazapi-ai-${messageId || conversation.id}-${Date.now()}` por `uazapi-ai-${savedMsg.id}`
-- Linha 407: trocar `uazapi-audio-retry-${msgId}-${Date.now()}` por `uazapi-audio-retry-${msg.id}`
+### 2. Alterar `src/pages/SettingsPage.tsx`
 
-### 2. Lock otimista antes do AI reply (`worker/index.js`)
+- Adicionar estados: `inviteDialogOpen`, `inviteEmail`, `inviteName`, `inviteRole`, `inviteLoading`
+- Adicionar função `handleInviteMember` que chama `supabase.functions.invoke('invite-member', ...)`
+- Linha 591: adicionar botão "Convidar Membro" no CardHeader (mesmo padrão do botão da aba IA)
+- Linha 616: remover o `<p>` placeholder e substituir pelo Dialog de convite com campos nome, email, role e botão enviar
 
-- Linhas 200-213: mover a marcação `audio_reply_sent` para ANTES de `handleAiAutoReply`
-- Usar UPDATE condicional com `.is('provider_metadata->audio_reply_sent', null)` como lock otimista
-- Se falhar a marcação, pular o envio (outro worker já processou)
-- Se falhar o envio, desmarcar o flag para permitir retry
-
-### 3. Self-retry com contador para transcrição falha (`worker/index.js`)
-
-- Linhas 179-182: quando transcrição falha, incrementar `audio_transcription_retries` no metadata
-- Se < 3 tentativas, re-enfileirar o job com idempotency key versionada
-- Se >= 3 tentativas, desistir com log claro
-
-### Arquivos alterados
+### Arquivos
 
 | Arquivo | Alteração |
 |---|---|
-| `supabase/functions/webhook-uazapi/index.ts` | Remover `Date.now()` de 2 idempotency keys |
-| `worker/index.js` | Lock otimista + self-retry com contador |
+| `supabase/functions/invite-member/index.ts` | Nova edge function |
+| `src/pages/SettingsPage.tsx` | Dialog de convite + handler |
 
 ### O que NÃO muda
 
-- `transcribe-audio/index.ts` -- sem alteração
-- `ai-generate/index.ts` -- sem alteração
-- Lógica de flows, keywords, automations -- sem alteração
+- AuthContext, Onboarding, loadAll, updateMemberRole, removeMember
+- Tabelas e RLS (já suportam o fluxo via service role)
 
