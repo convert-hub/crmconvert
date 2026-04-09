@@ -177,8 +177,31 @@ const handlers = {
             effectiveText = transcription;
             console.log('[Worker] Audio transcribed successfully:', transcription.substring(0, 80));
           } else {
-            console.log(`[Worker] Audio transcription failed/empty for ${targetMsg.id}, skipping AI`);
-            return { conversation_id, contact_id, ai_processed: false, reason: 'audio_transcription_failed' };
+            // Increment retry counter and self-retry if under limit
+            const currentMeta = targetMsg.provider_metadata || {};
+            const retryCount = (currentMeta.audio_transcription_retries || 0) + 1;
+            await supabase.from('messages').update({
+              provider_metadata: { ...currentMeta, audio_transcription_retries: retryCount },
+            }).eq('id', targetMsg.id);
+
+            if (retryCount < 3) {
+              console.log(`[Worker] Audio transcription failed for ${targetMsg.id}, retry ${retryCount}/3, re-enqueuing with delay`);
+              await supabase.rpc('enqueue_job', {
+                _type: 'process_uazapi_message',
+                _payload: JSON.stringify({
+                  tenant_id, conversation_id, contact_id,
+                  message_text: '',
+                  message_id: targetMsg.id,
+                  already_saved: true,
+                }),
+                _tenant_id: tenant_id,
+                _idempotency_key: `uazapi-audio-selfretry-${targetMsg.id}-r${retryCount}`,
+              });
+              return { conversation_id, contact_id, ai_processed: false, reason: 'audio_transcription_retry_enqueued' };
+            } else {
+              console.log(`[Worker] Audio transcription failed after ${retryCount} retries for ${targetMsg.id}, giving up`);
+              return { conversation_id, contact_id, ai_processed: false, reason: 'audio_transcription_failed_final' };
+            }
           }
         }
       }
@@ -199,16 +222,34 @@ const handlers = {
       // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
-          // Mark this audio message as processed to prevent duplicates
-          if (targetMsg && isAudio) {
+          // For audio: mark BEFORE sending to guarantee atomicity via optimistic lock
+          // Better to miss a reply than to send duplicates
+          if (targetMsg && isAudio && message_id) {
             const currentMeta = targetMsg.provider_metadata || {};
-            await supabase.from('messages').update({
+            const { data: updated, error: updateErr } = await supabase.from('messages').update({
               provider_metadata: { ...currentMeta, audio_reply_sent: true, audio_reply_sent_at: new Date().toISOString() },
-            }).eq('id', targetMsg.id);
+            }).eq('id', message_id)
+              .is('provider_metadata->audio_reply_sent', null)
+              .select('id');
+
+            if (updateErr || !updated || updated.length === 0) {
+              console.log(`[Worker] Message ${message_id} already marked as processed, skipping AI reply`);
+              return { conversation_id, contact_id, ai_processed: false, reason: 'already_marked' };
+            }
           }
+
+          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
         } catch (err) {
           console.error('[Worker] AI auto-reply error:', err.message);
+          // If send failed but already marked, unmark to allow retry
+          if (targetMsg && isAudio && message_id) {
+            const currentMeta = targetMsg.provider_metadata || {};
+            delete currentMeta.audio_reply_sent;
+            delete currentMeta.audio_reply_sent_at;
+            await supabase.from('messages').update({
+              provider_metadata: currentMeta,
+            }).eq('id', message_id);
+          }
         }
       }
 

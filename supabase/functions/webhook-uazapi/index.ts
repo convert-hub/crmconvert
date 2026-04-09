@@ -337,7 +337,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
           already_saved: true,
         }),
         _tenant_id: tenantId,
-        _idempotency_key: `uazapi-ai-${messageId || conversation.id}-${Date.now()}`,
+        _idempotency_key: `uazapi-ai-${savedMsg.id}`,
       });
     } catch (e) {
       console.error('webhook-uazapi: failed to enqueue AI job:', e);
@@ -404,7 +404,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
                 already_saved: true,
               }),
               _tenant_id: tenantId,
-              _idempotency_key: `uazapi-audio-retry-${msgId}-${Date.now()}`,
+              _idempotency_key: `uazapi-audio-retry-${msg.id}`,
             });
           }
         } catch (e) {
