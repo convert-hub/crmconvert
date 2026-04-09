@@ -1,36 +1,39 @@
 
 
-## Plano: Convite de Membros via Plataforma
+## Plano: Corrigir RAG e adicionar filtro por categoria no Prompt Studio
 
-### 1. Nova Edge Function `supabase/functions/invite-member/index.ts`
+### 1. Migration: adicionar coluna `knowledge_category`
 
-- Recebe `{ email, full_name, role }` + header `x-tenant-id`
-- Valida JWT do chamador via `supabase.auth.getUser(token)`
-- Verifica que chamador é admin do tenant via service role client
-- Fluxo:
-  - Se usuário já existe no auth e já é membro ativo: retorna 409
-  - Se existe mas inativo: reativa com novo role
-  - Se existe mas não é membro: cria membership
-  - Se não existe: `auth.admin.inviteUserByEmail` + cria profile + cria membership
-- Usa `SUPABASE_SERVICE_ROLE_KEY` para operações admin
-- CORS headers padrão
+```sql
+ALTER TABLE public.prompt_templates
+  ADD COLUMN IF NOT EXISTS knowledge_category text DEFAULT NULL;
+```
 
-### 2. Alterar `src/pages/SettingsPage.tsx`
+### 2. Corrigir `supabase/functions/ai-generate/index.ts`
 
-- Adicionar estados: `inviteDialogOpen`, `inviteEmail`, `inviteName`, `inviteRole`, `inviteLoading`
-- Adicionar função `handleInviteMember` que chama `supabase.functions.invoke('invite-member', ...)`
-- Linha 591: adicionar botão "Convidar Membro" no CardHeader (mesmo padrão do botão da aba IA)
-- Linha 616: remover o `<p>` placeholder e substituir pelo Dialog de convite com campos nome, email, role e botão enviar
+- Linha 95: incluir `knowledge_category` no select do promptTemplate
+- Linha 181: passar `_category: promptTemplate?.knowledge_category || null` no `search_knowledge`
+- Linha 199: reescrever instrução RAG para responder diretamente em vez de perguntar ao lead qual procedimento
+
+### 3. Atualizar `src/pages/PromptStudioPage.tsx`
+
+- Adicionar estado `knowledgeCategory` e `categories` (lista de categorias distintas dos `knowledge_documents`)
+- Carregar categorias via query em `knowledge_documents` no `useEffect`
+- Adicionar Select de categoria no dialog de criação/edição
+- Incluir `knowledge_category` nos inserts e updates do `handleSave`
+- Incluir na interface `PromptTemplate`, em `openEdit`, em `resetForm`, e em `handleDuplicate`
 
 ### Arquivos
 
 | Arquivo | Alteração |
 |---|---|
-| `supabase/functions/invite-member/index.ts` | Nova edge function |
-| `src/pages/SettingsPage.tsx` | Dialog de convite + handler |
+| Nova migration SQL | `ADD COLUMN knowledge_category` |
+| `supabase/functions/ai-generate/index.ts` | Select com campo, filtro por categoria, instrução RAG corrigida |
+| `src/pages/PromptStudioPage.tsx` | UI: Select de categoria + lógica de save |
 
 ### O que NÃO muda
 
-- AuthContext, Onboarding, loadAll, updateMemberRole, removeMember
-- Tabelas e RLS (já suportam o fluxo via service role)
+- RPC `search_knowledge` (já aceita `_category`)
+- `knowledge_documents` (já tem `category`)
+- KnowledgeBaseSettings, ingest-document
 
