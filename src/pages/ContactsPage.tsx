@@ -297,6 +297,26 @@ export default function ContactsPage() {
           onCreated={() => toast.success('Card criado no pipeline!')}
         />
       )}
+
+      <CascadeDeleteDialog
+        open={!!deleteContactId}
+        onOpenChange={(open) => { if (!open) { setDeleteContactId(null); setContactCascadeData(null); } }}
+        title="Excluir contato"
+        description="O contato será excluído permanentemente."
+        linkedEntities={contactCascadeData ? [
+          { type: "conversations", label: "Conversas", count: contactCascadeData.conversations, icon: <MessageSquare className="h-4 w-4" />, checked: true },
+          { type: "opportunities", label: "Oportunidades", count: contactCascadeData.opportunities, icon: <Target className="h-4 w-4" />, checked: true },
+          { type: "activities", label: "Atividades", count: contactCascadeData.activities, icon: <CheckSquare className="h-4 w-4" />, checked: true },
+        ] : []}
+        onConfirm={async (toDelete) => {
+          if (!deleteContactId) return;
+          const success = await deleteContactCascade(deleteContactId, toDelete);
+          if (success) loadContacts();
+          setDeleteContactId(null);
+          setContactCascadeData(null);
+        }}
+        isLoading={cascadeLoading}
+      />
     </div>
   );
 }
