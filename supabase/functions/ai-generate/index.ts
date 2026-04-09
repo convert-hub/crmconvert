@@ -178,11 +178,13 @@ serve(async (req) => {
           const queryEmbedding = embResult.data?.[0]?.embedding;
 
           if (queryEmbedding) {
+            const knowledgeCategory = promptTemplate?.knowledge_category || null;
             const { data: chunks } = await supabase.rpc("search_knowledge", {
               _tenant_id: tenant_id,
               _query_embedding: JSON.stringify(queryEmbedding),
               _match_count: 5,
               _match_threshold: 0.5,
+              _category: knowledgeCategory,
             });
 
             if (chunks && chunks.length > 0) {
