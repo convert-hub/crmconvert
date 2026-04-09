@@ -348,7 +348,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
   // UAZAPI v2: status data is nested inside body.event
   const event = body.event || body;
   
-  const statusType = event.Type || body.state; // "Read", "Delivered", "Sent"
+  const statusType = event.Type || body.state; // "Read", "Delivered", "Sent", "FileDownloaded"
   const messageIds = event.MessageIDs || [];
   const chat = event.Chat || event.chatid || '';
 
@@ -362,7 +362,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
   // Update provider_metadata for matching messages
   for (const msgId of messageIds) {
     const { data: msgs } = await supabase.from('messages')
-      .select('id, provider_metadata')
+      .select('id, provider_metadata, media_type, conversation_id, content, direction')
       .eq('provider_message_id', msgId)
       .limit(1);
 
@@ -377,6 +377,38 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
         .eq('id', msg.id);
       
       console.log(`webhook-uazapi: updated message ${msg.id} status to ${statusType}`);
+
+      // Re-enqueue AI processing for audio messages when FileDownloaded arrives
+      // This handles the case where audio wasn't ready for transcription on first attempt
+      if (statusType === 'FileDownloaded' && msg.direction === 'inbound' &&
+          msg.media_type && msg.media_type.toLowerCase().includes('audio') &&
+          !metadata.audio_transcription) {
+        try {
+          // Find conversation to get contact_id
+          const { data: conv } = await supabase.from('conversations')
+            .select('contact_id')
+            .eq('id', msg.conversation_id)
+            .single();
+
+          if (conv?.contact_id) {
+            console.log(`webhook-uazapi: re-enqueuing audio transcription for message ${msg.id}`);
+            await supabase.rpc('enqueue_job', {
+              _type: 'process_uazapi_message',
+              _payload: JSON.stringify({
+                tenant_id: tenantId,
+                conversation_id: msg.conversation_id,
+                contact_id: conv.contact_id,
+                message_text: '',
+                already_saved: true,
+              }),
+              _tenant_id: tenantId,
+              _idempotency_key: `uazapi-audio-retry-${msgId}-${Date.now()}`,
+            });
+          }
+        } catch (e) {
+          console.error('webhook-uazapi: failed to re-enqueue audio transcription:', e);
+        }
+      }
     }
   }
 }
