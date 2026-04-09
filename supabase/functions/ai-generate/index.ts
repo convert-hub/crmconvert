@@ -198,7 +198,7 @@ serve(async (req) => {
               for (const [name, contents] of groups) {
                 ragContext += `Procedimento: ${name}\n${contents.join("\n---\n")}\n\n`;
               }
-              ragContext += "INSTRUÇÃO: Identifique sobre qual procedimento o lead pergunta e responda APENAS com informações do procedimento correto. Se não houver na base, diga que vai verificar com a equipe.";
+              ragContext += "\nINSTRUÇÃO: Use as informações acima da base de conhecimento para responder diretamente à pergunta do lead. NÃO pergunte ao lead sobre qual procedimento ele tem interesse se ele já mencionou. Responda com as informações relevantes encontradas. Se a pergunta for genérica e houver múltiplos procedimentos possíveis, apresente brevemente as opções disponíveis. Se não houver informação na base, diga que vai verificar com a equipe.";
             }
           }
         }
