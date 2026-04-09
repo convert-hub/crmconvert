@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
