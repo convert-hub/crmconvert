@@ -134,10 +134,32 @@ const handlers = {
         return { skipped: true, reason: 'conversation or contact not found' };
       }
 
-      // 1. FIRST: Check keyword and activate AI if needed
-      if (message_text && !data?.fromMe) {
+      // 0. RESOLVE EFFECTIVE TEXT: transcribe audio BEFORE any business logic
+      let effectiveText = message_text || '';
+      if (!effectiveText && !data?.fromMe) {
+        const { data: lastMsg } = await supabase.from('messages')
+          .select('id, media_type, media_url')
+          .eq('conversation_id', conversation_id)
+          .eq('direction', 'inbound')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+        if (lastMsg && lastMsg.media_type && lastMsg.media_type.toLowerCase().includes('audio')) {
+          const transcription = await transcribeAudio(tenant_id, lastMsg.media_url, lastMsg.id);
+          if (transcription) {
+            effectiveText = transcription;
+            console.log('[Worker] Audio transcribed before business logic:', transcription.substring(0, 80));
+          } else {
+            console.log('[Worker] Audio transcription failed/empty, skipping AI for this message');
+            return { conversation_id, contact_id, ai_processed: false, reason: 'audio_transcription_failed' };
+          }
+        }
+      }
+
+      // 1. FIRST: Check keyword and activate AI if needed (using effectiveText so audio can trigger keywords)
+      if (effectiveText && !data?.fromMe) {
         try {
-          await checkKeywordAndActivateAi(tenant_id, contact_id, conversation_id, message_text);
+          await checkKeywordAndActivateAi(tenant_id, contact_id, conversation_id, effectiveText);
         } catch (err) {
           console.error('[Worker] Keyword/AI activation error:', err.message);
         }
@@ -150,31 +172,16 @@ const handlers = {
       // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          // Transcribe audio if message has no text
-          let effectiveMessageText = message_text || '';
-          if (!message_text && !data?.fromMe) {
-            const { data: lastMsg } = await supabase.from('messages')
-              .select('id, media_type, media_url')
-              .eq('conversation_id', conversation_id)
-              .eq('direction', 'inbound')
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .single();
-            if (lastMsg && lastMsg.media_type && lastMsg.media_type.toLowerCase().includes('audio') && lastMsg.media_url) {
-              const transcription = await transcribeAudio(tenant_id, lastMsg.media_url, lastMsg.id);
-              if (transcription) effectiveMessageText = transcription;
-            }
-          }
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveMessageText);
+          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
         } catch (err) {
           console.error('[Worker] AI auto-reply error:', err.message);
         }
       }
 
-      // Trigger active chatbot flows with trigger_type='message_received'
-      if (message_text && !data?.fromMe) {
+      // Trigger active chatbot flows with trigger_type='message_received' (using effectiveText)
+      if (effectiveText && !data?.fromMe) {
         try {
-          await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, message_text);
+          await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, effectiveText);
         } catch (err) {
           console.error('[Worker] Flow trigger error:', err.message);
         }
@@ -255,10 +262,20 @@ const handlers = {
     }
     await supabase.from('conversations').update(updates).eq('id', conversation.id);
 
-    // 1. FIRST: Check keyword and activate AI if needed
-    if (!fromMe && text) {
+    // 0. RESOLVE EFFECTIVE TEXT for legacy path
+    let effectiveText = text || '';
+    if (!fromMe && !text && mediaType && mediaType.toLowerCase().includes('audio') && mediaUrl && savedMsg?.id) {
+      const transcription = await transcribeAudio(tenant_id, mediaUrl, savedMsg.id);
+      if (transcription) {
+        effectiveText = transcription;
+        console.log('[Worker] Legacy: audio transcribed:', transcription.substring(0, 80));
+      }
+    }
+
+    // 1. FIRST: Check keyword and activate AI if needed (using effectiveText)
+    if (!fromMe && effectiveText) {
       try {
-        await checkKeywordAndActivateAi(tenant_id, contact.id, conversation.id, text);
+        await checkKeywordAndActivateAi(tenant_id, contact.id, conversation.id, effectiveText);
       } catch (err) {
         console.error('[Worker] Keyword/AI activation error:', err.message);
       }
@@ -271,24 +288,18 @@ const handlers = {
     if (freshContact2) contact = freshContact2;
 
     // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
-    if (!fromMe && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
+    if (!fromMe && effectiveText && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
-        // Transcribe audio if message has no text but has audio
-        let effectiveText = text || '';
-        if (!text && mediaType && mediaType.toLowerCase().includes('audio') && mediaUrl && savedMsg?.id) {
-          const transcription = await transcribeAudio(tenant_id, mediaUrl, savedMsg.id);
-          if (transcription) effectiveText = transcription;
-        }
         await handleAiAutoReply(tenant_id, conversation, contact, effectiveText);
       } catch (err) {
         console.error('[Worker] AI auto-reply error:', err.message);
       }
     }
 
-    // Trigger chatbot flows for inbound messages
-    if (!fromMe && text) {
+    // Trigger chatbot flows for inbound messages (using effectiveText)
+    if (!fromMe && effectiveText) {
       try {
-        await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, text);
+        await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, effectiveText);
       } catch (err) {
         console.error('[Worker] Flow trigger error:', err.message);
       }

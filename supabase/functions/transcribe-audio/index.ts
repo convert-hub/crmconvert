@@ -12,8 +12,8 @@ serve(async (req) => {
   try {
     const { media_url, message_id, tenant_id } = await req.json();
 
-    if (!media_url || !tenant_id) {
-      return new Response(JSON.stringify({ error: "media_url and tenant_id required" }), {
+    if (!tenant_id) {
+      return new Response(JSON.stringify({ error: "tenant_id required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -22,7 +22,7 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 1. Obter API key do tenant (mesma hierarquia do ai-generate)
+    // 1. Get API key (same hierarchy as ai-generate)
     const { data: aiConfig } = await supabase
       .from("ai_configs")
       .select("*, global_api_key:global_api_keys(*)")
@@ -40,53 +40,138 @@ serve(async (req) => {
       });
     }
 
-    // 2. Baixar o áudio da URL
-    console.log("transcribe-audio: downloading audio from", media_url.substring(0, 80));
-    const audioResponse = await fetch(media_url);
-    if (!audioResponse.ok) {
-      return new Response(JSON.stringify({ error: "Failed to download audio", status: audioResponse.status }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    const audioBlob = await audioResponse.blob();
+    // 2. Get provider_message_id from the message to download via UAZAPI
+    let audioBlob: Blob | null = null;
+    let detectedMime = "";
 
-    // 3. Detectar extensão correta pelo Content-Type
-    const mimeToExt: Record<string, string> = {
-      'audio/ogg': 'ogg',
-      'audio/mpeg': 'mp3',
-      'audio/mp4': 'm4a',
-      'audio/mp3': 'mp3',
-      'audio/wav': 'wav',
-      'audio/x-wav': 'wav',
-      'audio/webm': 'webm',
-      'audio/flac': 'flac',
-      'video/mp4': 'mp4',
-      'application/ogg': 'ogg',
-      'audio/opus': 'ogg',
-    };
+    if (message_id) {
+      const { data: msgRow } = await supabase
+        .from("messages")
+        .select("provider_message_id, provider_metadata")
+        .eq("id", message_id)
+        .single();
 
-    const rawContentType = audioResponse.headers.get("content-type") || "";
-    const baseMime = rawContentType.split(";")[0].trim().toLowerCase();
-    let fileExt = mimeToExt[baseMime] || "";
+      const providerMessageId = msgRow?.provider_message_id;
 
-    if (!fileExt) {
-      const urlExt = media_url.split("?")[0].split(".").pop()?.toLowerCase() || "";
-      if (Object.values(mimeToExt).includes(urlExt)) {
-        fileExt = urlExt;
-      } else {
-        fileExt = "ogg";
+      if (providerMessageId) {
+        // Get WhatsApp instance for this tenant
+        const { data: instance } = await supabase
+          .from("whatsapp_instances")
+          .select("api_url, api_token_encrypted")
+          .eq("tenant_id", tenant_id)
+          .eq("is_active", true)
+          .limit(1)
+          .single();
+
+        if (instance) {
+          const apiBase = instance.api_url.replace(/\/+$/, "");
+          const token = instance.api_token_encrypted || "";
+
+          console.log("transcribe-audio: downloading via UAZAPI, msgId:", providerMessageId);
+
+          try {
+            const dlResponse = await fetch(`${apiBase}/message/download`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", token },
+              body: JSON.stringify({ messageid: providerMessageId }),
+            });
+
+            if (dlResponse.ok) {
+              const contentType = dlResponse.headers.get("content-type") || "";
+
+              if (contentType.includes("application/json")) {
+                // UAZAPI returns JSON with fileURL or base64
+                const dlData = await dlResponse.json();
+                const fileURL = dlData.fileURL;
+                const base64 = dlData.base64;
+                detectedMime = dlData.mimetype || "";
+
+                if (fileURL) {
+                  console.log("transcribe-audio: downloading from UAZAPI fileURL, mime:", detectedMime);
+                  const fileResp = await fetch(fileURL);
+                  if (fileResp.ok) {
+                    audioBlob = await fileResp.blob();
+                    if (!detectedMime) {
+                      detectedMime = fileResp.headers.get("content-type")?.split(";")[0]?.trim() || "";
+                    }
+                  }
+                } else if (base64) {
+                  console.log("transcribe-audio: using base64 from UAZAPI, mime:", detectedMime);
+                  const binaryStr = atob(base64);
+                  const bytes = new Uint8Array(binaryStr.length);
+                  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+                  audioBlob = new Blob([bytes], { type: detectedMime || "audio/ogg" });
+                }
+              } else {
+                // Direct binary response
+                audioBlob = await dlResponse.blob();
+                detectedMime = contentType.split(";")[0].trim();
+              }
+            } else {
+              console.log("transcribe-audio: UAZAPI download failed, status:", dlResponse.status);
+            }
+          } catch (uazErr) {
+            console.error("transcribe-audio: UAZAPI download error:", uazErr);
+          }
+        }
       }
     }
 
-    console.log("transcribe-audio: detected content-type:", baseMime, "-> ext:", fileExt);
+    // 3. Fallback: download from raw media_url if UAZAPI failed
+    if (!audioBlob && media_url) {
+      console.log("transcribe-audio: fallback to raw media_url:", media_url.substring(0, 80));
+      const audioResponse = await fetch(media_url);
+      if (!audioResponse.ok) {
+        return new Response(JSON.stringify({ error: "Failed to download audio", status: audioResponse.status }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      audioBlob = await audioResponse.blob();
+      detectedMime = audioResponse.headers.get("content-type")?.split(";")[0]?.trim()?.toLowerCase() || "";
+    }
 
-    // 4. Enviar para OpenAI Whisper API
+    if (!audioBlob || audioBlob.size === 0) {
+      return new Response(JSON.stringify({ error: "No audio data obtained" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // 4. Map MIME type to correct file extension for Whisper
+    const mimeToExt: Record<string, string> = {
+      "audio/ogg": "ogg",
+      "audio/mpeg": "mp3",
+      "audio/mp4": "m4a",
+      "audio/mp3": "mp3",
+      "audio/wav": "wav",
+      "audio/x-wav": "wav",
+      "audio/webm": "webm",
+      "audio/flac": "flac",
+      "video/mp4": "mp4",
+      "application/ogg": "ogg",
+      "audio/opus": "ogg",
+    };
+
+    const baseMime = (detectedMime || "").toLowerCase();
+    let fileExt = mimeToExt[baseMime] || "";
+
+    if (!fileExt && media_url) {
+      const urlExt = media_url.split("?")[0].split(".").pop()?.toLowerCase() || "";
+      if (Object.values(mimeToExt).includes(urlExt)) {
+        fileExt = urlExt;
+      }
+    }
+
+    // Default to ogg (WhatsApp PTT uses opus in ogg container)
+    if (!fileExt) fileExt = "ogg";
+
+    console.log("transcribe-audio: mime:", baseMime, "-> ext:", fileExt, "size:", audioBlob.size);
+
+    // 5. Send to OpenAI Whisper API
     const formData = new FormData();
     formData.append("file", audioBlob, `audio.${fileExt}`);
     formData.append("model", "whisper-1");
     formData.append("language", "pt");
 
-    console.log("transcribe-audio: sending to Whisper API, size:", audioBlob.size);
     const whisperResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -106,7 +191,7 @@ serve(async (req) => {
 
     console.log("transcribe-audio: transcription result:", transcription.substring(0, 100));
 
-    // 4. Salvar transcrição no provider_metadata da mensagem
+    // 6. Save transcription in provider_metadata
     if (message_id && transcription) {
       const { data: msgRow } = await supabase
         .from("messages")
