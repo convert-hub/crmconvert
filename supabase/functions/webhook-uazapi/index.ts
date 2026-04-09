@@ -244,7 +244,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   }
 
   // Save message
-  const { error: msgError } = await supabase.from('messages').insert({
+  const { data: savedMsg, error: msgError } = await supabase.from('messages').insert({
     tenant_id: tenantId,
     conversation_id: conversation.id,
     direction: fromMe ? 'outbound' : 'inbound',
@@ -253,7 +253,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
     media_type: mediaType,
     media_url: mediaUrl,
     provider_metadata: body,
-  });
+  }).select('id').single();
 
   if (msgError) {
     console.error('webhook-uazapi: failed to save message:', msgError);
@@ -324,7 +324,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
   }
 
   // Enqueue AI processing for inbound messages (worker handles keyword lead creation + AI reply)
-  if (!fromMe) {
+  if (!fromMe && savedMsg?.id) {
     try {
       await supabase.rpc('enqueue_job', {
         _type: 'process_uazapi_message',
@@ -333,6 +333,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
           conversation_id: conversation.id,
           contact_id: contact.id,
           message_text: text,
+          message_id: savedMsg.id,
           already_saved: true,
         }),
         _tenant_id: tenantId,
@@ -382,7 +383,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
       // This handles the case where audio wasn't ready for transcription on first attempt
       if (statusType === 'FileDownloaded' && msg.direction === 'inbound' &&
           msg.media_type && msg.media_type.toLowerCase().includes('audio') &&
-          !metadata.audio_transcription) {
+          !metadata.audio_transcription && !metadata.audio_reply_sent) {
         try {
           // Find conversation to get contact_id
           const { data: conv } = await supabase.from('conversations')
@@ -391,7 +392,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
             .single();
 
           if (conv?.contact_id) {
-            console.log(`webhook-uazapi: re-enqueuing audio transcription for message ${msg.id}`);
+            console.log(`webhook-uazapi: re-enqueuing audio transcription for message ${msg.id} (FileDownloaded)`);
             await supabase.rpc('enqueue_job', {
               _type: 'process_uazapi_message',
               _payload: JSON.stringify({
@@ -399,6 +400,7 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
                 conversation_id: msg.conversation_id,
                 contact_id: conv.contact_id,
                 message_text: '',
+                message_id: msg.id,
                 already_saved: true,
               }),
               _tenant_id: tenantId,
