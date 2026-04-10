@@ -1233,6 +1233,42 @@ export type Database = {
         }
         Relationships: []
       }
+      prompt_template_documents: {
+        Row: {
+          created_at: string
+          document_id: string
+          id: string
+          prompt_template_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          id?: string
+          prompt_template_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          id?: string
+          prompt_template_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prompt_template_documents_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prompt_template_documents_prompt_template_id_fkey"
+            columns: ["prompt_template_id"]
+            isOneToOne: false
+            referencedRelation: "prompt_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       prompt_templates: {
         Row: {
           content: string
@@ -1829,6 +1865,24 @@ export type Database = {
         | {
             Args: {
               _category?: string
+              _match_count?: number
+              _match_threshold?: number
+              _query_embedding: string
+              _tenant_id: string
+            }
+            Returns: {
+              category: string
+              content: string
+              document_id: string
+              document_name: string
+              id: string
+              similarity: number
+            }[]
+          }
+        | {
+            Args: {
+              _category?: string
+              _document_ids?: string[]
               _match_count?: number
               _match_threshold?: number
               _query_embedding: string
