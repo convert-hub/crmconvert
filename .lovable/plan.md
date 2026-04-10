@@ -1,69 +1,40 @@
 
 
-## Plano: Delete Contextual com Confirmação de Cascade
+## Plano: Seletor de Documentos por Agente (N:N)
 
-### Diagnóstico
+### 1. Migration SQL
 
-A FK `conversations.contact_id` atual é `ON DELETE CASCADE` (não SET NULL como desejado). Isso significa que deletar um contato já deleta todas as conversas automaticamente, mas sem aviso ao usuário. Vamos mudar para SET NULL para dar controle ao usuário.
+- Criar tabela `prompt_template_documents` (N:N) com FK CASCADE para ambos os lados, RLS e índices
+- Adicionar overload de `search_knowledge` com parâmetro `_document_ids uuid[] DEFAULT NULL` que filtra por `kc.document_id = ANY(_document_ids)`
 
-### 1. Migration: Alterar FK `conversations.contact_id`
+### 2. Alterar `supabase/functions/ai-generate/index.ts`
 
-Trocar `ON DELETE CASCADE` por `ON DELETE SET NULL`:
+- Linha 95: incluir `id` no select do promptTemplate
+- Antes da linha 182: buscar `document_ids` da tabela `prompt_template_documents` usando o `promptTemplate.id`
+- Linha 182-188: passar `_document_ids` ao `search_knowledge`; se tem document_ids, ignorar `_category`
 
-```sql
-ALTER TABLE public.conversations DROP CONSTRAINT conversations_contact_id_fkey;
-ALTER TABLE public.conversations ADD CONSTRAINT conversations_contact_id_fkey 
-  FOREIGN KEY (contact_id) REFERENCES public.contacts(id) ON DELETE SET NULL;
-```
+### 3. Reescrever `src/pages/PromptStudioPage.tsx`
 
-### 2. Novo componente `src/components/shared/CascadeDeleteDialog.tsx`
-
-Dialog reutilizável com checkboxes para entidades vinculadas. Recebe lista de `linkedEntities` com type, label, count, icon, checked. Entidades com count 0 não aparecem. Marcar "Contato" auto-marca todos os outros.
-
-### 3. Novo hook `src/hooks/useCascadeDelete.ts`
-
-Funções:
-- `getConversationLinked(id)` — conta atividades, oportunidades, outras conversas do contato
-- `getContactLinked(id)` — conta conversas, oportunidades, atividades
-- `getOpportunityLinked(id)` — conta atividades, conversas do contato
-- `deleteConversationCascade(id, contactId, toDelete[])` — delete ordenado
-- `deleteContactCascade(id, toDelete[])` — delete ordenado
-- `deleteOpportunityCascade(id, contactId, toDelete[])` — delete ordenado
-
-Ordem segura: activities → conversations → opportunities → contact
-
-### 4. Alterar `src/pages/InboxPage.tsx`
-
-- Remover `confirmDeleteConversation` e o AlertDialog simples
-- `handleDeleteConversation` vira async: busca vínculos antes de abrir o dialog
-- Usar `CascadeDeleteDialog` com entidades do contato vinculado
-
-### 5. Alterar `src/pages/PipelinePage.tsx`
-
-- Remover `confirmDeleteOpportunity` e o AlertDialog simples
-- `handleDeleteOpportunity` vira async: busca vínculos antes de abrir o dialog
-- Usar `CascadeDeleteDialog`
-
-### 6. Alterar `src/pages/ContactsPage.tsx`
-
-- Substituir `handleDelete` (que usa `confirm()`) por `CascadeDeleteDialog`
-- Adicionar estados para o dialog e dados de cascade
-- Somente admin/manager pode deletar (já controlado por RLS)
+- Adicionar estados: `documents`, `selectedDocIds`, `templateDocMap`
+- `load()`: carregar documentos ready + todos os vínculos `prompt_template_documents` para montar `templateDocMap`
+- `openEdit()`: carregar vínculos do template específico em `selectedDocIds`
+- `resetForm()`: limpar `selectedDocIds`
+- Substituir Select de categoria (linhas 141-151) por multi-select com checkboxes agrupados por categoria, usando `Checkbox` de shadcn
+- `handleSave()`: após insert/update, deletar vínculos antigos e inserir novos; no fluxo de versionamento, usar o id da nova versão retornado pelo `.insert().select()`
+- `handleDuplicate()`: usar `.insert().select()` para obter o id, depois copiar vínculos
+- Card: substituir badge de `knowledge_category` por badge "X docs" ou "Todos os docs"
 
 ### Arquivos
 
 | Arquivo | Alteração |
 |---|---|
-| Nova migration SQL | Alterar FK para SET NULL |
-| `src/components/shared/CascadeDeleteDialog.tsx` | Novo componente |
-| `src/hooks/useCascadeDelete.ts` | Novo hook |
-| `src/pages/InboxPage.tsx` | Substituir AlertDialog |
-| `src/pages/PipelinePage.tsx` | Substituir AlertDialog |
-| `src/pages/ContactsPage.tsx` | Substituir `confirm()` por CascadeDeleteDialog |
+| Nova migration SQL | Tabela N:N + overload `search_knowledge` |
+| `supabase/functions/ai-generate/index.ts` | Buscar document_ids, passar ao RPC |
+| `src/pages/PromptStudioPage.tsx` | Multi-select de documentos, salvar/carregar vínculos |
 
 ### O que NÃO muda
 
-- RLS policies, permissões de role
-- Fluxo de criação de entidades
-- Messages cascade (já automático via FK)
+- Coluna `knowledge_category` em `prompt_templates` (backward compat/fallback)
+- Fluxo de upload, ingest, embedding
+- RLS das outras tabelas
 
