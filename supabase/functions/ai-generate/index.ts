@@ -178,13 +178,26 @@ serve(async (req) => {
           const queryEmbedding = embResult.data?.[0]?.embedding;
 
           if (queryEmbedding) {
+            // Fetch document_ids from N:N table if prompt template has specific docs
+            let documentIds: string[] | null = null;
+            if (promptTemplate?.id) {
+              const { data: ptDocs } = await supabase
+                .from("prompt_template_documents")
+                .select("document_id")
+                .eq("prompt_template_id", promptTemplate.id);
+              if (ptDocs && ptDocs.length > 0) {
+                documentIds = ptDocs.map((d: any) => d.document_id);
+              }
+            }
+
             const knowledgeCategory = promptTemplate?.knowledge_category || null;
             const { data: chunks } = await supabase.rpc("search_knowledge", {
               _tenant_id: tenant_id,
               _query_embedding: JSON.stringify(queryEmbedding),
               _match_count: 5,
               _match_threshold: 0.5,
-              _category: knowledgeCategory,
+              _category: documentIds ? null : knowledgeCategory,
+              _document_ids: documentIds,
             });
 
             if (chunks && chunks.length > 0) {
