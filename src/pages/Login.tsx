@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
-import logo from '@/assets/logo.png';
+const logo = 'https://zhywwrhzaqfcjcwywkwf.supabase.co/storage/v1/object/public/tenant-logos/logo-crm.png';
 
 export default function Login() {
   const navigate = useNavigate();
