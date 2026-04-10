@@ -92,7 +92,7 @@ serve(async (req) => {
     // 2. Load tenant prompt template for message_generation
     const { data: promptTemplate } = await supabase
       .from("prompt_templates")
-      .select("content, forbidden_terms, variables, knowledge_category")
+      .select("id, content, forbidden_terms, variables, knowledge_category")
       .eq("tenant_id", tenant_id)
       .eq("task_type", "message_generation")
       .eq("is_active", true)
