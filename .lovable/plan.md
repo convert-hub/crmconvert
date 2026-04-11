@@ -1,40 +1,49 @@
 
 
-## Plano: Seletor de Documentos por Agente (N:N)
+## Plano: Fallback para `global_api_keys` no Worker (ingest de documentos)
 
-### 1. Migration SQL
+### Diagnóstico
 
-- Criar tabela `prompt_template_documents` (N:N) com FK CASCADE para ambos os lados, RLS e índices
-- Adicionar overload de `search_knowledge` com parâmetro `_document_ids uuid[] DEFAULT NULL` que filtra por `kc.document_id = ANY(_document_ids)`
+- Tenant "Na Melhor" tem **zero registros** em `ai_configs`
+- Worker (linha 862-869) busca key em `ai_configs` → fallback para `process.env.OPENAI_API_KEY`
+- Nenhum dos dois existe, mas há uma chave global ativa em `global_api_keys` (label "OpenAI Produção") que não é consultada
 
-### 2. Alterar `supabase/functions/ai-generate/index.ts`
+### Solução
 
-- Linha 95: incluir `id` no select do promptTemplate
-- Antes da linha 182: buscar `document_ids` da tabela `prompt_template_documents` usando o `promptTemplate.id`
-- Linha 182-188: passar `_document_ids` ao `search_knowledge`; se tem document_ids, ignorar `_category`
+Adicionar um fallback intermediário: quando `ai_configs` não retorna key, buscar em `global_api_keys` uma chave OpenAI ativa antes de tentar a env var.
 
-### 3. Reescrever `src/pages/PromptStudioPage.tsx`
+### Alteração em `worker/index.js` (linhas 860-869)
 
-- Adicionar estados: `documents`, `selectedDocIds`, `templateDocMap`
-- `load()`: carregar documentos ready + todos os vínculos `prompt_template_documents` para montar `templateDocMap`
-- `openEdit()`: carregar vínculos do template específico em `selectedDocIds`
-- `resetForm()`: limpar `selectedDocIds`
-- Substituir Select de categoria (linhas 141-151) por multi-select com checkboxes agrupados por categoria, usando `Checkbox` de shadcn
-- `handleSave()`: após insert/update, deletar vínculos antigos e inserir novos; no fluxo de versionamento, usar o id da nova versão retornado pelo `.insert().select()`
-- `handleDuplicate()`: usar `.insert().select()` para obter o id, depois copiar vínculos
-- Card: substituir badge de `knowledge_category` por badge "X docs" ou "Todos os docs"
+```text
+Lógica atual:
+  ai_configs (tenant) → process.env.OPENAI_API_KEY
 
-### Arquivos
+Lógica nova:
+  ai_configs (tenant) → global_api_keys (OpenAI, ativa) → process.env.OPENAI_API_KEY
+```
+
+Inserir entre as linhas 868 e 869:
+
+```javascript
+if (!apiKey) {
+  const { data: globalKey } = await supabase
+    .from('global_api_keys')
+    .select('api_key_encrypted')
+    .eq('provider', 'openai')
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle();
+  if (globalKey) apiKey = globalKey.api_key_encrypted;
+}
+```
+
+### Arquivo
 
 | Arquivo | Alteração |
 |---|---|
-| Nova migration SQL | Tabela N:N + overload `search_knowledge` |
-| `supabase/functions/ai-generate/index.ts` | Buscar document_ids, passar ao RPC |
-| `src/pages/PromptStudioPage.tsx` | Multi-select de documentos, salvar/carregar vínculos |
+| `worker/index.js` | Linhas 868-869: adicionar fallback para `global_api_keys` |
 
-### O que NÃO muda
+### Após o deploy
 
-- Coluna `knowledge_category` em `prompt_templates` (backward compat/fallback)
-- Fluxo de upload, ingest, embedding
-- RLS das outras tabelas
+O documento `estrias-na-melhor.pdf` (status `error`) poderá ser reprocessado pelo botão de refresh na UI do Knowledge Base. O worker precisará de rebuild/restart do container Docker.
 
