@@ -866,6 +866,16 @@ const handlers = {
         .eq('task_type', 'message_generation')
         .maybeSingle();
       if (aiConfig) apiKey = aiConfig.api_key_encrypted || aiConfig.global_api_key?.api_key_encrypted || null;
+      if (!apiKey) {
+        const { data: globalKey } = await supabase
+          .from('global_api_keys')
+          .select('api_key_encrypted')
+          .eq('provider', 'openai')
+          .eq('is_active', true)
+          .limit(1)
+          .maybeSingle();
+        if (globalKey) apiKey = globalKey.api_key_encrypted;
+      }
       if (!apiKey) apiKey = process.env.OPENAI_API_KEY || null;
 
       if (!apiKey) {
