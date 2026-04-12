@@ -332,6 +332,30 @@ export default function SettingsPage() {
     setLeadKeywords(updated);
     toast.success('Palavra-chave removida');
   };
+
+  const addTakeoverKeyword = async () => {
+    if (!tenant || !newTakeoverKeyword.trim()) return;
+    const updated = [...takeoverKeywords, newTakeoverKeyword.trim()];
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, agent_takeover_keywords: updated } }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setTakeoverKeywords(updated);
+    setNewTakeoverKeyword('');
+    toast.success('Palavra-chave de takeover adicionada');
+  };
+
+  const removeTakeoverKeyword = async (keyword: string) => {
+    if (!tenant) return;
+    const updated = takeoverKeywords.filter(k => k !== keyword);
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, agent_takeover_keywords: updated } }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setTakeoverKeywords(updated);
+    toast.success('Palavra-chave de takeover removida');
+  };
+
   const updateMemberRole = async (memberId: string, newRole: string) => { await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', memberId); toast.success('Papel atualizado'); loadAll(); };
   const removeMember = async (memberId: string) => { await supabase.from('tenant_memberships').update({ is_active: false }).eq('id', memberId); toast.success('Membro desativado'); loadAll(); };
 
