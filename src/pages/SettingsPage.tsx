@@ -31,6 +31,7 @@ interface AiConfig { id: string; task_type: string; provider: string; model: str
 // TODO: reativar qa_review e stage_classifier quando backend for implementado
 const AI_TASK_LABELS: Record<string, string> = { message_generation: 'Geração de Mensagens', qualification: 'Qualificação' };
 const removeAccents = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const normalizeForPhraseMatch = (s: string) => removeAccents(s.toLowerCase()).replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 
 function KeywordTester({ keywords }: { keywords: string[] }) {
   const [testPhrase, setTestPhrase] = useState('');
@@ -38,8 +39,8 @@ function KeywordTester({ keywords }: { keywords: string[] }) {
 
   const handleTest = () => {
     if (!testPhrase.trim()) return;
-    const normalized = removeAccents(testPhrase.toLowerCase().trim());
-    const match = keywords.find(k => normalized.includes(removeAccents(k.toLowerCase())));
+    const normalized = normalizeForPhraseMatch(testPhrase);
+    const match = keywords.find(k => normalized.includes(normalizeForPhraseMatch(k)));
     setResult(match ? { matched: true, keyword: match } : { matched: false });
   };
 
@@ -248,6 +249,8 @@ export default function SettingsPage() {
   const [tenantName, setTenantName] = useState(tenant?.name ?? '');
   const [leadKeywords, setLeadKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState('');
+  const [takeoverKeywords, setTakeoverKeywords] = useState<string[]>([]);
+  const [newTakeoverKeyword, setNewTakeoverKeyword] = useState('');
   const [members, setMembers] = useState<Member[]>([]);
   const [stages, setStages] = useState<StageRow[]>([]);
   const [aiConfigs, setAiConfigs] = useState<AiConfig[]>([]);
@@ -282,6 +285,7 @@ export default function SettingsPage() {
     if (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) {
       const s = tenantData.settings as Record<string, any>;
       setLeadKeywords(s.lead_keywords || []);
+      setTakeoverKeywords(s.agent_takeover_keywords || []);
       setCustomFields(s.custom_opportunity_fields || []);
     }
     const { data: mems } = await supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id);
@@ -481,6 +485,43 @@ export default function SettingsPage() {
               )}
               {leadKeywords.length > 0 && (
                 <KeywordTester keywords={leadKeywords} />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="glass-card rounded-2xl">
+            <CardHeader>
+              <CardTitle>Palavras-chave de Takeover (Atendente)</CardTitle>
+              <CardDescription>Quando o número conectado da clínica envia uma dessas frases em uma conversa, a IA será desativada automaticamente e o atendimento vai para a fila humana.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {takeoverKeywords.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma palavra-chave de takeover configurada.</p>}
+                {takeoverKeywords.map(kw => (
+                  <Badge key={kw} variant="secondary" className="rounded-full text-sm gap-1 px-3 py-1">
+                    {kw}
+                    {isAdmin && (
+                      <button onClick={() => removeTakeoverKeyword(kw)} className="ml-1 hover:text-destructive transition-colors">
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </Badge>
+                ))}
+              </div>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <Input
+                    value={newTakeoverKeyword}
+                    onChange={e => setNewTakeoverKeyword(e.target.value)}
+                    placeholder="Ex: Olá me chamo Luiz, Atendimento humano..."
+                    className="rounded-xl flex-1"
+                    onKeyDown={e => e.key === 'Enter' && addTakeoverKeyword()}
+                  />
+                  <Button onClick={addTakeoverKeyword} className="rounded-xl"><Plus className="h-4 w-4 mr-1" />Adicionar</Button>
+                </div>
+              )}
+              {takeoverKeywords.length > 0 && (
+                <KeywordTester keywords={takeoverKeywords} />
               )}
             </CardContent>
           </Card>
