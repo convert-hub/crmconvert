@@ -1,49 +1,38 @@
 
 
-## Plano: Fallback para `global_api_keys` no Worker (ingest de documentos)
+## Plano: Agent Takeover Keyword
 
-### Diagnóstico
+Feature que permite desativar a IA automaticamente quando o atendente humano envia uma frase-chave específica pelo WhatsApp conectado.
 
-- Tenant "Na Melhor" tem **zero registros** em `ai_configs`
-- Worker (linha 862-869) busca key em `ai_configs` → fallback para `process.env.OPENAI_API_KEY`
-- Nenhum dos dois existe, mas há uma chave global ativa em `global_api_keys` (label "OpenAI Produção") que não é consultada
+### 1. `src/pages/SettingsPage.tsx` — UI de Takeover Keywords
 
-### Solução
+- Adicionar states `takeoverKeywords` e `newTakeoverKeyword`
+- Carregar `agent_takeover_keywords` do `tenants.settings` no `loadAll`
+- Criar funções `addTakeoverKeyword` e `removeTakeoverKeyword` (mesmo padrão de `addKeyword`/`removeKeyword`)
+- Atualizar `KeywordTester` para usar normalização reforçada (remover pontuação + colapsar espaços)
+- Adicionar nova seção na tab de automação/IA, logo após os lead keywords, com título "Palavras-chave de Takeover (Atendente)" e reutilização do `KeywordTester`
 
-Adicionar um fallback intermediário: quando `ai_configs` não retorna key, buscar em `global_api_keys` uma chave OpenAI ativa antes de tentar a env var.
+### 2. `supabase/functions/webhook-uazapi/index.ts` — Detecção no webhook
 
-### Alteração em `worker/index.js` (linhas 860-869)
+- Criar helper `normalizeForPhraseMatch` (remove acentos, pontuação, colapsa espaços, lowercase)
+- Após salvar mensagem `fromMe` e antes do bloco de AI enqueue, buscar `tenants.settings.agent_takeover_keywords`
+- Se match: setar `metadata.ai_activated = false`, `ai_deactivated_by = 'takeover_keyword'`, `status = 'waiting_agent'`, `assigned_to = null`
+- Deploy automático da edge function
 
-```text
-Lógica atual:
-  ai_configs (tenant) → process.env.OPENAI_API_KEY
+### 3. `worker/index.js` — Normalização reforçada
 
-Lógica nova:
-  ai_configs (tenant) → global_api_keys (OpenAI, ativa) → process.env.OPENAI_API_KEY
-```
+- Criar `normalizeForPhraseMatch` (reutiliza `removeAccents` + remove pontuação + colapsa espaços)
+- Atualizar `checkKeywordAndActivateAi` (linhas 1050-1051) para usar a nova normalização — melhora também o matching dos lead_keywords existentes
 
-Inserir entre as linhas 868 e 869:
-
-```javascript
-if (!apiKey) {
-  const { data: globalKey } = await supabase
-    .from('global_api_keys')
-    .select('api_key_encrypted')
-    .eq('provider', 'openai')
-    .eq('is_active', true)
-    .limit(1)
-    .maybeSingle();
-  if (globalKey) apiKey = globalKey.api_key_encrypted;
-}
-```
-
-### Arquivo
+### Arquivos
 
 | Arquivo | Alteração |
 |---|---|
-| `worker/index.js` | Linhas 868-869: adicionar fallback para `global_api_keys` |
+| `src/pages/SettingsPage.tsx` | UI takeover keywords + normalização reforçada no KeywordTester |
+| `supabase/functions/webhook-uazapi/index.ts` | Helper + detecção fromMe takeover |
+| `worker/index.js` | `normalizeForPhraseMatch` + atualizar `checkKeywordAndActivateAi` |
 
-### Após o deploy
+### Sem migration
 
-O documento `estrias-na-melhor.pdf` (status `error`) poderá ser reprocessado pelo botão de refresh na UI do Knowledge Base. O worker precisará de rebuild/restart do container Docker.
+O campo `agent_takeover_keywords` é armazenado no JSONB `tenants.settings` — sem alteração de schema.
 
