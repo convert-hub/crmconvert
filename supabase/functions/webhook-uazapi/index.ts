@@ -123,6 +123,16 @@ function normalizePhone(phone: string): string {
   return cleaned;
 }
 
+function normalizeForPhraseMatch(str: string): string {
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function handleIncomingMessage(supabase: any, tenantId: string, body: any) {
   // UAZAPI v2: message data is nested inside body.message
   const msg = body.message || body;
@@ -321,6 +331,44 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
         console.log('webhook-uazapi: avatar fetch error (non-critical):', e);
       }
     })();
+  }
+
+  // Check agent takeover keywords for fromMe messages
+  if (fromMe && text && conversation) {
+    try {
+      const { data: tenantData } = await supabase.from('tenants')
+        .select('settings')
+        .eq('id', tenantId)
+        .single();
+
+      const takeoverKeywords: string[] = (tenantData?.settings as any)?.agent_takeover_keywords || [];
+
+      if (takeoverKeywords.length > 0) {
+        const normalizedText = normalizeForPhraseMatch(text);
+        const matchedKeyword = takeoverKeywords.find(k =>
+          normalizedText.includes(normalizeForPhraseMatch(k))
+        );
+
+        if (matchedKeyword) {
+          const currentMetadata = conversation.metadata || {};
+          await supabase.from('conversations').update({
+            metadata: {
+              ...currentMetadata,
+              ai_activated: false,
+              ai_deactivated_at: new Date().toISOString(),
+              ai_deactivated_by: 'takeover_keyword',
+              takeover_keyword: matchedKeyword
+            },
+            assigned_to: null,
+            status: 'waiting_agent'
+          }).eq('id', conversation.id);
+
+          console.log(`webhook-uazapi: Agent takeover keyword "${matchedKeyword}" matched - AI disabled for conversation ${conversation.id}`);
+        }
+      }
+    } catch (e) {
+      console.error('webhook-uazapi: takeover keyword check error:', e);
+    }
   }
 
   // Enqueue AI processing for inbound messages (worker handles keyword lead creation + AI reply)

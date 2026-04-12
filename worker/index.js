@@ -980,6 +980,13 @@ function removeAccents(str) {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+function normalizeForPhraseMatch(str) {
+  return removeAccents(str.toLowerCase())
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
   const { data: flows } = await supabase.from('chatbot_flows')
     .select('id')
@@ -1047,8 +1054,8 @@ async function checkKeywordAndActivateAi(tenantId, contactId, conversationId, me
   if (keywords.length === 0) return false;
 
   // 2. Normalize and match
-  const normalizedMessage = removeAccents(messageText.toLowerCase());
-  const matchedKeyword = keywords.find(k => normalizedMessage.includes(removeAccents(k.toLowerCase())));
+  const normalizedMessage = normalizeForPhraseMatch(messageText);
+  const matchedKeyword = keywords.find(k => normalizedMessage.includes(normalizeForPhraseMatch(k)));
   if (!matchedKeyword) return false;
 
   console.log(`[Worker] Keyword match "${matchedKeyword}" for contact ${contactId} in conversation ${conversationId}`);
