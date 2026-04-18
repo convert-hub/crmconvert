@@ -1286,12 +1286,11 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
     const threshold = tenantData?.ai_confidence_threshold ?? 0.7;
 
     if (qualification?.qualified && qualification.confidence >= threshold) {
-      console.log(`[Worker] Lead ${contact.id} QUALIFIED (confidence ${qualification.confidence} >= threshold ${threshold}) - handing off to human`);
+      console.log(`[Worker] Lead ${contact.id} qualificação registrada (confidence ${qualification.confidence} >= threshold ${threshold}) - aguardando revisão humana, IA continua ativa`);
 
-      await supabase.from('contacts').update({ status: 'customer' }).eq('id', contact.id);
-
+      // Preserve existing metadata fields, only add/update qualification.
+      // Do NOT change conversation.status — keep AI active.
       await supabase.from('conversations').update({
-        status: 'waiting_agent',
         metadata: { ...((conversation.metadata || {})), qualification: qualification },
       }).eq('id', conversation.id);
 
@@ -1309,6 +1308,20 @@ Responda APENAS com JSON: {"qualified": true/false, "reason": "motivo breve", "c
         contact_id: contact.id,
         conversation_id: conversation.id,
       });
+
+      // Create human review task with 10-minute due date
+      const dueDate = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      await supabase.from('activities').insert({
+        tenant_id: tenantId,
+        type: 'task',
+        title: 'Revisar lead qualificado pela IA',
+        description: `IA marcou este lead como qualificado (confiança ${Math.round((qualification.confidence || 0) * 100)}%). Motivo: ${qualification.reason || 'Lead demonstrou interesse'}. Revise e decida o próximo passo.`,
+        contact_id: contact.id,
+        conversation_id: conversation.id,
+        due_date: dueDate,
+      });
+
+      console.log(`[Worker] Qualificação registrada para contact ${contact.id} - task de revisão criada (vence em 10min). contact.status e conversation.status NÃO foram alterados, IA segue respondendo.`);
     }
   } catch (err) {
     console.error('[Worker] Qualification error:', err.message);
