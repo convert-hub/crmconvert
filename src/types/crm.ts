@@ -18,6 +18,7 @@ export interface Tenant {
   ai_move_mode: 'suggest_only' | 'auto_with_guard' | 'auto_free';
   ai_confidence_threshold: number;
   business_hours: Record<string, { start: string; end: string }>;
+  timezone: string;
   created_at: string;
   updated_at: string;
 }
