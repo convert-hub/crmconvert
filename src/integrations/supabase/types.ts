@@ -1649,6 +1649,7 @@ export type Database = {
           name: string
           settings: Json
           slug: string
+          timezone: string
           updated_at: string
         }
         Insert: {
@@ -1660,6 +1661,7 @@ export type Database = {
           name: string
           settings?: Json
           slug: string
+          timezone?: string
           updated_at?: string
         }
         Update: {
@@ -1671,6 +1673,7 @@ export type Database = {
           name?: string
           settings?: Json
           slug?: string
+          timezone?: string
           updated_at?: string
         }
         Relationships: []
