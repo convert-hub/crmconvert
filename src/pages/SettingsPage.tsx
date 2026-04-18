@@ -550,6 +550,8 @@ export default function SettingsPage() {
               )}
             </CardContent>
           </Card>
+
+          <BusinessHoursSettings />
         </TabsContent>
 
         <TabsContent value="pipeline" className="space-y-4 pt-4">
