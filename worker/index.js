@@ -8,6 +8,7 @@ const { executeAutomations } = require('./automation-handler');
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const POLL_INTERVAL = process.env.POLL_INTERVAL || 2000;
+const MIN_INBOUND_FOR_QUALIFICATION = 5;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
@@ -1250,6 +1251,12 @@ async function handleAiAutoReply(tenantId, conversation, contact, incomingMessag
 }
 
 async function checkQualification(tenantId, conversation, contact, history) {
+  const inboundCount = history.filter(m => m.role === 'user').length;
+  if (inboundCount < MIN_INBOUND_FOR_QUALIFICATION) {
+    console.log(`[Worker] Qualification skipped: only ${inboundCount} inbound messages, waiting for ${MIN_INBOUND_FOR_QUALIFICATION}`);
+    return;
+  }
+
   const config = await getAiConfig(tenantId, 'qualification');
   if (!config) return;
 
