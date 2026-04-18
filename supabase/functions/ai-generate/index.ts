@@ -136,6 +136,57 @@ serve(async (req) => {
       ? `Nome: ${contact.name}. Status: ${contact.status}. Tags: ${(contact.tags || []).join(", ") || "nenhuma"}.${contact.notes ? ` Notas: ${contact.notes}` : ""}`
       : "Informações do contato indisponíveis";
 
+    // 4b. Fetch tenant business hours + timezone
+    const { data: tenant } = await supabase
+      .from("tenants")
+      .select("business_hours, timezone")
+      .eq("id", tenant_id)
+      .maybeSingle();
+
+    const timezone = (tenant as any)?.timezone || "America/Sao_Paulo";
+    const businessHours = ((tenant as any)?.business_hours as Record<string, { start?: string; end?: string }>) || {};
+
+    let businessHoursStatus = "fora";
+    let businessHoursHuman = "horário não configurado";
+    let currentDatetimeLocal = "";
+    let dayKey = "";
+    let currentTime = "";
+
+    try {
+      const nowDt = new Date();
+      const dayFmt = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" });
+      const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false });
+      const dateFmtPt = new Intl.DateTimeFormat("pt-BR", {
+        timeZone: timezone, weekday: "long", day: "2-digit", month: "long",
+        year: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+
+      dayKey = dayFmt.format(nowDt).toLowerCase().slice(0, 3);
+      currentTime = timeFmt.format(nowDt);
+      currentDatetimeLocal = dateFmtPt.format(nowDt);
+
+      const todayEntry = businessHours[dayKey];
+      if (todayEntry?.start && todayEntry?.end && currentTime >= todayEntry.start && currentTime < todayEntry.end) {
+        businessHoursStatus = "dentro";
+      }
+
+      const dayLabels: Record<string, string> = {
+        mon: "Seg", tue: "Ter", wed: "Qua", thu: "Qui", fri: "Sex", sat: "Sáb", sun: "Dom",
+      };
+      const order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+      const hasAny = order.some((k) => businessHours[k]?.start && businessHours[k]?.end);
+      if (hasAny) {
+        businessHoursHuman = order.map((k) => {
+          const e = businessHours[k];
+          return e?.start && e?.end ? `${dayLabels[k]} ${e.start}-${e.end}` : `${dayLabels[k]} fechado`;
+        }).join(", ");
+      }
+    } catch (e) {
+      console.error("[ai-generate] business_hours computation failed:", e);
+    }
+
+    console.log(`[ai-generate] business_hours: status=${businessHoursStatus} day=${dayKey} time=${currentTime} tz=${timezone}`);
+
     // 5. Fetch opportunity if linked
     const { data: opp } = await supabase
       .from("opportunities")
