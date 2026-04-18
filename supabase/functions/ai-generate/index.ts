@@ -302,7 +302,10 @@ serve(async (req) => {
         .replace(/\{\{contact_notes\}\}/gi, contact?.notes || "")
         .replace(/\{\{channel\}\}/gi, conv?.channel || "whatsapp")
         .replace(/\{\{conversation_status\}\}/gi, conv?.status || "aberto")
-        .replace(/\{\{opportunity_context\}\}/gi, oppContext || "Nenhuma oportunidade aberta");
+        .replace(/\{\{opportunity_context\}\}/gi, oppContext || "Nenhuma oportunidade aberta")
+        .replace(/\{\{business_hours_status\}\}/gi, businessHoursStatus)
+        .replace(/\{\{business_hours_human\}\}/gi, businessHoursHuman)
+        .replace(/\{\{current_datetime_local\}\}/gi, currentDatetimeLocal);
 
       if (promptTemplate.forbidden_terms?.length) {
         systemPrompt += `\n\nTermos proibidos (NUNCA use): ${promptTemplate.forbidden_terms.join(", ")}`;
