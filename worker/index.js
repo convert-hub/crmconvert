@@ -969,6 +969,56 @@ const handlers = {
       throw err;
     }
   },
+
+  async debounced_ai_reply(payload) {
+    const { tenant_id, conversation_id, contact_id } = payload;
+
+    // Fetch fresh conversation
+    const { data: freshConv } = await supabase.from('conversations')
+      .select('*').eq('id', conversation_id).maybeSingle();
+    if (!freshConv) return { skipped: true, reason: 'conversation_not_found' };
+    if (freshConv.assigned_to) return { skipped: true, reason: 'assigned_to_human' };
+    if (freshConv.metadata?.ai_activated !== true) return { skipped: true, reason: 'ai_not_activated' };
+
+    // Window still hot? Reschedule.
+    const lastInboundAt = freshConv.metadata?.last_inbound_at;
+    if (lastInboundAt) {
+      const elapsed = Date.now() - new Date(lastInboundAt).getTime();
+      if (elapsed < (AI_REPLY_DEBOUNCE_SECONDS - 1) * 1000) {
+        const newRunAfter = new Date(new Date(lastInboundAt).getTime() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString();
+        const newBucket = Math.floor(new Date(newRunAfter).getTime() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+        await supabase.rpc('enqueue_job', {
+          _type: 'debounced_ai_reply',
+          _payload: JSON.stringify({ tenant_id, conversation_id, contact_id }),
+          _tenant_id: tenant_id,
+          _run_after: newRunAfter,
+          _idempotency_key: `debounced-ai-reply-${conversation_id}-${newBucket}`,
+        });
+        return { skipped: true, reason: 'debounce_rescheduled' };
+      }
+    }
+
+    // Collect inbounds since last AI outbound
+    const { data: msgs } = await supabase.from('messages')
+      .select('id, content, direction, is_ai_generated, created_at')
+      .eq('conversation_id', conversation_id).eq('tenant_id', tenant_id)
+      .order('created_at', { ascending: false }).limit(30);
+
+    const collected = [];
+    for (const m of (msgs || [])) {
+      if (m.direction === 'outbound' && m.is_ai_generated) break;
+      if (m.direction === 'inbound' && m.content?.trim()) collected.push(m.content.trim());
+    }
+    collected.reverse();
+    const concatenated = collected.join('\n');
+
+    // Fetch fresh contact
+    const { data: freshContact } = await supabase.from('contacts')
+      .select('*').eq('id', contact_id).maybeSingle();
+
+    await handleAiAutoReply(tenant_id, freshConv, freshContact, concatenated);
+    return { ai_processed: true, messages_grouped: collected.length };
+  },
 };
 
 // Helpers
