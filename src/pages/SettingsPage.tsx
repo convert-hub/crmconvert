@@ -16,6 +16,7 @@ import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
 import TagsSettings from '@/components/settings/TagsSettings';
 import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
+import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
 
 interface CustomFieldDef {
   key: string;
