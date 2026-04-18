@@ -328,6 +328,83 @@ Regras:
     const suggestion = result.choices?.[0]?.message?.content || "";
     const tokensUsed = result.usage?.total_tokens || 0;
 
+    // 11b. Fire-and-forget: extract real name from chat history (background task)
+    // @ts-ignore — EdgeRuntime is provided by Supabase Edge Runtime (Deno Deploy)
+    EdgeRuntime.waitUntil((async () => {
+      try {
+        if (!conv?.contact_id) return;
+
+        const currentName = (contact?.name || "").trim();
+        const phone = (contact?.phone || "").trim();
+        const needsExtraction =
+          !currentName ||
+          currentName.toLowerCase() === "cliente" ||
+          currentName.length < 2 ||
+          /\d/.test(currentName) ||
+          currentName === phone;
+
+        if (!needsExtraction) return;
+
+        const last10 = chatHistory.slice(-10)
+          .map((m: any) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+          .join("\n");
+
+        const extractRes = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "Você extrai o NOME REAL (primeiro nome + sobrenome, se houver) de um lead a partir do histórico de conversa. Responda APENAS com JSON: {\"name\": \"Nome Sobrenome\"} ou {\"name\": null} se não houver nome claro. NUNCA invente. Ignore mensagens genéricas, saudações e nomes de terceiros." },
+              { role: "user", content: last10 },
+            ],
+            temperature: 0,
+            max_tokens: 50,
+            response_format: { type: "json_object" },
+          }),
+        });
+
+        if (!extractRes.ok) {
+          console.error("[ai-generate] Name extraction OpenAI call failed:", extractRes.status);
+          return;
+        }
+
+        const extractJson = await extractRes.json();
+        const raw = extractJson.choices?.[0]?.message?.content || "{}";
+        let parsed: any = {};
+        try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+        const extracted = typeof parsed.name === "string" ? parsed.name.trim() : null;
+
+        const willApply = !!(extracted && extracted.length >= 2 && !/\d/.test(extracted) && extracted !== currentName);
+
+        // Log the extraction attempt (task_type uses "message_generation" since enum doesn't include name_extraction)
+        await supabase.from("ai_logs").insert({
+          tenant_id,
+          task_type: "message_generation",
+          provider: "openai",
+          model: "gpt-4o-mini",
+          tokens_used: extractJson.usage?.total_tokens || 0,
+          input_data: { purpose: "name_extraction", conversation_id, history_length: chatHistory.length },
+          output_data: { extracted_name: extracted, applied: willApply },
+        });
+
+        if (willApply) {
+          await supabase.from("contacts").update({ name: extracted }).eq("id", conv.contact_id);
+          console.log(`[ai-generate] Contact name updated: "${currentName}" → "${extracted}"`);
+
+          // Increment usage counters for the extra OpenAI call
+          if (aiConfig?.id) {
+            await supabase.from("ai_configs").update({
+              daily_usage: (aiConfig.daily_usage || 0) + 1,
+              monthly_usage: (aiConfig.monthly_usage || 0) + 1,
+            }).eq("id", aiConfig.id);
+          }
+        }
+      } catch (e) {
+        console.error("[ai-generate] Name extraction failed (non-blocking):", e);
+      }
+    })());
+
     // 12. Log AI usage
     await supabase.from("ai_logs").insert({
       tenant_id,
