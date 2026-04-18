@@ -1,28 +1,32 @@
 
 
-## Plano: Remover hand-off automático em `checkQualification`
+## Plano: Gate mínimo de inbounds em `checkQualification`
 
-Bug: `checkQualification` muda `contact.status='customer'` e `conversation.status='waiting_agent'` quando o GPT qualifica o lead. Como `handleAiAutoReply` tem guard `if (contact.status !== 'lead') return;`, a IA para de responder.
+Adicionar guard no início de `checkQualification` (`worker/index.js`) para pular execução quando o lead ainda não enviou mensagens suficientes.
 
-### Alteração em `worker/index.js` (linhas 1288–1312)
+### Alterações em `worker/index.js`
 
-Dentro do bloco `if (qualification?.qualified && qualification.confidence >= threshold)`:
+1. **Topo do arquivo** — adicionar constante junto às outras constantes globais:
+   ```js
+   const MIN_INBOUND_FOR_QUALIFICATION = 5;
+   ```
 
-1. **Remover** `supabase.from('contacts').update({ status: 'customer' })` (linha 1291)
-2. **Remover** o update de `conversations.status = 'waiting_agent'` (linhas 1293–1296), substituindo por um update que apenas grava `metadata.qualification` preservando os demais campos do metadata
-3. **Manter** update de `opportunities.qualification_data` (1298–1302)
-4. **Manter** activity `'note'` "Lead qualificado pela IA" (1304–1311)
-5. **Adicionar** nova activity `type: 'task'` com title "Revisar lead qualificado pela IA" e `due_date = now + 10min`, vinculada ao `contact_id` e `conversation_id`
-6. **Atualizar logs** para "qualificação registrada, aguardando revisão humana, IA continua ativa"
+2. **Início de `checkQualification`** (antes da chamada ao OpenAI):
+   ```js
+   const inboundCount = history.filter(m => m.role === 'user').length;
+   if (inboundCount < MIN_INBOUND_FOR_QUALIFICATION) {
+     console.log(`[Worker] Qualification skipped: only ${inboundCount} inbound messages, waiting for ${MIN_INBOUND_FOR_QUALIFICATION}`);
+     return;
+   }
+   ```
 
-### Comportamento resultante
+### Resultado
 
-- `contact.status` permanece `'lead'` → guard de `handleAiAutoReply` continua passando → IA segue respondendo
-- `conversation.status` não é alterado pela qualificação
-- Qualificação fica registrada em `conversations.metadata.qualification` + `opportunities.qualification_data`
-- Humano recebe task de revisão com vencimento em 10 minutos
+- Qualificação só roda a partir da 5ª mensagem do lead
+- Economiza tokens nas primeiras trocas (já é cliente? / nome / procedimento / dor)
+- Nada mais é alterado: prompt, threshold, metadata update, activities, task de revisão permanecem intactos
 
-### Não muda
+### Após deploy
 
-- `handleAiAutoReply`, `checkKeywordAndActivateAi`, leitura do threshold via `tenants.ai_confidence_threshold`, tratamento de erros, prompt template, logging de AI call
+Rebuild/restart do container do worker.
 
