@@ -221,11 +221,10 @@ const handlers = {
       const { data: freshConv } = await supabase.from('conversations').select('*').eq('id', conversation_id).single();
       const { data: freshContact } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
 
-      // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+      // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          // For audio: mark BEFORE sending to guarantee atomicity via optimistic lock
-          // Better to miss a reply than to send duplicates
+          // For audio: mark BEFORE enqueuing to guarantee atomicity via optimistic lock
           if (targetMsg && isAudio && message_id) {
             const currentMeta = targetMsg.provider_metadata || {};
             const { data: updated, error: updateErr } = await supabase.from('messages').update({
@@ -240,18 +239,23 @@ const handlers = {
             }
           }
 
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
+          // Record last inbound timestamp (merge metadata)
+          const nowIso = new Date().toISOString();
+          await supabase.from('conversations').update({
+            metadata: { ...(freshConv.metadata || {}), last_inbound_at: nowIso },
+          }).eq('id', freshConv.id);
+
+          // Enqueue debounced job (idempotency by 8s window bucket)
+          const windowBucket = Math.floor(Date.now() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+          await supabase.rpc('enqueue_job', {
+            _type: 'debounced_ai_reply',
+            _payload: JSON.stringify({ tenant_id, conversation_id: freshConv.id, contact_id: (freshContact || contact).id }),
+            _tenant_id: tenant_id,
+            _run_after: new Date(Date.now() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString(),
+            _idempotency_key: `debounced-ai-reply-${freshConv.id}-${windowBucket}`,
+          });
         } catch (err) {
-          console.error('[Worker] AI auto-reply error:', err.message);
-          // If send failed but already marked, unmark to allow retry
-          if (targetMsg && isAudio && message_id) {
-            const currentMeta = targetMsg.provider_metadata || {};
-            delete currentMeta.audio_reply_sent;
-            delete currentMeta.audio_reply_sent_at;
-            await supabase.from('messages').update({
-              provider_metadata: currentMeta,
-            }).eq('id', message_id);
-          }
+          console.error('[Worker] AI auto-reply enqueue error:', err.message);
         }
       }
 
