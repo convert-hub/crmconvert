@@ -9,6 +9,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const POLL_INTERVAL = process.env.POLL_INTERVAL || 2000;
 const MIN_INBOUND_FOR_QUALIFICATION = 5;
+const AI_REPLY_DEBOUNCE_SECONDS = 8;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
@@ -220,11 +221,10 @@ const handlers = {
       const { data: freshConv } = await supabase.from('conversations').select('*').eq('id', conversation_id).single();
       const { data: freshContact } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
 
-      // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+      // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
       if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
-          // For audio: mark BEFORE sending to guarantee atomicity via optimistic lock
-          // Better to miss a reply than to send duplicates
+          // For audio: mark BEFORE enqueuing to guarantee atomicity via optimistic lock
           if (targetMsg && isAudio && message_id) {
             const currentMeta = targetMsg.provider_metadata || {};
             const { data: updated, error: updateErr } = await supabase.from('messages').update({
@@ -239,18 +239,23 @@ const handlers = {
             }
           }
 
-          await handleAiAutoReply(tenant_id, freshConv, freshContact || contact, effectiveText);
+          // Record last inbound timestamp (merge metadata)
+          const nowIso = new Date().toISOString();
+          await supabase.from('conversations').update({
+            metadata: { ...(freshConv.metadata || {}), last_inbound_at: nowIso },
+          }).eq('id', freshConv.id);
+
+          // Enqueue debounced job (idempotency by 8s window bucket)
+          const windowBucket = Math.floor(Date.now() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+          await supabase.rpc('enqueue_job', {
+            _type: 'debounced_ai_reply',
+            _payload: JSON.stringify({ tenant_id, conversation_id: freshConv.id, contact_id: (freshContact || contact).id }),
+            _tenant_id: tenant_id,
+            _run_after: new Date(Date.now() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString(),
+            _idempotency_key: `debounced-ai-reply-${freshConv.id}-${windowBucket}`,
+          });
         } catch (err) {
-          console.error('[Worker] AI auto-reply error:', err.message);
-          // If send failed but already marked, unmark to allow retry
-          if (targetMsg && isAudio && message_id) {
-            const currentMeta = targetMsg.provider_metadata || {};
-            delete currentMeta.audio_reply_sent;
-            delete currentMeta.audio_reply_sent_at;
-            await supabase.from('messages').update({
-              provider_metadata: currentMeta,
-            }).eq('id', message_id);
-          }
+          console.error('[Worker] AI auto-reply enqueue error:', err.message);
         }
       }
 
@@ -363,12 +368,26 @@ const handlers = {
     if (freshConv2) conversation = freshConv2;
     if (freshContact2) contact = freshContact2;
 
-    // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+    // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
     if (!fromMe && effectiveText && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
-        await handleAiAutoReply(tenant_id, conversation, contact, effectiveText);
+        // Record last inbound timestamp (merge metadata)
+        const nowIso = new Date().toISOString();
+        await supabase.from('conversations').update({
+          metadata: { ...(conversation.metadata || {}), last_inbound_at: nowIso },
+        }).eq('id', conversation.id);
+
+        // Enqueue debounced job (idempotency by 8s window bucket)
+        const windowBucket = Math.floor(Date.now() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+        await supabase.rpc('enqueue_job', {
+          _type: 'debounced_ai_reply',
+          _payload: JSON.stringify({ tenant_id, conversation_id: conversation.id, contact_id: contact.id }),
+          _tenant_id: tenant_id,
+          _run_after: new Date(Date.now() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString(),
+          _idempotency_key: `debounced-ai-reply-${conversation.id}-${windowBucket}`,
+        });
       } catch (err) {
-        console.error('[Worker] AI auto-reply error:', err.message);
+        console.error('[Worker] AI auto-reply enqueue error:', err.message);
       }
     }
 
@@ -949,6 +968,56 @@ const handlers = {
       }).eq('id', document_id);
       throw err;
     }
+  },
+
+  async debounced_ai_reply(payload) {
+    const { tenant_id, conversation_id, contact_id } = payload;
+
+    // Fetch fresh conversation
+    const { data: freshConv } = await supabase.from('conversations')
+      .select('*').eq('id', conversation_id).maybeSingle();
+    if (!freshConv) return { skipped: true, reason: 'conversation_not_found' };
+    if (freshConv.assigned_to) return { skipped: true, reason: 'assigned_to_human' };
+    if (freshConv.metadata?.ai_activated !== true) return { skipped: true, reason: 'ai_not_activated' };
+
+    // Window still hot? Reschedule.
+    const lastInboundAt = freshConv.metadata?.last_inbound_at;
+    if (lastInboundAt) {
+      const elapsed = Date.now() - new Date(lastInboundAt).getTime();
+      if (elapsed < (AI_REPLY_DEBOUNCE_SECONDS - 1) * 1000) {
+        const newRunAfter = new Date(new Date(lastInboundAt).getTime() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString();
+        const newBucket = Math.floor(new Date(newRunAfter).getTime() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+        await supabase.rpc('enqueue_job', {
+          _type: 'debounced_ai_reply',
+          _payload: JSON.stringify({ tenant_id, conversation_id, contact_id }),
+          _tenant_id: tenant_id,
+          _run_after: newRunAfter,
+          _idempotency_key: `debounced-ai-reply-${conversation_id}-${newBucket}`,
+        });
+        return { skipped: true, reason: 'debounce_rescheduled' };
+      }
+    }
+
+    // Collect inbounds since last AI outbound
+    const { data: msgs } = await supabase.from('messages')
+      .select('id, content, direction, is_ai_generated, created_at')
+      .eq('conversation_id', conversation_id).eq('tenant_id', tenant_id)
+      .order('created_at', { ascending: false }).limit(30);
+
+    const collected = [];
+    for (const m of (msgs || [])) {
+      if (m.direction === 'outbound' && m.is_ai_generated) break;
+      if (m.direction === 'inbound' && m.content?.trim()) collected.push(m.content.trim());
+    }
+    collected.reverse();
+    const concatenated = collected.join('\n');
+
+    // Fetch fresh contact
+    const { data: freshContact } = await supabase.from('contacts')
+      .select('*').eq('id', contact_id).maybeSingle();
+
+    await handleAiAutoReply(tenant_id, freshConv, freshContact, concatenated);
+    return { ai_processed: true, messages_grouped: collected.length };
   },
 };
 
