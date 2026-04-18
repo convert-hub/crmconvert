@@ -368,12 +368,26 @@ const handlers = {
     if (freshConv2) conversation = freshConv2;
     if (freshContact2) contact = freshContact2;
 
-    // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned
+    // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
     if (!fromMe && effectiveText && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
-        await handleAiAutoReply(tenant_id, conversation, contact, effectiveText);
+        // Record last inbound timestamp (merge metadata)
+        const nowIso = new Date().toISOString();
+        await supabase.from('conversations').update({
+          metadata: { ...(conversation.metadata || {}), last_inbound_at: nowIso },
+        }).eq('id', conversation.id);
+
+        // Enqueue debounced job (idempotency by 8s window bucket)
+        const windowBucket = Math.floor(Date.now() / (AI_REPLY_DEBOUNCE_SECONDS * 1000));
+        await supabase.rpc('enqueue_job', {
+          _type: 'debounced_ai_reply',
+          _payload: JSON.stringify({ tenant_id, conversation_id: conversation.id, contact_id: contact.id }),
+          _tenant_id: tenant_id,
+          _run_after: new Date(Date.now() + AI_REPLY_DEBOUNCE_SECONDS * 1000).toISOString(),
+          _idempotency_key: `debounced-ai-reply-${conversation.id}-${windowBucket}`,
+        });
       } catch (err) {
-        console.error('[Worker] AI auto-reply error:', err.message);
+        console.error('[Worker] AI auto-reply enqueue error:', err.message);
       }
     }
 
