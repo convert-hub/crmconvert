@@ -1,79 +1,85 @@
 
 
-## Plano: Variáveis de business hours no template do `ai-generate`
+## Plano: Card "Horário de funcionamento" em Settings
 
-Adicionar 3 variáveis ao prompt template: `{{business_hours_status}}`, `{{business_hours_human}}`, `{{current_datetime_local}}`.
+### Exploração necessária antes de aplicar
 
-### Arquivo único: `supabase/functions/ai-generate/index.ts`
+Preciso confirmar a estrutura do `SettingsPage.tsx` para inserir o card no local correto. Vou ler:
+- `src/pages/SettingsPage.tsx` — onde adicionar a seção
+- `src/contexts/AuthContext.tsx` — como obter `tenant_id` e checar role admin
+- Um componente settings existente (ex: `BrandingSettings.tsx`) para seguir o padrão visual e estrutural
 
-**1. Após `// 4. Fetch contact info`** (logo depois de derivar `contactContext`), inserir:
+### Estrutura de arquivos
 
-```ts
-// 4b. Fetch tenant business hours + timezone
-const { data: tenant } = await supabase
-  .from('tenants')
-  .select('business_hours, timezone')
-  .eq('id', tenant_id)
-  .maybeSingle();
+**Criado:**
+- `src/components/settings/BusinessHoursSettings.tsx` — novo card completo
 
-const timezone = tenant?.timezone || 'America/Sao_Paulo';
-const businessHours = (tenant?.business_hours as Record<string, { start?: string; end?: string }>) || {};
+**Alterado:**
+- `src/pages/SettingsPage.tsx` — importar e renderizar `<BusinessHoursSettings />` dentro da aba/seção apropriada (provavelmente junto com Branding/Tags), com guard de role admin já existente na página.
 
-let businessHoursStatus = 'fora';
-let businessHoursHuman = 'horário não configurado';
-let currentDatetimeLocal = '';
-let dayKey = '';
-let currentTime = '';
+**Não alterado:**
+- `src/types/crm.ts` — `Tenant.timezone` e `business_hours` já existem
+- `src/integrations/supabase/types.ts` — já regenerado pela migration anterior
 
-try {
-  const now = new Date();
-  const dayFmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' });
-  const timeFmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false });
-  const dateFmtPt = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: timezone, weekday: 'long', day: '2-digit', month: 'long',
-    year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+### Componente `BusinessHoursSettings.tsx`
 
-  dayKey = dayFmt.format(now).toLowerCase().slice(0, 3);
-  currentTime = timeFmt.format(now);
-  currentDatetimeLocal = dateFmtPt.format(now);
-
-  const todayEntry = businessHours[dayKey];
-  if (todayEntry?.start && todayEntry?.end && currentTime >= todayEntry.start && currentTime < todayEntry.end) {
-    businessHoursStatus = 'dentro';
-  }
-
-  const dayLabels: Record<string, string> = {
-    mon: 'Seg', tue: 'Ter', wed: 'Qua', thu: 'Qui', fri: 'Sex', sat: 'Sáb', sun: 'Dom',
-  };
-  const order = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-  const hasAny = order.some(k => businessHours[k]?.start && businessHours[k]?.end);
-  if (hasAny) {
-    businessHoursHuman = order.map(k => {
-      const e = businessHours[k];
-      return e?.start && e?.end ? `${dayLabels[k]} ${e.start}-${e.end}` : `${dayLabels[k]} fechado`;
-    }).join(', ');
-  }
-} catch (e) {
-  console.error('[ai-generate] business_hours computation failed:', e);
-}
-
-console.log(`[ai-generate] business_hours: status=${businessHoursStatus} day=${dayKey} time=${currentTime} tz=${timezone}`);
+**Estrutura:**
+```
+<Card>
+  <CardHeader>
+    <CardTitle>Horário de funcionamento</CardTitle>
+    <CardDescription>Configure fuso e dias/horários de atendimento</CardDescription>
+  </CardHeader>
+  <CardContent>
+    [Select Timezone]              ← combo Brasil
+    [Status atual]                 ← "Agora: 14:32 — dentro do expediente" (refresh 30s)
+    [Grid 7 linhas: Seg..Dom]
+      Checkbox "Aberto" | Input time "Abre" | Input time "Fecha"
+    [Botão Salvar]
+  </CardContent>
+</Card>
 ```
 
-**2. No bloco `// 9. Build system prompt`**, encadear 3 `.replace()` adicionais junto com os existentes:
+**Estado:**
+- `timezone: string`
+- `days: Record<DayKey, { open: boolean; start: string; end: string }>` para os 7 dias
+- `loading`, `saving`
 
-```ts
-.replace(/\{\{business_hours_status\}\}/gi, businessHoursStatus)
-.replace(/\{\{business_hours_human\}\}/gi, businessHoursHuman)
-.replace(/\{\{current_datetime_local\}\}/gi, currentDatetimeLocal)
+**Timezones (combo):**
+```
+America/Sao_Paulo  → "São Paulo (UTC-3)"
+America/Manaus     → "Manaus (UTC-4)"
+America/Cuiaba     → "Cuiabá (UTC-4)"
+America/Belem      → "Belém (UTC-3)"
+America/Fortaleza  → "Fortaleza (UTC-3)"
+America/Recife     → "Recife (UTC-3)"
+America/Noronha    → "Noronha (UTC-2)"
+America/Rio_Branco → "Rio Branco (UTC-5)"
 ```
 
-### Garantias
+**Lógica chave:**
+- **Carga**: `supabase.from('tenants').select('business_hours, timezone').eq('id', tenantId).maybeSingle()`. Hidrata o estado: se chave do dia existe → `open=true` + start/end; senão `open=false` + defaults `09:00`/`18:00`.
+- **Salvar**: monta `businessHours` apenas com dias `open=true`. Valida `end > start` (comparação string HH:MM funciona). `update tenants set business_hours, timezone where id = tenantId`. Toast via sonner.
+- **Status atual**: `useEffect` com `setInterval(30_000)`, usa `Intl.DateTimeFormat` com `timeZone` selecionado para extrair `dayKey` (mon/tue/...) e `HH:MM`. Compara com a entrada do dia → "dentro" ou "fora".
+- **Validação**: bloqueia salvar se algum dia aberto tiver `end <= start`.
 
-- **Não-invasivo**: as 3 variáveis só afetam o prompt via `.replace()`. Templates antigos sem esses placeholders ficam idênticos.
-- **Defaults seguros**: tenant ausente → `"fora"`, `"horário não configurado"`, datetime calculado com timezone padrão `America/Sao_Paulo`.
-- **Sem libs externas**: `Intl.DateTimeFormat` é nativo no Deno.
-- **Try/catch**: qualquer falha de timezone inválido cai nos defaults sem quebrar a edge function.
-- **Escopo preservado**: nada muda nas variáveis existentes (`contact_name`, `channel`, etc.) nem no fluxo de RAG, name extraction ou logging.
+**Permissão:**
+- Ler role via `useAuth()` (ou hook equivalente já existente). Se `role !== 'admin'`, retorna `null` (card oculto).
+
+**Acessibilidade:**
+- `<Label htmlFor>` em cada input
+- `aria-label` no Select de timezone
+- Inputs `type="time"` nativos (suportam HH:MM e teclado)
+
+### Localização final na UI
+
+Card aparece em **`/settings`** (página existente `SettingsPage`), na mesma aba/seção das outras configurações de tenant (junto a Branding, Tags, Quick Replies, Knowledge Base). Será o último card da seção "Empresa/Tenant", visível apenas para admins.
+
+### Restrições respeitadas
+
+- ✅ shadcn-ui (`Card`, `Select`, `Checkbox`, `Input`, `Button`, `Label`) + Tailwind
+- ✅ Sem libs novas — `Intl.DateTimeFormat` nativo
+- ✅ Tipagem preservada (campos já existem em `Tenant`)
+- ✅ Toast via sonner (padrão do projeto)
+- ✅ Guard de admin via role existente
 
