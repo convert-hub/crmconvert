@@ -622,6 +622,7 @@ export type Database = {
           tenant_id: string
           unread_count: number | null
           updated_at: string
+          whatsapp_instance_id: string | null
         }
         Insert: {
           assigned_to?: string | null
@@ -639,6 +640,7 @@ export type Database = {
           tenant_id: string
           unread_count?: number | null
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Update: {
           assigned_to?: string | null
@@ -656,6 +658,7 @@ export type Database = {
           tenant_id?: string
           unread_count?: number | null
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Relationships: [
           {
@@ -684,6 +687,13 @@ export type Database = {
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_whatsapp_instance_id_fkey"
+            columns: ["whatsapp_instance_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_instances"
             referencedColumns: ["id"]
           },
         ]
@@ -1731,10 +1741,17 @@ export type Database = {
           api_token_encrypted: string | null
           api_url: string
           created_at: string
+          display_name: string | null
           id: string
           instance_name: string
           is_active: boolean | null
+          meta_access_token_encrypted: string | null
+          meta_app_secret_encrypted: string | null
+          meta_phone_number_id: string | null
+          meta_verify_token: string | null
+          meta_waba_id: string | null
           phone_number: string | null
+          provider: string
           tenant_id: string
           updated_at: string
           webhook_secret: string | null
@@ -1743,10 +1760,17 @@ export type Database = {
           api_token_encrypted?: string | null
           api_url: string
           created_at?: string
+          display_name?: string | null
           id?: string
           instance_name: string
           is_active?: boolean | null
+          meta_access_token_encrypted?: string | null
+          meta_app_secret_encrypted?: string | null
+          meta_phone_number_id?: string | null
+          meta_verify_token?: string | null
+          meta_waba_id?: string | null
           phone_number?: string | null
+          provider?: string
           tenant_id: string
           updated_at?: string
           webhook_secret?: string | null
@@ -1755,10 +1779,17 @@ export type Database = {
           api_token_encrypted?: string | null
           api_url?: string
           created_at?: string
+          display_name?: string | null
           id?: string
           instance_name?: string
           is_active?: boolean | null
+          meta_access_token_encrypted?: string | null
+          meta_app_secret_encrypted?: string | null
+          meta_phone_number_id?: string | null
+          meta_verify_token?: string | null
+          meta_waba_id?: string | null
           phone_number?: string | null
+          provider?: string
           tenant_id?: string
           updated_at?: string
           webhook_secret?: string | null
@@ -1769,6 +1800,63 @@ export type Database = {
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_message_templates: {
+        Row: {
+          category: string | null
+          components: Json
+          created_at: string
+          id: string
+          language: string
+          meta_template_id: string | null
+          name: string
+          status: string | null
+          tenant_id: string
+          updated_at: string
+          whatsapp_instance_id: string
+        }
+        Insert: {
+          category?: string | null
+          components?: Json
+          created_at?: string
+          id?: string
+          language?: string
+          meta_template_id?: string | null
+          name: string
+          status?: string | null
+          tenant_id: string
+          updated_at?: string
+          whatsapp_instance_id: string
+        }
+        Update: {
+          category?: string | null
+          components?: Json
+          created_at?: string
+          id?: string
+          language?: string
+          meta_template_id?: string | null
+          name?: string
+          status?: string | null
+          tenant_id?: string
+          updated_at?: string
+          whatsapp_instance_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_message_templates_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_message_templates_whatsapp_instance_id_fkey"
+            columns: ["whatsapp_instance_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_instances"
             referencedColumns: ["id"]
           },
         ]
