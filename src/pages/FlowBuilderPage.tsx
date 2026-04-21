@@ -370,7 +370,7 @@ export default function FlowBuilderPage() {
                 <MessageNodeEditor
                   tenantId={tenant?.id ?? null}
                   data={editingNode.data as any}
-                  onChange={d => setEditingNode({ ...editingNode, data: d })}
+                  onChange={d => setEditingNode({ ...editingNode, data: d as any })}
                 />
               )}
 
