@@ -126,10 +126,44 @@ export interface Conversation {
   last_customer_message_at: string | null;
   last_agent_message_at: string | null;
   metadata?: Record<string, unknown> | null;
+  whatsapp_instance_id?: string | null;
   created_at: string;
   // joined
   contact?: Contact;
   assigned_member?: TenantMembership & { profile?: Profile };
+}
+
+export type WhatsAppProvider = 'uazapi' | 'meta_cloud';
+
+export interface WhatsAppInstance {
+  id: string;
+  tenant_id: string;
+  provider: WhatsAppProvider;
+  display_name?: string | null;
+  instance_name: string;
+  api_url: string;
+  phone_number: string | null;
+  is_active: boolean;
+  // Meta Cloud (optional, only for provider='meta_cloud')
+  meta_phone_number_id?: string | null;
+  meta_waba_id?: string | null;
+  meta_verify_token?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WhatsAppMessageTemplate {
+  id: string;
+  tenant_id: string;
+  whatsapp_instance_id: string;
+  name: string;
+  language: string;
+  category: string | null;
+  status: string | null;
+  components: Array<Record<string, unknown>>;
+  meta_template_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Message {

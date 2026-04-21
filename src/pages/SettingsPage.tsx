@@ -17,6 +17,7 @@ import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
 import TagsSettings from '@/components/settings/TagsSettings';
 import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
 import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
+import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnectionsCard';
 
 interface CustomFieldDef {
   key: string;
@@ -820,6 +821,7 @@ export default function SettingsPage() {
 
         <TabsContent value="integrations" className="space-y-4 pt-4">
           <WhatsAppIntegrationCard tenantId={tenant?.id} />
+          <MetaCloudConnectionsCard />
           <Card className="glass-card rounded-2xl">
             <CardHeader><CardTitle>Webhooks</CardTitle><CardDescription>URLs de webhook para formulários e Facebook Lead Ads</CardDescription></CardHeader>
             <CardContent className="space-y-2 text-sm">
