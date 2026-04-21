@@ -141,7 +141,7 @@ export default function FlowBuilderPage() {
     };
 
     let data: Record<string, any> = { label: NODE_PALETTE.find(n => n.type === type)?.label ?? type };
-    if (type === 'message') data = { ...data, content: '' };
+    if (type === 'message') data = { ...data, mode: 'text', content: '', templateId: '', templateName: '', templateVariables: {} };
     if (type === 'condition') data = { ...data, field: 'message', operator: 'contains', value: '' };
     if (type === 'delay') data = { ...data, delayMinutes: 5 };
     if (type === 'action') data = { ...data, actionType: 'add_tag', config: {} };
@@ -366,15 +366,11 @@ export default function FlowBuilderPage() {
               </div>
 
               {editingNode.type === 'message' && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Conteúdo da mensagem</Label>
-                  <Textarea
-                    value={(editingNode.data as any).content ?? ''}
-                    onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, content: e.target.value } })}
-                    rows={4} className="text-sm"
-                    placeholder="Olá {{nome}}, como posso ajudar?"
-                  />
-                </div>
+                <MessageNodeEditor
+                  tenantId={tenant?.id ?? null}
+                  data={editingNode.data as any}
+                  onChange={d => setEditingNode({ ...editingNode, data: d })}
+                />
               )}
 
               {editingNode.type === 'condition' && (
