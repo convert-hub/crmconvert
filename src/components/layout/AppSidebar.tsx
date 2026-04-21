@@ -3,7 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch, Building2, ChevronDown
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch, Building2, ChevronDown, Send
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getTenantBranding } from '@/hooks/useTenantBranding';
@@ -22,6 +22,7 @@ const navItems = [
 
 const adminItems = [
   { icon: MessageSquare, label: 'Conversas', path: '/inbox', roles: ['admin', 'manager', 'attendant'] as const },
+  { icon: Send, label: 'Campanhas', path: '/campaigns', roles: ['admin', 'manager'] as const },
   { icon: Zap, label: 'Automações', path: '/automations', roles: ['admin', 'manager'] as const },
   { icon: GitBranch, label: 'Flow Builder', path: '/flow-builder', roles: ['admin'] as const },
   { icon: Brain, label: 'Prompt Studio', path: '/prompt-studio', roles: ['admin'] as const },
