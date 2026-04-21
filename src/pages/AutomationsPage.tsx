@@ -32,7 +32,8 @@ const ACTION_TYPES = [
   { value: 'remove_tag', label: 'Remover tag', icon: Tag },
   { value: 'create_activity', label: 'Criar atividade', icon: Clock },
   { value: 'change_contact_status', label: 'Mudar status do contato', icon: UserPlus },
-  { value: 'send_whatsapp', label: 'Enviar WhatsApp', icon: MessageSquare },
+  { value: 'send_whatsapp', label: 'Enviar WhatsApp (texto livre)', icon: MessageSquare },
+  { value: 'send_whatsapp_template', label: 'Enviar template WhatsApp (Meta)', icon: MessageSquare },
   { value: 'assign_round_robin', label: 'Atribuir (round-robin)', icon: UserPlus },
 ];
 
@@ -63,6 +64,9 @@ interface ActionConfig {
   activity_due_hours?: number;
   contact_status?: string;
   whatsapp_message?: string;
+  whatsapp_instance_id?: string;
+  template_id?: string;
+  template_variables?: Record<string, string>;
 }
 
 interface ConditionConfig {
