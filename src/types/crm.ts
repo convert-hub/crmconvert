@@ -193,3 +193,66 @@ export interface Activity {
   is_completed: boolean;
   created_at: string;
 }
+
+// ----- Campaigns (mass send via Meta templates) -----
+export type CampaignStatus = 'draft' | 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type CampaignRecipientStatus = 'pending' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'replied' | 'skipped';
+
+export interface CampaignAudienceFilter {
+  tags?: string[];
+  status?: ContactStatus[];
+  pipeline_id?: string | null;
+  stage_id?: string | null;
+  utm_source?: string | null;
+  utm_campaign?: string | null;
+  source?: string | null;
+  has_phone?: boolean;
+  consent_required?: boolean;
+  exclude_do_not_contact?: boolean;
+  inactive_days?: number | null;
+}
+
+export interface Campaign {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  status: CampaignStatus;
+  whatsapp_instance_id: string | null;
+  template_id: string | null;
+  template_variables: Record<string, string>;
+  audience_filter: CampaignAudienceFilter;
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  throttle_per_minute: number;
+  total_recipients: number;
+  sent_count: number;
+  delivered_count: number;
+  read_count: number;
+  failed_count: number;
+  replied_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignRecipient {
+  id: string;
+  tenant_id: string;
+  campaign_id: string;
+  contact_id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  provider_message_id: string | null;
+  variables_used: Record<string, string>;
+  status: CampaignRecipientStatus;
+  error: string | null;
+  scheduled_at: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
+  replied_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
