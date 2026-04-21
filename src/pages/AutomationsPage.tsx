@@ -32,7 +32,8 @@ const ACTION_TYPES = [
   { value: 'remove_tag', label: 'Remover tag', icon: Tag },
   { value: 'create_activity', label: 'Criar atividade', icon: Clock },
   { value: 'change_contact_status', label: 'Mudar status do contato', icon: UserPlus },
-  { value: 'send_whatsapp', label: 'Enviar WhatsApp', icon: MessageSquare },
+  { value: 'send_whatsapp', label: 'Enviar WhatsApp (texto livre)', icon: MessageSquare },
+  { value: 'send_whatsapp_template', label: 'Enviar template WhatsApp (Meta)', icon: MessageSquare },
   { value: 'assign_round_robin', label: 'Atribuir (round-robin)', icon: UserPlus },
 ];
 
@@ -63,6 +64,9 @@ interface ActionConfig {
   activity_due_hours?: number;
   contact_status?: string;
   whatsapp_message?: string;
+  whatsapp_instance_id?: string;
+  template_id?: string;
+  template_variables?: Record<string, string>;
 }
 
 interface ConditionConfig {
@@ -94,6 +98,8 @@ export default function AutomationsPage() {
   // Reference data
   const [stages, setStages] = useState<Stage[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [metaInstances, setMetaInstances] = useState<Array<{ id: string; display_name: string | null; instance_name: string }>>([]);
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string; language: string; whatsapp_instance_id: string; components: any }>>([]);
 
   const load = () => {
     if (!tenant) return;
@@ -105,6 +111,10 @@ export default function AutomationsPage() {
     if (!tenant) return;
     supabase.from('pipelines').select('id, name').eq('tenant_id', tenant.id).then(({ data }) => setPipelines(data ?? []));
     supabase.from('stages').select('id, name, pipeline_id').eq('tenant_id', tenant.id).order('position').then(({ data }) => setStages(data ?? []));
+    supabase.from('whatsapp_instances').select('id, display_name, instance_name').eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
+      .then(({ data }) => setMetaInstances(data ?? []));
+    supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components').eq('tenant_id', tenant.id).eq('status', 'APPROVED').order('name')
+      .then(({ data }) => setTemplates((data as any) ?? []));
   };
 
   useEffect(() => { load(); loadRefs(); }, [tenant]);
@@ -258,7 +268,50 @@ export default function AutomationsPage() {
           </Select>
         );
       case 'send_whatsapp':
-        return <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar" className="h-9 text-xs flex-1" />;
+        return <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar (só funciona em janela 24h aberta)" className="h-9 text-xs flex-1" />;
+      case 'send_whatsapp_template': {
+        const instanceTemplates = templates.filter(t => !action.whatsapp_instance_id || t.whatsapp_instance_id === action.whatsapp_instance_id);
+        const selectedTpl = templates.find(t => t.id === action.template_id);
+        const bodyComp = selectedTpl?.components?.find?.((c: any) => c.type === 'BODY');
+        const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? '').match(/\{\{(\d+)\}\}/g) || []))
+          .map((m: string) => m.replace(/[{}]/g, '')).sort((a, b) => Number(a) - Number(b)) : [];
+        if (metaInstances.length === 0) {
+          return <span className="text-xs text-muted-foreground">Nenhuma instância Meta Cloud ativa. Configure em Configurações → Conexões.</span>;
+        }
+        return (
+          <div className="flex-1 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={action.whatsapp_instance_id || ''} onValueChange={v => updateAction(index, { whatsapp_instance_id: v, template_id: undefined, template_variables: {} })}>
+                <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Instância Meta" /></SelectTrigger>
+                <SelectContent>
+                  {metaInstances.map(i => <SelectItem key={i.id} value={i.id}>{i.display_name || i.instance_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={action.template_id || ''} onValueChange={v => updateAction(index, { template_id: v, template_variables: {} })} disabled={!action.whatsapp_instance_id}>
+                <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Template" /></SelectTrigger>
+                <SelectContent>
+                  {instanceTemplates.map(t => <SelectItem key={t.id} value={t.id}>{t.name} ({t.language})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {selectedTpl && bodyComp?.text && (
+              <div className="rounded-lg bg-muted/50 p-2 text-[11px] whitespace-pre-wrap">{bodyComp.text}</div>
+            )}
+            {placeholders.map((p: string) => (
+              <div key={p} className="flex items-center gap-2">
+                <Label className="text-[11px] whitespace-nowrap">Variável {`{{${p}}}`}</Label>
+                <Input
+                  value={action.template_variables?.[p] ?? ''}
+                  onChange={e => updateAction(index, { template_variables: { ...(action.template_variables || {}), [p]: e.target.value } })}
+                  placeholder="Texto fixo ou {{contact.name}}, {{contact.email}}"
+                  className="h-8 text-xs flex-1"
+                />
+              </div>
+            ))}
+            <p className="text-[10px] text-muted-foreground">Use <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code> ou texto fixo nas variáveis.</p>
+          </div>
+        );
+      }
       case 'assign_round_robin':
         return <span className="text-xs text-muted-foreground">Atribui automaticamente ao atendente com menos leads abertos</span>;
       default:
@@ -280,7 +333,11 @@ export default function AutomationsPage() {
         const st = CONTACT_STATUSES.find(s => s.value === action.contact_status);
         return `Status → ${st?.label || '?'}`;
       }
-      case 'send_whatsapp': return `Enviar WhatsApp`;
+      case 'send_whatsapp': return `Enviar WhatsApp (texto)`;
+      case 'send_whatsapp_template': {
+        const tpl = templates.find(t => t.id === action.template_id);
+        return `Template: ${tpl?.name ?? '?'}`;
+      }
       case 'assign_round_robin': return `Atribuir round-robin`;
       default: return actionDef?.label || action.type;
     }

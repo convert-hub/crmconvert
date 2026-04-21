@@ -18,6 +18,7 @@ import AutomationsPage from "@/pages/AutomationsPage";
 import PromptStudioPage from "@/pages/PromptStudioPage";
 import ReportsPage from "@/pages/ReportsPage";
 import FlowBuilderPage from "@/pages/FlowBuilderPage";
+import CampaignsPage from "@/pages/CampaignsPage";
 
 import ActivitiesPage from "@/pages/ActivitiesPage";
 import AdminLayout from "@/pages/admin/AdminLayout";
@@ -67,6 +68,7 @@ function AppRoutes() {
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="automations" element={<AutomationsPage />} />
+        <Route path="campaigns" element={<CampaignsPage />} />
         <Route path="flow-builder" element={<FlowBuilderPage />} />
         <Route path="prompt-studio" element={<PromptStudioPage />} />
         <Route path="settings" element={<SettingsPage />} />
