@@ -50,7 +50,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   }, [open, tenantId, whatsappInstanceId]);
 
   const selected = templates.find(t => t.id === selectedId);
-  const bodyComponent = selected?.components.find((c: any) => c.type === 'BODY') as TemplateComponent | undefined;
+  const bodyComponent = selected?.components.find((c: any) => c.type === 'BODY') as unknown as TemplateComponent | undefined;
   const placeholders = extractPlaceholders(bodyComponent?.text ?? '');
 
   const handleSend = async () => {
