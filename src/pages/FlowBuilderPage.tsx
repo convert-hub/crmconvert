@@ -30,6 +30,7 @@ import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 
 // ---- Custom Node Component ----
 import MessageNode from '@/components/flow-builder/MessageNode';
+import MessageNodeEditor from '@/components/flow-builder/MessageNodeEditor';
 import ConditionNode from '@/components/flow-builder/ConditionNode';
 import DelayNode from '@/components/flow-builder/DelayNode';
 import ActionNode from '@/components/flow-builder/ActionNode';
