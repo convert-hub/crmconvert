@@ -1,72 +1,145 @@
 
 
-## Plano: WhatsApp Cloud API (Meta) como segundo provedor — sem afetar UAZAPI em produção
+## Plano: Templates Meta — disparos, automações e tráfego pago com 2 APIs
 
-### Princípio central: aditivo, nunca substitutivo
+Resposta ao seu questionamento, organizada em 5 blocos: **como templates funcionam**, **como serão disparados**, **como integram nas automações/funil**, **estratégia de pipelines**, e **recepção dual de tráfego pago**.
 
-Tudo que existe hoje — `uazapi-proxy`, `webhook-uazapi`, `whatsapp_instances` com UAZAPI, conversas, automações, worker, ChatPanel — continua **idêntico em comportamento**. A integração Meta é construída em paralelo, e só é ativada quando o admin do tenant cria explicitamente uma instância do tipo `meta_cloud`.
+---
 
-### Garantias de não-regressão
+### 1. Como funcionam os templates Meta (HSM) — o essencial
 
-| Risco | Mitigação |
+A Meta exige que toda mensagem **iniciada pela empresa fora da janela de 24h** seja um **template aprovado** previamente. Características:
+
+- **Cadastro na Meta** (não no nosso sistema): nome, idioma, categoria (`MARKETING`, `UTILITY`, `AUTHENTICATION`), corpo com variáveis `{{1}} {{2}}`, opcional header/footer/botões.
+- **Aprovação manual** pela Meta (minutos a 24h). Templates `MARKETING` exigem opt-in e podem ser bloqueados se denunciados.
+- **Variáveis posicionais**: `{{1}}, {{2}}` — o sistema preenche no envio com valores reais (nome do contato, link, etc.).
+- **Custo por categoria/país** (cobrado pela Meta direto na conta do cliente).
+
+No nosso sistema, eles ficam em `whatsapp_message_templates`, sincronizados via `wa-meta-templates-sync` (puxa o catálogo do WABA). O admin **não cria** templates no CRM — apenas sincroniza e usa.
+
+---
+
+### 2. Como serão disparados — três modos
+
+**A. Manual 1-a-1 (já implementado)**
+`SendTemplateDialog` no ChatPanel. Aparece automaticamente quando a conversa é `meta_cloud` e está fora da janela 24h. Atendente escolhe template, preenche variáveis, envia.
+
+**B. Automação 1-a-1 (gatilho do CRM)**
+Nova ação no `AutomationsPage`: **"Enviar template WhatsApp"**. Diferente do `send_whatsapp` atual (texto livre — só funciona em janela aberta), essa ação:
+- Permite escolher template aprovado da instância
+- Mapeia variáveis para campos do contato/oportunidade (`{{1}} = contact.name`, `{{2}} = opportunity.title`, etc.)
+- Funciona em qualquer momento (janela aberta ou fechada)
+- Roteia automaticamente: se a conversa é UAZAPI → envia texto livre; se é Meta → envia template
+
+**C. Disparo em massa (campanha) — o "envio para a base"**
+Nova tela **Campanhas** (`/campaigns`) com:
+- Seleção de público: filtro por tags, status, pipeline, última interação, origem UTM, etc.
+- Seleção de instância Meta de origem (qual número dispara)
+- Seleção de template + mapeamento de variáveis (estáticas ou dinâmicas por contato)
+- Throttling configurável (ex: 60 msgs/min) para respeitar rate limits da Meta
+- Agendamento (data/hora de início)
+- Preview com 3 contatos de amostra mostrando como ficará a mensagem renderizada
+- Após envio: relatório de delivered / read / failed / replied
+
+Implementação: nova tabela `campaigns` + `campaign_recipients`, processada por job no worker (já existe `job_queue` + `acquire_next_job`). Cada envio gera uma `messages` outbound + atualiza `campaign_recipients.status` via webhook `delivered`/`read`.
+
+---
+
+### 3. Como integrar no Flow Builder
+
+No `FlowBuilderPage` (xyflow), o nó **"Mensagem"** ganha uma opção:
+- **Modo "Texto livre"** (atual): só dispara se conversa estiver em janela aberta
+- **Modo "Template aprovado"**: escolhe template + mapeia variáveis. Funciona sempre que a conversa estiver em instância Meta. Em conversa UAZAPI, faz fallback para texto livre.
+
+O roteamento é transparente: o flow não precisa saber qual provider — o executor lê `conversation.whatsapp_instance_id.provider` e escolhe.
+
+---
+
+### 4. Pipeline próprio para Meta Ads? — Recomendação: **NÃO**
+
+**Motivo:** o pipeline representa **o estágio comercial do lead** (Novo → Qualificado → Proposta → Fechado), não o canal de origem. Misturar canal com etapa quebra relatórios e confunde atendentes.
+
+**Solução melhor — separação por dimensão correta:**
+
+| Dimensão | Onde fica |
 |---|---|
-| Mudar schema quebra queries existentes | Todas as colunas novas são **nullable** ou têm **DEFAULT** que reproduz o estado atual (`provider='uazapi'`). Nenhuma coluna existente é removida ou renomeada. |
-| Refatorar `uazapi-proxy` introduz bug | `uazapi-proxy` e `webhook-uazapi` **não são tocados**. Permanecem byte-a-byte iguais. |
-| Frontend trocado para roteador novo quebra envio UAZAPI | O roteador `wa-send` é **opt-in**. ChatPanel e demais componentes continuam chamando `uazapi-proxy` diretamente como hoje. Só a UI nova de Meta usa `wa-send`/`wa-meta-send`. |
-| Worker quebra fluxos automatizados | Worker **não é alterado** nesta entrega. Continua chamando `uazapi-proxy`. Migração do worker fica para fase posterior, opcional. |
-| Webhook novo conflita com webhook existente | `webhook-meta` é endpoint **novo e separado**. `webhook-uazapi` continua intacto. |
-| Conversas existentes ficam órfãs | Coluna `whatsapp_instance_id` em conversas é **nullable**. NULL = comportamento atual (UAZAPI da única instância ativa). Nenhum backfill obrigatório. |
-| Tipos TypeScript regenerados quebram build | Apenas campos opcionais são adicionados. Código existente que não os referencia continua compilando. |
+| **Estágio comercial** | Pipeline + Stage (já existe) |
+| **Canal de origem** | `contact.source` + UTM (já existe) + badge da instância na conversa |
+| **Tipo de campanha** | `contact.utm_campaign` + tags (já existe) |
+| **Provider de envio** | `whatsapp_instance_id` na conversa (novo) |
 
-### Escopo desta entrega (fase 1 — aditiva pura)
+**Recurso novo recomendado: filtros e visões salvas no Pipeline**
+- Filtro por instância de origem (UAZAPI / Meta / específico)
+- Filtro por UTM (`utm_source=facebook_ads`, `utm_campaign=black_friday`)
+- Visões salvas: "Pipeline Meta Ads", "Pipeline Orgânico WhatsApp" — mesma estrutura de etapas, recortes diferentes
 
-**Banco** (migration aditiva):
-- `whatsapp_instances`: adicionar colunas opcionais `provider TEXT DEFAULT 'uazapi'`, `display_name`, `meta_phone_number_id`, `meta_waba_id`, `meta_access_token_encrypted`, `meta_app_secret_encrypted`, `meta_verify_token`. Instâncias existentes recebem `provider='uazapi'` automaticamente.
-- `conversations`: adicionar `whatsapp_instance_id UUID NULL`. Conversas existentes ficam NULL — nada quebra.
-- Nova tabela `whatsapp_message_templates` (isolada, RLS no padrão do projeto).
+Se mesmo assim você quiser **pipelines fisicamente separados**, isso já é suportado (`pipelines` é multi-registro). Você cria "Pipeline Meta Ads" com etapas próprias e direciona automações para colocar leads vindos de `utm_source=facebook_ads` lá.
 
-**Edge Functions novas** (não tocam nas existentes):
-- `wa-meta-send` — envio via Graph API v21.0 (texto, mídia, template, reaction, reply).
-- `webhook-meta` — recebe da Meta, valida HMAC `X-Hub-Signature-256`, identifica instância pelo `phone_number_id`, cria contact/conversation/message com `whatsapp_instance_id` preenchido.
-- `wa-meta-templates-sync` — sincroniza templates aprovados da Meta.
+---
 
-**Frontend** (componentes novos + UI estendida):
-- `WhatsAppConnectionsSettings.tsx`: passa a listar todas as instâncias com badge de provider. Botão "Adicionar conexão" abre escolha UAZAPI (fluxo atual, sem mudança) ou Meta Cloud (form novo). Mostra URL do webhook e verify_token gerado para colar no painel da Meta.
-- `SendTemplateDialog.tsx` (novo): aparece **apenas** em conversas de instâncias `meta_cloud` quando fora da janela 24h.
-- `ChatPanel.tsx`: lê `conversation.whatsapp_instance_id`. Se NULL ou `provider='uazapi'` → chama `uazapi-proxy` exatamente como hoje. Se `provider='meta_cloud'` → chama `wa-meta-send`. Branch isolado, fluxo UAZAPI inalterado.
-- `src/types/crm.ts`: adicionar campos opcionais (`whatsapp_instance_id?`, novo tipo `WhatsAppInstance` com `provider`).
+### 5. Recepção de tráfego pago com as duas APIs
 
-### O que NÃO muda nesta entrega
+**Cenário:** anúncios "Click-to-WhatsApp" do Meta Ads podem cair em qualquer um dos números. Precisa funcionar dos dois lados.
 
-- `uazapi-proxy/index.ts` — não tocado
-- `webhook-uazapi/index.ts` — não tocado
-- `worker/index.js` e `worker/automation-handler.js` — não tocados
-- Fluxo de criar/conectar instância UAZAPI (QR code etc.) — não tocado
-- Envio de mensagens em conversas UAZAPI existentes — não tocado
-- Automações, flow builder, scheduled messages — não tocados
-- Chamadas existentes do frontend a `uazapi-proxy` — preservadas; apenas adicionamos um branch para Meta
+**Como funciona hoje (UAZAPI):** o webhook recebe a mensagem, cria contato e conversa. UTMs vêm no payload do anúncio (referral) e são extraídos para `contact.utm_*`.
 
-### Estratégia de segurança operacional
+**Adição para Meta Cloud (já implementado parcialmente):** o `webhook-meta` recebe payloads que incluem `referral` quando origem é anúncio:
+```json
+{ "referral": { "source_url": "...", "headline": "...", 
+  "ctwa_clid": "...", "source_type": "ad" } }
+```
+Vamos extrair: `utm_source=facebook_ads`, `utm_campaign=<headline>`, `ad_id=<ctwa_clid>` e gravar em `contacts` igual ao fluxo UAZAPI.
 
-1. **Migration reversível**: todas as colunas adicionadas podem ser removidas sem perda de dados (nada migra valores existentes).
-2. **Feature isolada por tenant**: enquanto nenhum tenant cadastrar credenciais Meta, todo o código novo fica dormente. Zero efeito colateral em produção.
-3. **Roteamento por dado, não por flag global**: a decisão de qual provider usar é tomada por linha (`whatsapp_instances.provider`), não por configuração global. Impossível afetar outros tenants.
-4. **Validação HMAC obrigatória** no `webhook-meta` (sem `meta_app_secret` válido, requisição é rejeitada). Protege contra webhooks forjados.
-5. **Credenciais por instância**, criptografadas no mesmo padrão de `api_token_encrypted` (já usado para UAZAPI).
+**Roteamento de anúncios para o número certo:**
+- Cada anúncio no Gerenciador da Meta aponta para 1 número específico (configuração no Ads Manager, não no CRM)
+- O CRM só recebe — identifica o número de destino pelo `phone_number_id` no webhook → casa com `whatsapp_instances.meta_phone_number_id` → cria conversa amarrada àquela instância
+- Resultado: a mesma campanha pode rodar em paralelo apontando para UAZAPI e para Meta. Cada lead cai na conversa da instância correta, e o atendente vê o badge.
 
-### Ordem de implementação (cada passo testável independentemente)
+**Estratégia operacional sugerida (tira melhor proveito das duas APIs):**
 
-1. Migration de schema (aditiva, sem dados)
-2. `wa-meta-send` + `webhook-meta` (Edge Functions novas, não afetam nada)
-3. UI de cadastro Meta em `WhatsAppConnectionsSettings`
-4. Branch condicional no `ChatPanel` (só para `meta_cloud`)
-5. Templates: tabela + sync + `SendTemplateDialog` (só para `meta_cloud` fora da janela 24h)
+```text
+┌──────────────────────────────────────────────────────────┐
+│ ENTRADA (recepção paralela)                              │
+│  • Anúncios → vários números                             │
+│    - Número UAZAPI → webhook-uazapi → conversa UAZAPI    │
+│    - Número Meta   → webhook-meta   → conversa Meta      │
+│  • Atendente responde no inbox unificado                 │
+└──────────────────────────────────────────────────────────┘
 
-### Fora de escopo (fases futuras, opcionais)
+┌──────────────────────────────────────────────────────────┐
+│ SAÍDA (1-a-1 reativo)                                    │
+│  • Janela 24h aberta → texto livre via provider da conv  │
+│  • Janela fechada e Meta → template (SendTemplateDialog) │
+│  • Janela fechada e UAZAPI → bloqueia (ou alerta)        │
+└──────────────────────────────────────────────────────────┘
 
-- Roteador unificado `wa-send` substituindo chamadas diretas a `uazapi-proxy`
-- Migração do worker para usar roteador
-- Backfill de `whatsapp_instance_id` em conversas antigas
+┌──────────────────────────────────────────────────────────┐
+│ DISPARO PARA A BASE (campanha)                           │
+│  • SEMPRE via instância Meta (templates aprovados)       │
+│  • UAZAPI fica para reativo / janela aberta              │
+│  • Filtros: tags, UTM, último contato, pipeline, etc.    │
+└──────────────────────────────────────────────────────────┘
+```
 
-Essas etapas só serão consideradas depois que a integração Meta estiver validada em produção, e mesmo assim apenas se trouxerem benefício claro — manter UAZAPI funcionando exatamente como hoje é prioridade absoluta.
+Esse é o ponto-chave: **UAZAPI cobre o operacional 24/7 sem custo por mensagem**, e **Meta Cloud cobre o reaquecimento de base com templates aprovados**, evitando bloqueios. Cada conversa fica amarrada à instância de origem, sem mistura.
+
+---
+
+### Escopo proposto para a próxima entrega (ordem)
+
+1. **Ação "Enviar template" no AutomationsPage** + roteamento por provider
+2. **Modo "template" no nó Mensagem do Flow Builder**
+3. **Tabela `campaigns` + `campaign_recipients`** + processamento via worker
+4. **Tela `/campaigns`**: criar campanha, escolher público, template, agendar, ver relatório
+5. **Extração de `referral` no `webhook-meta`** para popular UTMs de anúncios Meta
+6. **Filtros por instância e UTM no Pipeline** + visões salvas (opcional)
+
+Cada passo é independente e testável. O passo 5 deve vir cedo se você já está rodando anúncios.
+
+### Garantias mantidas
+
+- UAZAPI continua intacto em todos os fluxos
+- Conversas existentes não são afetadas (funcionam por instância padrão quando `whatsapp_instance_id` é NULL)
+- Campanhas em massa só rodam em instâncias Meta (templates aprovados); UAZAPI nunca é usado para disparo frio
+- Relatórios separam claramente o que foi enviado por cada provider
 
