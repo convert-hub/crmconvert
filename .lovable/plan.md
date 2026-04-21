@@ -1,85 +1,72 @@
 
 
-## Plano: Card "Horário de funcionamento" em Settings
+## Plano: WhatsApp Cloud API (Meta) como segundo provedor — sem afetar UAZAPI em produção
 
-### Exploração necessária antes de aplicar
+### Princípio central: aditivo, nunca substitutivo
 
-Preciso confirmar a estrutura do `SettingsPage.tsx` para inserir o card no local correto. Vou ler:
-- `src/pages/SettingsPage.tsx` — onde adicionar a seção
-- `src/contexts/AuthContext.tsx` — como obter `tenant_id` e checar role admin
-- Um componente settings existente (ex: `BrandingSettings.tsx`) para seguir o padrão visual e estrutural
+Tudo que existe hoje — `uazapi-proxy`, `webhook-uazapi`, `whatsapp_instances` com UAZAPI, conversas, automações, worker, ChatPanel — continua **idêntico em comportamento**. A integração Meta é construída em paralelo, e só é ativada quando o admin do tenant cria explicitamente uma instância do tipo `meta_cloud`.
 
-### Estrutura de arquivos
+### Garantias de não-regressão
 
-**Criado:**
-- `src/components/settings/BusinessHoursSettings.tsx` — novo card completo
+| Risco | Mitigação |
+|---|---|
+| Mudar schema quebra queries existentes | Todas as colunas novas são **nullable** ou têm **DEFAULT** que reproduz o estado atual (`provider='uazapi'`). Nenhuma coluna existente é removida ou renomeada. |
+| Refatorar `uazapi-proxy` introduz bug | `uazapi-proxy` e `webhook-uazapi` **não são tocados**. Permanecem byte-a-byte iguais. |
+| Frontend trocado para roteador novo quebra envio UAZAPI | O roteador `wa-send` é **opt-in**. ChatPanel e demais componentes continuam chamando `uazapi-proxy` diretamente como hoje. Só a UI nova de Meta usa `wa-send`/`wa-meta-send`. |
+| Worker quebra fluxos automatizados | Worker **não é alterado** nesta entrega. Continua chamando `uazapi-proxy`. Migração do worker fica para fase posterior, opcional. |
+| Webhook novo conflita com webhook existente | `webhook-meta` é endpoint **novo e separado**. `webhook-uazapi` continua intacto. |
+| Conversas existentes ficam órfãs | Coluna `whatsapp_instance_id` em conversas é **nullable**. NULL = comportamento atual (UAZAPI da única instância ativa). Nenhum backfill obrigatório. |
+| Tipos TypeScript regenerados quebram build | Apenas campos opcionais são adicionados. Código existente que não os referencia continua compilando. |
 
-**Alterado:**
-- `src/pages/SettingsPage.tsx` — importar e renderizar `<BusinessHoursSettings />` dentro da aba/seção apropriada (provavelmente junto com Branding/Tags), com guard de role admin já existente na página.
+### Escopo desta entrega (fase 1 — aditiva pura)
 
-**Não alterado:**
-- `src/types/crm.ts` — `Tenant.timezone` e `business_hours` já existem
-- `src/integrations/supabase/types.ts` — já regenerado pela migration anterior
+**Banco** (migration aditiva):
+- `whatsapp_instances`: adicionar colunas opcionais `provider TEXT DEFAULT 'uazapi'`, `display_name`, `meta_phone_number_id`, `meta_waba_id`, `meta_access_token_encrypted`, `meta_app_secret_encrypted`, `meta_verify_token`. Instâncias existentes recebem `provider='uazapi'` automaticamente.
+- `conversations`: adicionar `whatsapp_instance_id UUID NULL`. Conversas existentes ficam NULL — nada quebra.
+- Nova tabela `whatsapp_message_templates` (isolada, RLS no padrão do projeto).
 
-### Componente `BusinessHoursSettings.tsx`
+**Edge Functions novas** (não tocam nas existentes):
+- `wa-meta-send` — envio via Graph API v21.0 (texto, mídia, template, reaction, reply).
+- `webhook-meta` — recebe da Meta, valida HMAC `X-Hub-Signature-256`, identifica instância pelo `phone_number_id`, cria contact/conversation/message com `whatsapp_instance_id` preenchido.
+- `wa-meta-templates-sync` — sincroniza templates aprovados da Meta.
 
-**Estrutura:**
-```
-<Card>
-  <CardHeader>
-    <CardTitle>Horário de funcionamento</CardTitle>
-    <CardDescription>Configure fuso e dias/horários de atendimento</CardDescription>
-  </CardHeader>
-  <CardContent>
-    [Select Timezone]              ← combo Brasil
-    [Status atual]                 ← "Agora: 14:32 — dentro do expediente" (refresh 30s)
-    [Grid 7 linhas: Seg..Dom]
-      Checkbox "Aberto" | Input time "Abre" | Input time "Fecha"
-    [Botão Salvar]
-  </CardContent>
-</Card>
-```
+**Frontend** (componentes novos + UI estendida):
+- `WhatsAppConnectionsSettings.tsx`: passa a listar todas as instâncias com badge de provider. Botão "Adicionar conexão" abre escolha UAZAPI (fluxo atual, sem mudança) ou Meta Cloud (form novo). Mostra URL do webhook e verify_token gerado para colar no painel da Meta.
+- `SendTemplateDialog.tsx` (novo): aparece **apenas** em conversas de instâncias `meta_cloud` quando fora da janela 24h.
+- `ChatPanel.tsx`: lê `conversation.whatsapp_instance_id`. Se NULL ou `provider='uazapi'` → chama `uazapi-proxy` exatamente como hoje. Se `provider='meta_cloud'` → chama `wa-meta-send`. Branch isolado, fluxo UAZAPI inalterado.
+- `src/types/crm.ts`: adicionar campos opcionais (`whatsapp_instance_id?`, novo tipo `WhatsAppInstance` com `provider`).
 
-**Estado:**
-- `timezone: string`
-- `days: Record<DayKey, { open: boolean; start: string; end: string }>` para os 7 dias
-- `loading`, `saving`
+### O que NÃO muda nesta entrega
 
-**Timezones (combo):**
-```
-America/Sao_Paulo  → "São Paulo (UTC-3)"
-America/Manaus     → "Manaus (UTC-4)"
-America/Cuiaba     → "Cuiabá (UTC-4)"
-America/Belem      → "Belém (UTC-3)"
-America/Fortaleza  → "Fortaleza (UTC-3)"
-America/Recife     → "Recife (UTC-3)"
-America/Noronha    → "Noronha (UTC-2)"
-America/Rio_Branco → "Rio Branco (UTC-5)"
-```
+- `uazapi-proxy/index.ts` — não tocado
+- `webhook-uazapi/index.ts` — não tocado
+- `worker/index.js` e `worker/automation-handler.js` — não tocados
+- Fluxo de criar/conectar instância UAZAPI (QR code etc.) — não tocado
+- Envio de mensagens em conversas UAZAPI existentes — não tocado
+- Automações, flow builder, scheduled messages — não tocados
+- Chamadas existentes do frontend a `uazapi-proxy` — preservadas; apenas adicionamos um branch para Meta
 
-**Lógica chave:**
-- **Carga**: `supabase.from('tenants').select('business_hours, timezone').eq('id', tenantId).maybeSingle()`. Hidrata o estado: se chave do dia existe → `open=true` + start/end; senão `open=false` + defaults `09:00`/`18:00`.
-- **Salvar**: monta `businessHours` apenas com dias `open=true`. Valida `end > start` (comparação string HH:MM funciona). `update tenants set business_hours, timezone where id = tenantId`. Toast via sonner.
-- **Status atual**: `useEffect` com `setInterval(30_000)`, usa `Intl.DateTimeFormat` com `timeZone` selecionado para extrair `dayKey` (mon/tue/...) e `HH:MM`. Compara com a entrada do dia → "dentro" ou "fora".
-- **Validação**: bloqueia salvar se algum dia aberto tiver `end <= start`.
+### Estratégia de segurança operacional
 
-**Permissão:**
-- Ler role via `useAuth()` (ou hook equivalente já existente). Se `role !== 'admin'`, retorna `null` (card oculto).
+1. **Migration reversível**: todas as colunas adicionadas podem ser removidas sem perda de dados (nada migra valores existentes).
+2. **Feature isolada por tenant**: enquanto nenhum tenant cadastrar credenciais Meta, todo o código novo fica dormente. Zero efeito colateral em produção.
+3. **Roteamento por dado, não por flag global**: a decisão de qual provider usar é tomada por linha (`whatsapp_instances.provider`), não por configuração global. Impossível afetar outros tenants.
+4. **Validação HMAC obrigatória** no `webhook-meta` (sem `meta_app_secret` válido, requisição é rejeitada). Protege contra webhooks forjados.
+5. **Credenciais por instância**, criptografadas no mesmo padrão de `api_token_encrypted` (já usado para UAZAPI).
 
-**Acessibilidade:**
-- `<Label htmlFor>` em cada input
-- `aria-label` no Select de timezone
-- Inputs `type="time"` nativos (suportam HH:MM e teclado)
+### Ordem de implementação (cada passo testável independentemente)
 
-### Localização final na UI
+1. Migration de schema (aditiva, sem dados)
+2. `wa-meta-send` + `webhook-meta` (Edge Functions novas, não afetam nada)
+3. UI de cadastro Meta em `WhatsAppConnectionsSettings`
+4. Branch condicional no `ChatPanel` (só para `meta_cloud`)
+5. Templates: tabela + sync + `SendTemplateDialog` (só para `meta_cloud` fora da janela 24h)
 
-Card aparece em **`/settings`** (página existente `SettingsPage`), na mesma aba/seção das outras configurações de tenant (junto a Branding, Tags, Quick Replies, Knowledge Base). Será o último card da seção "Empresa/Tenant", visível apenas para admins.
+### Fora de escopo (fases futuras, opcionais)
 
-### Restrições respeitadas
+- Roteador unificado `wa-send` substituindo chamadas diretas a `uazapi-proxy`
+- Migração do worker para usar roteador
+- Backfill de `whatsapp_instance_id` em conversas antigas
 
-- ✅ shadcn-ui (`Card`, `Select`, `Checkbox`, `Input`, `Button`, `Label`) + Tailwind
-- ✅ Sem libs novas — `Intl.DateTimeFormat` nativo
-- ✅ Tipagem preservada (campos já existem em `Tenant`)
-- ✅ Toast via sonner (padrão do projeto)
-- ✅ Guard de admin via role existente
+Essas etapas só serão consideradas depois que a integração Meta estiver validada em produção, e mesmo assim apenas se trouxerem benefício claro — manter UAZAPI funcionando exatamente como hoje é prioridade absoluta.
 
