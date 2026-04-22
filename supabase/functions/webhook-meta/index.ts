@@ -319,6 +319,7 @@ async function handleStatusUpdate(supabase: any, instance: any, st: any) {
   const providerMessageId = st.id as string;
   const status = st.status as string; // sent | delivered | read | failed
   if (!providerMessageId) return;
+  const nowIso = new Date().toISOString();
 
   const { data: msg } = await supabase
     .from("messages")
@@ -328,16 +329,36 @@ async function handleStatusUpdate(supabase: any, instance: any, st: any) {
     .limit(1)
     .maybeSingle();
 
-  if (!msg) return;
+  if (msg) {
+    const meta = (msg.provider_metadata as any) ?? {};
+    const statuses = Array.isArray(meta.statuses) ? meta.statuses : [];
+    statuses.push({ status, at: nowIso, raw: st });
 
-  const meta = (msg.provider_metadata as any) ?? {};
-  const statuses = Array.isArray(meta.statuses) ? meta.statuses : [];
-  statuses.push({ status, at: new Date().toISOString(), raw: st });
+    await supabase
+      .from("messages")
+      .update({ provider_metadata: { ...meta, statuses, last_status: status } })
+      .eq("id", msg.id);
+  }
 
-  await supabase
-    .from("messages")
-    .update({ provider_metadata: { ...meta, statuses, last_status: status } })
-    .eq("id", msg.id);
+  // Update campaign_recipients delivery tracking (matches by provider_message_id)
+  const update: Record<string, any> = {};
+  if (status === "delivered") {
+    update.status = "delivered";
+    update.delivered_at = nowIso;
+  } else if (status === "read") {
+    update.status = "read";
+    update.read_at = nowIso;
+  } else if (status === "failed") {
+    update.status = "failed";
+    update.error = st?.errors?.[0]?.title ?? st?.errors?.[0]?.message ?? "failed";
+  }
+  if (Object.keys(update).length > 0) {
+    await supabase
+      .from("campaign_recipients")
+      .update(update)
+      .eq("tenant_id", instance.tenant_id)
+      .eq("provider_message_id", providerMessageId);
+  }
 }
 
 // ── HMAC SHA-256 verification ────────────────────────────────
