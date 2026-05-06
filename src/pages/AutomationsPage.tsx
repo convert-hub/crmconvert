@@ -111,7 +111,7 @@ export default function AutomationsPage() {
     if (!tenant) return;
     supabase.from('pipelines').select('id, name').eq('tenant_id', tenant.id).then(({ data }) => setPipelines(data ?? []));
     supabase.from('stages').select('id, name, pipeline_id').eq('tenant_id', tenant.id).order('position').then(({ data }) => setStages(data ?? []));
-    supabase.from('whatsapp_instances').select('id, display_name, instance_name').eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
+    (supabase.from as any)('whatsapp_instances_public').select('id, display_name, instance_name').eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
       .then(({ data }) => setMetaInstances(data ?? []));
     supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components').eq('tenant_id', tenant.id).eq('status', 'APPROVED').order('name')
       .then(({ data }) => setTemplates((data as any) ?? []));

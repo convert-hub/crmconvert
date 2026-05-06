@@ -33,7 +33,7 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
 
   useEffect(() => {
     if (!tenantId) return;
-    supabase.from('whatsapp_instances')
+    (supabase.from as any)('whatsapp_instances_public')
       .select('id, display_name, instance_name')
       .eq('tenant_id', tenantId).eq('provider', 'meta_cloud').eq('is_active', true)
       .then(({ data }) => setInstances(data ?? []));

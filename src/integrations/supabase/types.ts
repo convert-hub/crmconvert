@@ -508,6 +508,13 @@ export type Database = {
             referencedRelation: "whatsapp_instances"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "campaigns_whatsapp_instance_id_fkey"
+            columns: ["whatsapp_instance_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_instances_public"
+            referencedColumns: ["id"]
+          },
         ]
       }
       chatbot_flows: {
@@ -887,6 +894,13 @@ export type Database = {
             columns: ["whatsapp_instance_id"]
             isOneToOne: false
             referencedRelation: "whatsapp_instances"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_whatsapp_instance_id_fkey"
+            columns: ["whatsapp_instance_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_instances_public"
             referencedColumns: ["id"]
           },
         ]
@@ -2052,11 +2066,70 @@ export type Database = {
             referencedRelation: "whatsapp_instances"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "whatsapp_message_templates_whatsapp_instance_id_fkey"
+            columns: ["whatsapp_instance_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_instances_public"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
     Views: {
-      [_ in never]: never
+      whatsapp_instances_public: {
+        Row: {
+          api_url: string | null
+          created_at: string | null
+          display_name: string | null
+          id: string | null
+          instance_name: string | null
+          is_active: boolean | null
+          meta_phone_number_id: string | null
+          meta_waba_id: string | null
+          phone_number: string | null
+          provider: string | null
+          tenant_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          api_url?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          id?: string | null
+          instance_name?: string | null
+          is_active?: boolean | null
+          meta_phone_number_id?: string | null
+          meta_waba_id?: string | null
+          phone_number?: string | null
+          provider?: string | null
+          tenant_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          api_url?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          id?: string | null
+          instance_name?: string | null
+          is_active?: boolean | null
+          meta_phone_number_id?: string | null
+          meta_waba_id?: string | null
+          phone_number?: string | null
+          provider?: string | null
+          tenant_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_instances_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       acquire_next_job: {

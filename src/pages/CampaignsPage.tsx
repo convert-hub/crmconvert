@@ -57,7 +57,7 @@ export default function CampaignsPage() {
   useEffect(() => {
     if (!tenant) return;
     load();
-    supabase.from('whatsapp_instances').select('id, display_name, instance_name')
+    (supabase.from as any)('whatsapp_instances_public').select('id, display_name, instance_name')
       .eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
       .then(({ data }) => setInstances(data ?? []));
     supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components')
