@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
@@ -18,6 +18,7 @@ import TagsSettings from '@/components/settings/TagsSettings';
 import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
 import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
 import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnectionsCard';
+import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
 
 interface CustomFieldDef {
   key: string;
@@ -463,6 +464,7 @@ export default function SettingsPage() {
           <TabsTrigger value="quick_replies" className="rounded-lg"><Zap className="h-3.5 w-3.5 mr-1" />Respostas Rápidas</TabsTrigger>
           <TabsTrigger value="knowledge" className="rounded-lg"><Brain className="h-3.5 w-3.5 mr-1" />Base de Conhecimento</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
+          <TabsTrigger value="meta_templates" className="rounded-lg"><FileText className="h-3.5 w-3.5 mr-1" />Templates Meta</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding" className="space-y-4 pt-4">
@@ -829,6 +831,10 @@ export default function SettingsPage() {
               <p><strong>Facebook Lead Ads:</strong> <code className="bg-muted px-2 py-0.5 rounded-lg text-xs">{`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/webhook-meta-leads`}</code></p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="meta_templates" className="space-y-4 pt-4">
+          <MetaTemplatesCard />
         </TabsContent>
       </Tabs>
     </div>
