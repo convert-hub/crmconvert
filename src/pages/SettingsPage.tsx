@@ -464,6 +464,7 @@ export default function SettingsPage() {
           <TabsTrigger value="quick_replies" className="rounded-lg"><Zap className="h-3.5 w-3.5 mr-1" />Respostas Rápidas</TabsTrigger>
           <TabsTrigger value="knowledge" className="rounded-lg"><Brain className="h-3.5 w-3.5 mr-1" />Base de Conhecimento</TabsTrigger>
           <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
+          <TabsTrigger value="meta_templates" className="rounded-lg"><FileText className="h-3.5 w-3.5 mr-1" />Templates Meta</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding" className="space-y-4 pt-4">
