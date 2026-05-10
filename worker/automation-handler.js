@@ -134,11 +134,33 @@ async function executeAction(supabase, tenantId, action, context) {
             phone: contact.phone,
             message: action.whatsapp_message,
             conversation_id: context.conversation_id || null,
+            whatsapp_instance_id: action.whatsapp_instance_id || null,
           }),
           _tenant_id: tenantId,
         });
         console.log(`[Automations] Enqueued WhatsApp message to ${contact.phone}`);
       }
+      break;
+    }
+
+    case 'send_whatsapp_template': {
+      if (!action.template_id || !action.whatsapp_instance_id || !context.contact_id) break;
+      const { data: contact } = await supabase.from('contacts').select('phone').eq('id', context.contact_id).single();
+      if (!contact?.phone) break;
+      await supabase.rpc('enqueue_job', {
+        _type: 'send_whatsapp_template',
+        _payload: JSON.stringify({
+          tenant_id: tenantId,
+          phone: contact.phone,
+          contact_id: context.contact_id,
+          conversation_id: context.conversation_id || null,
+          whatsapp_instance_id: action.whatsapp_instance_id,
+          template_id: action.template_id,
+          template_variables: action.template_variables || {},
+        }),
+        _tenant_id: tenantId,
+      });
+      console.log(`[Automations] Enqueued WhatsApp template to ${contact.phone}`);
       break;
     }
 
