@@ -581,6 +581,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             className="rounded-xl h-10 w-10 shrink-0" title="Agendar mensagem">
             <Clock className="h-4 w-4" />
           </Button>
+          {providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (
+            <Button size="icon" variant="ghost" onClick={() => setShowTemplate(true)} disabled={sending || isInternal}
+              className="rounded-xl h-10 w-10 shrink-0 text-primary hover:bg-primary/10" title="Enviar template Meta aprovado">
+              <FileCheck2 className="h-4 w-4" />
+            </Button>
+          )}
           <Textarea value={newMsg} onChange={e => {
             const val = e.target.value;
             setNewMsg(val);
