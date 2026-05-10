@@ -263,7 +263,12 @@ export default function MetaCloudConnectionsCard() {
       </CardContent>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent
+          className="max-w-lg"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Adicionar conexão Meta Cloud API</DialogTitle>
             <DialogDescription>
