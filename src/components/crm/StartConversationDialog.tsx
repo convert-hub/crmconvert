@@ -17,6 +17,13 @@ interface Props {
   preselectedContact?: Contact | null;
 }
 
+interface Instance {
+  id: string;
+  display_name: string | null;
+  instance_name: string | null;
+  provider: string | null;
+}
+
 export default function StartConversationDialog({ open, onOpenChange, preselectedContact }: Props) {
   const { tenant, membership } = useAuth();
   const navigate = useNavigate();
@@ -24,6 +31,8 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
   const [search, setSearch] = useState('');
   const [selectedContactId, setSelectedContactId] = useState<string>('');
   const [channel, setChannel] = useState<string>('whatsapp');
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [instanceId, setInstanceId] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -37,8 +46,27 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
     if (preselectedContact) setSelectedContactId(preselectedContact.id);
   }, [preselectedContact]);
 
+  // Carrega instâncias WhatsApp ativas do tenant
+  useEffect(() => {
+    if (!open || !tenant) return;
+    supabase.from('whatsapp_instances')
+      .select('id, display_name, instance_name, provider')
+      .eq('tenant_id', tenant.id)
+      .eq('is_active', true)
+      .then(({ data }) => {
+        const list = (data as Instance[] | null) ?? [];
+        setInstances(list);
+        if (list.length === 1) setInstanceId(list[0].id);
+        else if (list.length === 0) setInstanceId('');
+      });
+  }, [open, tenant]);
+
   const handleStart = async () => {
     if (!tenant || !membership || !selectedContactId) return;
+    if (channel === 'whatsapp' && instances.length > 1 && !instanceId) {
+      toast.error('Selecione o número de envio.');
+      return;
+    }
     setLoading(true);
     try {
       const { data: existing } = await supabase.from('conversations').select('id')
@@ -52,10 +80,14 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
         return;
       }
 
-      const { data: conv, error } = await supabase.from('conversations').insert({
+      const insertPayload: any = {
         tenant_id: tenant.id, contact_id: selectedContactId, channel: channel as any,
         status: 'open', assigned_to: membership.id,
-      }).select('id').single();
+      };
+      if (channel === 'whatsapp' && instanceId) insertPayload.whatsapp_instance_id = instanceId;
+
+      const { data: conv, error } = await supabase.from('conversations').insert(insertPayload)
+        .select('id').single();
 
       if (error) { toast.error(error.message); return; }
       toast.success('Conversa iniciada!');
@@ -69,6 +101,8 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
   };
 
   const contactList = preselectedContact ? [preselectedContact] : contacts;
+  const showInstanceSelector = channel === 'whatsapp' && instances.length > 1;
+  const providerLabel = (p: string | null) => p === 'meta_cloud' ? 'Oficial' : 'UAZAPI';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -116,6 +150,24 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
               </SelectContent>
             </Select>
           </div>
+          {showInstanceSelector && (
+            <div className="space-y-2">
+              <Label>Número de envio</Label>
+              <Select value={instanceId} onValueChange={setInstanceId}>
+                <SelectTrigger className="rounded-xl"><SelectValue placeholder="Escolha o número" /></SelectTrigger>
+                <SelectContent>
+                  {instances.map(i => (
+                    <SelectItem key={i.id} value={i.id}>
+                      {(i.display_name || i.instance_name || i.id.slice(0, 8))} · {providerLabel(i.provider)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {channel === 'whatsapp' && instances.length === 0 && (
+            <p className="text-xs text-warning">Nenhuma instância de WhatsApp ativa. A conversa será criada, mas sem provider vinculado.</p>
+          )}
           <Button onClick={handleStart} disabled={!selectedContactId || loading} className="w-full rounded-xl">
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <MessageSquare className="h-4 w-4 mr-2" />}
             Iniciar Conversa

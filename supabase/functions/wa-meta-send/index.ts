@@ -19,7 +19,7 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 interface SendBody {
-  action?: "send" | "test_connection" | "upload_media";
+  action?: "send" | "test_connection" | "upload_media" | "send_media_base64" | "download_media";
   conversation_id?: string;
   whatsapp_instance_id?: string;
   to?: string; // E.164 sem +
@@ -27,10 +27,13 @@ interface SendBody {
   text?: string;
   media_url?: string;
   media_id?: string;
+  media_base64?: string; // base64 puro (sem data:...)
+  media_mime?: string;
   filename?: string;
   caption?: string;
   reply_to_message_id?: string;
   emoji?: string;
+  skip_persist?: boolean; // quando o caller já criou a row de messages (ChatPanel optimistic)
   template?: {
     name: string;
     language: string; // 'pt_BR'
@@ -49,39 +52,44 @@ serve(async (req) => {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
 
+    const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
-    const supabaseUser = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      SERVICE_ROLE
     );
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: claimsData, error: claimsErr } =
-      await supabaseUser.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    const isInternalCall = token === SERVICE_ROLE;
+
+    let membership: { id: string | null; tenant_id: string } | null = null;
+
+    if (!isInternalCall) {
+      const supabaseUser = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+      const { data: claimsData, error: claimsErr } =
+        await supabaseUser.auth.getClaims(token);
+      if (claimsErr || !claimsData?.claims) {
+        return jsonResponse({ error: "Unauthorized" }, 401);
+      }
+      const userId = claimsData.claims.sub;
+
+      const { data: m } = await supabaseAdmin
+        .from("tenant_memberships")
+        .select("id, tenant_id, role")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+
+      if (!m) return jsonResponse({ error: "No tenant membership" }, 403);
+      membership = { id: m.id, tenant_id: m.tenant_id };
     }
-    const userId = claimsData.claims.sub;
 
     const body = (await req.json()) as SendBody;
     const action = body.action ?? "send";
-
-    // Resolve membership / tenant
-    const { data: membership } = await supabaseAdmin
-      .from("tenant_memberships")
-      .select("id, tenant_id, role")
-      .eq("user_id", userId)
-      .eq("is_active", true)
-      .limit(1)
-      .single();
-
-    if (!membership) {
-      return jsonResponse({ error: "No tenant membership" }, 403);
-    }
 
     // Resolve instance
     let instanceId = body.whatsapp_instance_id;
@@ -110,7 +118,11 @@ serve(async (req) => {
     if (!instance) {
       return jsonResponse({ error: "Instance not found" }, 404);
     }
-    if (instance.tenant_id !== membership.tenant_id) {
+
+    // Em chamadas internas, derivamos o tenant da própria instance
+    if (isInternalCall) {
+      membership = { id: null, tenant_id: instance.tenant_id };
+    } else if (instance.tenant_id !== membership!.tenant_id) {
       return jsonResponse({ error: "Forbidden" }, 403);
     }
     if (instance.provider !== "meta_cloud") {
@@ -157,7 +169,62 @@ serve(async (req) => {
       return jsonResponse({ ok: true, media_id: upData.id });
     }
 
-    // ── Send message ──────────────────────────────────────────
+    // ── Download media (media_id → base64) ────────────────────
+    if (action === "download_media") {
+      if (!body.media_id) return jsonResponse({ ok: false, error: "media_id required" }, 200);
+      try {
+        const metaResp = await fetch(`${graphBase}/${body.media_id}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const metaData = await metaResp.json();
+        if (!metaResp.ok || !metaData?.url) {
+          return jsonResponse({ ok: false, error: metaData?.error?.message ?? "Media metadata failed" }, 200);
+        }
+        const binResp = await fetch(metaData.url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!binResp.ok) return jsonResponse({ ok: false, error: "Media download failed" }, 200);
+        const buf = new Uint8Array(await binResp.arrayBuffer());
+        // base64 encode em chunks para evitar stack overflow
+        let binStr = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < buf.length; i += chunk) {
+          binStr += String.fromCharCode.apply(null, Array.from(buf.subarray(i, i + chunk)) as any);
+        }
+        const base64 = btoa(binStr);
+        return jsonResponse({ ok: true, base64, mimetype: metaData.mime_type ?? binResp.headers.get("Content-Type") });
+      } catch (e: any) {
+        return jsonResponse({ ok: false, error: e?.message ?? "download error" }, 200);
+      }
+    }
+
+    // ── Send media via base64 (upload + send) ─────────────────
+    if (action === "send_media_base64") {
+      if (!body.media_base64 || !body.type || !body.media_mime) {
+        return jsonResponse({ error: "media_base64, type, media_mime required" }, 400);
+      }
+      // decode base64 → blob
+      const binStr = atob(body.media_base64);
+      const buf = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) buf[i] = binStr.charCodeAt(i);
+      const blob = new Blob([buf], { type: body.media_mime });
+
+      const fd = new FormData();
+      fd.append("messaging_product", "whatsapp");
+      fd.append("file", blob, body.filename || "file");
+      fd.append("type", body.media_mime);
+
+      const upR = await fetch(`${graphBase}/${phoneNumberId}/media`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: fd,
+      });
+      const upData = await upR.json();
+      if (!upR.ok) return jsonResponse({ ok: false, error: upData?.error?.message ?? "Upload failed" }, 200);
+
+      // injeta media_id no body para reuso do fluxo de envio abaixo
+      body.media_id = upData.id;
+      // segue para o fluxo "Send message" abaixo
+    }
+
     const to = body.to || (await resolveContactPhone(supabaseAdmin, conversation?.contact_id));
     if (!to) return jsonResponse({ error: "to (phone) required" }, 400);
 
@@ -226,16 +293,17 @@ serve(async (req) => {
     const providerMessageId = sendData?.messages?.[0]?.id ?? null;
 
     // Persist outbound message + reset inactivity (best-effort)
-    if (conversation?.id) {
+    // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
+    if (conversation?.id && !body.skip_persist) {
       await supabaseAdmin.from("messages").insert({
-        tenant_id: membership.tenant_id,
+        tenant_id: membership!.tenant_id,
         conversation_id: conversation.id,
         direction: "outbound",
         content: t === "text" ? (body.text ?? "") : (body.caption ?? null),
         media_type: t === "text" || t === "reaction" || t === "template" ? null : t,
         media_url: body.media_url ?? null,
         provider_message_id: providerMessageId,
-        sender_membership_id: membership.id,
+        sender_membership_id: membership!.id,
         provider_metadata: { provider: "meta_cloud", raw: sendData },
       });
 

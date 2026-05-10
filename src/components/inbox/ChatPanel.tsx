@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
+import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
 
 interface QuickReply {
   id: string;
@@ -51,7 +52,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
-function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
+function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Message; tenantId: string; conversationId: string; providerInfo: ProviderInfo | null }) {
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -62,6 +63,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   const isVideo = mediaType.includes('video');
   const isDocument = mediaType.includes('document') || mediaType.includes('pdf');
   const providerMsgId = (msg as any).provider_message_id;
+  const metaMediaId = (msg as any).provider_metadata?.meta_media_id ?? null;
   const isOutbound = msg.direction === 'outbound';
 
   const unavailableMessage = isAudio
@@ -93,30 +95,26 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
 
     setLoading(true);
     try {
-      const res = await supabase.functions.invoke('uazapi-proxy', {
-        body: { action: 'download_media', tenant_id: tenantId, message_id: providerMsgId },
+      const res = await downloadMedia({
+        conversationId,
+        tenantId,
+        providerMessageId: providerMsgId,
+        metaMediaId,
+        providerInfo: providerInfo ?? undefined,
       });
 
-      const data = res.data;
-      const error = res.error;
-
-      if (error || data?.ok === false || data?.error) {
+      if (!res.ok) {
         mediaCache.set(providerMsgId, 'expired');
         setMediaData('expired');
         return;
       }
 
       let result: string | null = null;
-      if (data?.base64) {
-        const mime = data.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
-        result = `data:${mime};base64,${data.base64}`;
-      } else if (data?.url) {
-        result = data.url;
-      } else if (data?.data?.fileURL) {
-        result = data.data.fileURL;
-      } else if (data?.data?.base64) {
-        const mime = data.data.mimetype || (isAudio ? 'audio/ogg' : 'image/jpeg');
-        result = `data:${mime};base64,${data.data.base64}`;
+      if (res.base64) {
+        const mime = res.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
+        result = `data:${mime};base64,${res.base64}`;
+      } else if (res.url) {
+        result = res.url;
       }
 
       if (result) {
@@ -257,6 +255,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [qrFilter, setQrFilter] = useState('');
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
@@ -300,6 +299,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
   useEffect(() => {
     if (!conversationId) return;
+    getConversationProvider(conversationId).then(setProviderInfo).catch(() => setProviderInfo(null));
     supabase.from('messages').select('*').eq('conversation_id', conversationId).order('created_at')
       .then(({ data }) => {
         setMessages((data as unknown as Message[]) ?? []);
@@ -362,13 +362,17 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         }).eq('id', conversationId);
 
         if (isWhatsApp && contactPhone) {
-          const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-            body: { action: 'send_message', tenant_id: tenant.id, phone: contactPhone, message: msgContent, conversation_id: conversationId },
+          const res = await sendText({
+            conversationId,
+            tenantId: tenant.id,
+            phone: contactPhone,
+            text: msgContent,
+            providerInfo: providerInfo ?? undefined,
           });
-          if (error || data?.error) {
-            toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
-          } else if (savedMsg?.id && data?.provider_message_id) {
-            await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+          if (!res.ok) {
+            toast.warning('Falha ao enviar via WhatsApp: ' + (res.error ?? 'erro desconhecido'));
+          } else if (savedMsg?.id && res.provider_message_id) {
+            await supabase.from('messages').update({ provider_message_id: res.provider_message_id }).eq('id', savedMsg.id);
           }
         }
       }
@@ -440,22 +444,22 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
-      const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-        body: {
-          action: 'send_media',
-          tenant_id: tenant.id,
-          phone: contactPhone,
-          media_base64: `data:${file.type};base64,${base64}`,
-          media_type: mediaType,
-          caption: '',
-          conversation_id: conversationId,
-        },
+      const res = await sendMedia({
+        conversationId,
+        tenantId: tenant.id,
+        phone: contactPhone,
+        fileBase64: base64,
+        mimeType: file.type,
+        mediaType: mediaType as any,
+        filename: file.name,
+        caption: '',
+        providerInfo: providerInfo ?? undefined,
       });
 
-      if (error || data?.error) {
-        toast.warning('Falha ao enviar mídia: ' + (data?.error || error?.message));
-      } else if (savedMsg?.id && data?.provider_message_id) {
-        await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+      if (!res.ok) {
+        toast.warning('Falha ao enviar mídia: ' + (res.error ?? 'erro desconhecido'));
+      } else if (savedMsg?.id && res.provider_message_id) {
+        await supabase.from('messages').update({ provider_message_id: res.provider_message_id }).eq('id', savedMsg.id);
       }
 
       supabase.from('conversations').update({
@@ -478,7 +482,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           </Avatar>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-foreground text-sm truncate">{contact.name}</h3>
-            <span className="text-xs text-muted-foreground">{contact.phone} · {channel}</span>
+            <span className="text-xs text-muted-foreground">
+              {contact.phone} · {channel}
+              {providerInfo?.provider === 'meta_cloud' && <> · <span className="text-primary">WhatsApp Oficial</span></>}
+              {providerInfo?.provider === 'uazapi' && providerInfo.instance_id && <> · UAZAPI</>}
+            </span>
           </div>
           {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
         </div>
@@ -500,7 +508,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                     <Lock className="h-3 w-3" /> Nota interna
                   </div>
                 )}
-                {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} />}
+                {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} conversationId={conversationId} providerInfo={providerInfo} />}
                 {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
                 <div className={cn("text-[10px] mt-1 flex items-center gap-1",
                   msgIsInternal ? 'text-warning/70 justify-end' :
