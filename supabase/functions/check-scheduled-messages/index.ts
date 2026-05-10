@@ -11,15 +11,14 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    )
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
+    const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE)
 
     // Find pending scheduled messages that are due
     const { data: messages, error } = await supabase
       .from('scheduled_messages')
-      .select('*, conversations!inner(contact_id, channel, tenant_id)')
+      .select('*, conversations!inner(contact_id, channel, tenant_id, whatsapp_instance_id)')
       .eq('status', 'pending')
       .lte('scheduled_at', new Date().toISOString())
       .limit(50)
@@ -46,6 +45,17 @@ Deno.serve(async (req) => {
           .eq('id', conv.contact_id)
           .single()
 
+        // Resolve provider via whatsapp_instance_id (default uazapi)
+        let provider: 'meta_cloud' | 'uazapi' = 'uazapi'
+        if (conv.whatsapp_instance_id) {
+          const { data: inst } = await supabase
+            .from('whatsapp_instances')
+            .select('provider')
+            .eq('id', conv.whatsapp_instance_id)
+            .maybeSingle()
+          if ((inst as any)?.provider === 'meta_cloud') provider = 'meta_cloud'
+        }
+
         // Insert the message into messages table
         await supabase.from('messages').insert({
           tenant_id: msg.tenant_id,
@@ -56,18 +66,41 @@ Deno.serve(async (req) => {
           is_ai_generated: false,
         })
 
-        // If WhatsApp, enqueue send job
         if (conv.channel === 'whatsapp' && contact?.phone) {
-          await supabase.rpc('enqueue_job', {
-            _type: 'send_whatsapp',
-            _payload: JSON.stringify({
-              tenant_id: msg.tenant_id,
-              phone: contact.phone,
-              message: msg.content,
-              conversation_id: msg.conversation_id,
-            }),
-            _tenant_id: msg.tenant_id,
-          })
+          if (provider === 'meta_cloud') {
+            // Chama wa-meta-send direto com service role
+            const r = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${SERVICE_ROLE}`,
+              },
+              body: JSON.stringify({
+                action: 'send',
+                type: 'text',
+                text: msg.content,
+                conversation_id: msg.conversation_id,
+                whatsapp_instance_id: conv.whatsapp_instance_id,
+                skip_persist: true,
+              }),
+            })
+            const d = await r.json().catch(() => ({}))
+            if (!r.ok || d?.ok === false || d?.error) {
+              console.warn('Meta send failed for scheduled msg', msg.id, d)
+            }
+          } else {
+            // UAZAPI: enfileira para o worker
+            await supabase.rpc('enqueue_job', {
+              _type: 'send_whatsapp',
+              _payload: JSON.stringify({
+                tenant_id: msg.tenant_id,
+                phone: contact.phone,
+                message: msg.content,
+                conversation_id: msg.conversation_id,
+              }),
+              _tenant_id: msg.tenant_id,
+            })
+          }
         }
 
         // Update conversation
