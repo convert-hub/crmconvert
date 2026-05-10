@@ -299,6 +299,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
   useEffect(() => {
     if (!conversationId) return;
+    getConversationProvider(conversationId).then(setProviderInfo).catch(() => setProviderInfo(null));
     supabase.from('messages').select('*').eq('conversation_id', conversationId).order('created_at')
       .then(({ data }) => {
         setMessages((data as unknown as Message[]) ?? []);
