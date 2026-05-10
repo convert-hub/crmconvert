@@ -52,7 +52,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
-function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
+function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Message; tenantId: string; conversationId: string; providerInfo: ProviderInfo | null }) {
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -63,6 +63,7 @@ function MediaBubble({ msg, tenantId }: { msg: Message; tenantId: string }) {
   const isVideo = mediaType.includes('video');
   const isDocument = mediaType.includes('document') || mediaType.includes('pdf');
   const providerMsgId = (msg as any).provider_message_id;
+  const metaMediaId = (msg as any).provider_metadata?.meta_media_id ?? null;
   const isOutbound = msg.direction === 'outbound';
 
   const unavailableMessage = isAudio
