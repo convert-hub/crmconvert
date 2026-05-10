@@ -18,6 +18,7 @@ import TagsSettings from '@/components/settings/TagsSettings';
 import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
 import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
 import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnectionsCard';
+import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
 
 interface CustomFieldDef {
   key: string;
