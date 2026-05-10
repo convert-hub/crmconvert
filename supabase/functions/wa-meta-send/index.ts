@@ -284,7 +284,8 @@ serve(async (req) => {
     const providerMessageId = sendData?.messages?.[0]?.id ?? null;
 
     // Persist outbound message + reset inactivity (best-effort)
-    if (conversation?.id) {
+    // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
+    if (conversation?.id && !body.skip_persist) {
       await supabaseAdmin.from("messages").insert({
         tenant_id: membership.tenant_id,
         conversation_id: conversation.id,
