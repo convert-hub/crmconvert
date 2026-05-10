@@ -404,22 +404,65 @@ const handlers = {
   },
 
   async send_whatsapp(payload) {
-    const { tenant_id, phone, message, conversation_id } = payload;
+    const { tenant_id, phone, message, conversation_id, whatsapp_instance_id } = payload;
 
-    const { data: instance } = await supabase.from('whatsapp_instances')
-      .select('*').eq('tenant_id', tenant_id).eq('is_active', true).limit(1).single();
+    // Resolve instance: prefer explicit, fallback to conversation's instance, fallback to active uazapi
+    let instance = null;
+    if (whatsapp_instance_id) {
+      const { data } = await supabase.from('whatsapp_instances')
+        .select('*').eq('id', whatsapp_instance_id).maybeSingle();
+      instance = data;
+    }
+    if (!instance && conversation_id) {
+      const { data: conv } = await supabase.from('conversations')
+        .select('whatsapp_instance_id').eq('id', conversation_id).maybeSingle();
+      if (conv?.whatsapp_instance_id) {
+        const { data } = await supabase.from('whatsapp_instances')
+          .select('*').eq('id', conv.whatsapp_instance_id).maybeSingle();
+        instance = data;
+      }
+    }
+    if (!instance) {
+      const { data } = await supabase.from('whatsapp_instances')
+        .select('*').eq('tenant_id', tenant_id).eq('is_active', true).limit(1).maybeSingle();
+      instance = data;
+    }
 
     if (!instance) {
       throw new Error('No active WhatsApp instance for tenant');
     }
 
-    const instToken = instance.api_token_encrypted || '';
     const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
-
     if (!cleanPhone) {
       throw new Error('No phone number provided');
     }
 
+    // Meta Cloud → use wa-meta-send edge function
+    if (instance.provider === 'meta_cloud') {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'send',
+          type: 'text',
+          text: message,
+          phone: cleanPhone,
+          conversation_id: conversation_id || null,
+          whatsapp_instance_id: instance.id,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.ok === false) {
+        throw new Error(`Meta send failed: ${data?.error || response.status}`);
+      }
+      return data;
+    }
+
+    // UAZAPI (default)
+    const instToken = instance.api_token_encrypted || '';
     const response = await fetch(`${instance.api_url}/send/text`, {
       method: 'POST',
       headers: {
@@ -441,6 +484,75 @@ const handlers = {
     }
 
     return await response.json();
+  },
+
+  async send_whatsapp_template(payload) {
+    const { tenant_id, whatsapp_instance_id, template_id, template_variables, phone, conversation_id, contact_id } = payload;
+    if (!whatsapp_instance_id || !template_id) {
+      throw new Error('send_whatsapp_template requires whatsapp_instance_id and template_id');
+    }
+
+    const { data: instance } = await supabase.from('whatsapp_instances')
+      .select('*').eq('id', whatsapp_instance_id).maybeSingle();
+    if (!instance || instance.provider !== 'meta_cloud') {
+      throw new Error('Template send requires a Meta Cloud instance');
+    }
+
+    const { data: template } = await supabase.from('whatsapp_message_templates')
+      .select('*').eq('id', template_id).maybeSingle();
+    if (!template) throw new Error('Template not found');
+
+    // Resolve contact for variable interpolation
+    let contact = null;
+    if (contact_id) {
+      const { data } = await supabase.from('contacts').select('*').eq('id', contact_id).maybeSingle();
+      contact = data;
+    }
+    const interp = (s) => (typeof s === 'string' ? s
+      .replace(/\{\{contact\.name\}\}/g, contact?.name || '')
+      .replace(/\{\{contact\.email\}\}/g, contact?.email || '')
+      .replace(/\{\{contact\.phone\}\}/g, contact?.phone || '')
+      : s);
+
+    // Build BODY parameters from template_variables
+    const bodyComp = (template.components || []).find((c) => (c.type || '').toUpperCase() === 'BODY');
+    const placeholders = bodyComp?.text ? Array.from(new Set((bodyComp.text.match(/\{\{(\d+)\}\}/g) || [])
+      .map((m) => m.replace(/[{}]/g, '')))).sort((a, b) => Number(a) - Number(b)) : [];
+    const components = [];
+    if (placeholders.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: placeholders.map((p) => ({ type: 'text', text: interp(template_variables?.[p] ?? '') })),
+      });
+    }
+
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+    if (!cleanPhone) throw new Error('No phone number');
+
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'send',
+        type: 'template',
+        phone: cleanPhone,
+        conversation_id: conversation_id || null,
+        whatsapp_instance_id: instance.id,
+        template: {
+          name: template.name,
+          language: template.language,
+          components,
+        },
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) {
+      throw new Error(`Template send failed: ${data?.error || response.status}`);
+    }
+    return data;
   },
   async run_automations(payload) {
     const { tenant_id, trigger_type, context } = payload;
