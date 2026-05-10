@@ -619,6 +619,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           membershipId={membership.id}
         />
       )}
+      {tenant && providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (
+        <SendTemplateDialog
+          open={showTemplate}
+          onOpenChange={setShowTemplate}
+          tenantId={tenant.id}
+          whatsappInstanceId={providerInfo.instance_id}
+          conversationId={conversationId}
+        />
+      )}
     </div>
   );
 }
