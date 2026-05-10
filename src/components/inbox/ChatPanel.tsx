@@ -255,6 +255,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [qrFilter, setQrFilter] = useState('');
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
