@@ -482,7 +482,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           </Avatar>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-foreground text-sm truncate">{contact.name}</h3>
-            <span className="text-xs text-muted-foreground">{contact.phone} · {channel}</span>
+            <span className="text-xs text-muted-foreground">
+              {contact.phone} · {channel}
+              {providerInfo?.provider === 'meta_cloud' && <> · <span className="text-primary">WhatsApp Oficial</span></>}
+              {providerInfo?.provider === 'uazapi' && providerInfo.instance_id && <> · UAZAPI</>}
+            </span>
           </div>
           {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
         </div>
