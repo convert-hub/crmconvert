@@ -832,6 +832,10 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="meta_templates" className="space-y-4 pt-4">
+          <MetaTemplatesCard />
+        </TabsContent>
       </Tabs>
     </div>
   );
