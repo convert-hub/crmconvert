@@ -296,14 +296,14 @@ serve(async (req) => {
     // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
     if (conversation?.id && !body.skip_persist) {
       await supabaseAdmin.from("messages").insert({
-        tenant_id: membership.tenant_id,
+        tenant_id: membership!.tenant_id,
         conversation_id: conversation.id,
         direction: "outbound",
         content: t === "text" ? (body.text ?? "") : (body.caption ?? null),
         media_type: t === "text" || t === "reaction" || t === "template" ? null : t,
         media_url: body.media_url ?? null,
         provider_message_id: providerMessageId,
-        sender_membership_id: membership.id,
+        sender_membership_id: membership!.id,
         provider_metadata: { provider: "meta_cloud", raw: sendData },
       });
 
