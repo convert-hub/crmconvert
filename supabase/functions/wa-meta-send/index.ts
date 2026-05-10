@@ -160,7 +160,62 @@ serve(async (req) => {
       return jsonResponse({ ok: true, media_id: upData.id });
     }
 
-    // ── Send message ──────────────────────────────────────────
+    // ── Download media (media_id → base64) ────────────────────
+    if (action === "download_media") {
+      if (!body.media_id) return jsonResponse({ ok: false, error: "media_id required" }, 200);
+      try {
+        const metaResp = await fetch(`${graphBase}/${body.media_id}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const metaData = await metaResp.json();
+        if (!metaResp.ok || !metaData?.url) {
+          return jsonResponse({ ok: false, error: metaData?.error?.message ?? "Media metadata failed" }, 200);
+        }
+        const binResp = await fetch(metaData.url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!binResp.ok) return jsonResponse({ ok: false, error: "Media download failed" }, 200);
+        const buf = new Uint8Array(await binResp.arrayBuffer());
+        // base64 encode em chunks para evitar stack overflow
+        let binStr = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < buf.length; i += chunk) {
+          binStr += String.fromCharCode.apply(null, Array.from(buf.subarray(i, i + chunk)) as any);
+        }
+        const base64 = btoa(binStr);
+        return jsonResponse({ ok: true, base64, mimetype: metaData.mime_type ?? binResp.headers.get("Content-Type") });
+      } catch (e: any) {
+        return jsonResponse({ ok: false, error: e?.message ?? "download error" }, 200);
+      }
+    }
+
+    // ── Send media via base64 (upload + send) ─────────────────
+    if (action === "send_media_base64") {
+      if (!body.media_base64 || !body.type || !body.media_mime) {
+        return jsonResponse({ error: "media_base64, type, media_mime required" }, 400);
+      }
+      // decode base64 → blob
+      const binStr = atob(body.media_base64);
+      const buf = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) buf[i] = binStr.charCodeAt(i);
+      const blob = new Blob([buf], { type: body.media_mime });
+
+      const fd = new FormData();
+      fd.append("messaging_product", "whatsapp");
+      fd.append("file", blob, body.filename || "file");
+      fd.append("type", body.media_mime);
+
+      const upR = await fetch(`${graphBase}/${phoneNumberId}/media`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: fd,
+      });
+      const upData = await upR.json();
+      if (!upR.ok) return jsonResponse({ ok: false, error: upData?.error?.message ?? "Upload failed" }, 200);
+
+      // injeta media_id no body para reuso do fluxo de envio abaixo
+      body.media_id = upData.id;
+      // segue para o fluxo "Send message" abaixo
+    }
+
     const to = body.to || (await resolveContactPhone(supabaseAdmin, conversation?.contact_id));
     if (!to) return jsonResponse({ error: "to (phone) required" }, 400);
 
