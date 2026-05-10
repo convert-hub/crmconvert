@@ -69,15 +69,33 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
     }
     setLoading(true);
     try {
-      const { data: existing } = await supabase.from('conversations').select('id')
+      // Procura conversa aberta deste contato
+      const { data: openConvs } = await supabase.from('conversations')
+        .select('id, whatsapp_instance_id')
         .eq('tenant_id', tenant.id).eq('contact_id', selectedContactId)
-        .in('status', ['open', 'waiting_customer', 'waiting_agent']).limit(1).maybeSingle();
+        .in('status', ['open', 'waiting_customer', 'waiting_agent']);
 
-      if (existing) {
+      const list = (openConvs as any[]) ?? [];
+      // 1) Já existe conversa nesta MESMA instância → reaproveita
+      const sameInstance = list.find(c =>
+        channel === 'whatsapp' ? (c.whatsapp_instance_id ?? null) === (instanceId || null) : true
+      );
+      if (sameInstance) {
         toast.info('Conversa já existente, abrindo...');
         onOpenChange(false);
-        navigate(`/inbox?conv=${existing.id}`);
+        navigate(`/inbox?conv=${sameInstance.id}`);
         return;
+      }
+      // 2) Existe em outra instância → confirma abrir paralela
+      if (list.length > 0 && channel === 'whatsapp') {
+        const otherInst = list[0].whatsapp_instance_id;
+        const otherName = instances.find(i => i.id === otherInst)?.display_name
+          ?? instances.find(i => i.id === otherInst)?.instance_name
+          ?? 'outro número';
+        const ok = window.confirm(
+          `Este contato já tem uma conversa aberta em "${otherName}". Deseja abrir uma conversa paralela no número selecionado?`
+        );
+        if (!ok) { setLoading(false); return; }
       }
 
       const insertPayload: any = {

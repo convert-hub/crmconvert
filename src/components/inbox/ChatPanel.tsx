@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock, FileCheck2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels } from '@/lib/labels';
 import { format } from 'date-fns';
@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
+import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
 
 interface QuickReply {
@@ -255,6 +256,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [qrFilter, setQrFilter] = useState('');
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showTemplate, setShowTemplate] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -579,6 +581,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             className="rounded-xl h-10 w-10 shrink-0" title="Agendar mensagem">
             <Clock className="h-4 w-4" />
           </Button>
+          {providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (
+            <Button size="icon" variant="ghost" onClick={() => setShowTemplate(true)} disabled={sending || isInternal}
+              className="rounded-xl h-10 w-10 shrink-0 text-primary hover:bg-primary/10" title="Enviar template Meta aprovado">
+              <FileCheck2 className="h-4 w-4" />
+            </Button>
+          )}
           <Textarea value={newMsg} onChange={e => {
             const val = e.target.value;
             setNewMsg(val);
@@ -609,6 +617,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           conversationId={conversationId}
           tenantId={tenant.id}
           membershipId={membership.id}
+        />
+      )}
+      {tenant && providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (
+        <SendTemplateDialog
+          open={showTemplate}
+          onOpenChange={setShowTemplate}
+          tenantId={tenant.id}
+          whatsappInstanceId={providerInfo.instance_id}
+          conversationId={conversationId}
         />
       )}
     </div>

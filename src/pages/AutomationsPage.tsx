@@ -268,7 +268,18 @@ export default function AutomationsPage() {
           </Select>
         );
       case 'send_whatsapp':
-        return <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar (só funciona em janela 24h aberta)" className="h-9 text-xs flex-1" />;
+        return (
+          <div className="flex-1 space-y-2">
+            <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar (Meta exige janela 24h aberta)" className="h-9 text-xs" />
+            <Select value={action.whatsapp_instance_id || '__auto__'} onValueChange={v => updateAction(index, { whatsapp_instance_id: v === '__auto__' ? undefined : v })}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Instância (opcional)" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__">Automática (instância da conversa)</SelectItem>
+                {metaInstances.map(i => <SelectItem key={i.id} value={i.id}>Meta · {i.display_name || i.instance_name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        );
       case 'send_whatsapp_template': {
         const instanceTemplates = templates.filter(t => !action.whatsapp_instance_id || t.whatsapp_instance_id === action.whatsapp_instance_id);
         const selectedTpl = templates.find(t => t.id === action.template_id);
