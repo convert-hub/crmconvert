@@ -44,6 +44,38 @@ export default function MetaCloudConnectionsCard() {
   const [accessToken, setAccessToken] = useState('');
   const [appSecret, setAppSecret] = useState('');
 
+  const draftKey = tenant?.id ? `meta_connection_draft_${tenant.id}` : '';
+
+  // Hydrate draft from sessionStorage when dialog opens
+  useEffect(() => {
+    if (!createOpen || !draftKey) return;
+    try {
+      const raw = sessionStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        setDisplayName(d.displayName ?? '');
+        setPhoneNumberId(d.phoneNumberId ?? '');
+        setWabaId(d.wabaId ?? '');
+        setAccessToken(d.accessToken ?? '');
+        setAppSecret(d.appSecret ?? '');
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createOpen, draftKey]);
+
+  // Persist draft (debounced)
+  useEffect(() => {
+    if (!createOpen || !draftKey) return;
+    const t = setTimeout(() => {
+      try {
+        sessionStorage.setItem(draftKey, JSON.stringify({
+          displayName, phoneNumberId, wabaId, accessToken, appSecret,
+        }));
+      } catch {}
+    }, 200);
+    return () => clearTimeout(t);
+  }, [createOpen, draftKey, displayName, phoneNumberId, wabaId, accessToken, appSecret]);
+
   const webhookUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/webhook-meta`;
 
   const load = useCallback(async () => {
@@ -70,6 +102,9 @@ export default function MetaCloudConnectionsCard() {
     setWabaId('');
     setAccessToken('');
     setAppSecret('');
+    if (draftKey) {
+      try { sessionStorage.removeItem(draftKey); } catch {}
+    }
   };
 
   const handleCreate = async () => {
@@ -228,7 +263,12 @@ export default function MetaCloudConnectionsCard() {
       </CardContent>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent
+          className="max-w-lg"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Adicionar conexão Meta Cloud API</DialogTitle>
             <DialogDescription>
@@ -238,23 +278,23 @@ export default function MetaCloudConnectionsCard() {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="meta-display-name">Nome de exibição *</Label>
-              <Input id="meta-display-name" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Atendimento Principal" />
+              <Input id="meta-display-name" autoComplete="off" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Atendimento Principal" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-phone-id">Phone Number ID *</Label>
-              <Input id="meta-phone-id" value={phoneNumberId} onChange={e => setPhoneNumberId(e.target.value)} placeholder="123456789012345" />
+              <Input id="meta-phone-id" autoComplete="off" value={phoneNumberId} onChange={e => setPhoneNumberId(e.target.value)} placeholder="123456789012345" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-waba-id">WABA ID (WhatsApp Business Account) *</Label>
-              <Input id="meta-waba-id" value={wabaId} onChange={e => setWabaId(e.target.value)} placeholder="987654321098765" />
+              <Input id="meta-waba-id" autoComplete="off" value={wabaId} onChange={e => setWabaId(e.target.value)} placeholder="987654321098765" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-token">Access Token (System User permanente) *</Label>
-              <Input id="meta-token" type="password" value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="EAAG..." />
+              <Input id="meta-token" type="password" autoComplete="off" value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="EAAG..." />
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-secret">App Secret (recomendado para validação HMAC)</Label>
-              <Input id="meta-secret" type="password" value={appSecret} onChange={e => setAppSecret(e.target.value)} placeholder="opcional, mas recomendado" />
+              <Input id="meta-secret" type="password" autoComplete="off" value={appSecret} onChange={e => setAppSecret(e.target.value)} placeholder="opcional, mas recomendado" />
             </div>
             <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground flex gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
