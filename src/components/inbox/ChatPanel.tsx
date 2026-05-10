@@ -508,7 +508,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                     <Lock className="h-3 w-3" /> Nota interna
                   </div>
                 )}
-                {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} />}
+                {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} conversationId={conversationId} providerInfo={providerInfo} />}
                 {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
                 <div className={cn("text-[10px] mt-1 flex items-center gap-1",
                   msgIsInternal ? 'text-warning/70 justify-end' :
