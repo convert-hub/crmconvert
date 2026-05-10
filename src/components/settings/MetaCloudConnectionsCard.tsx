@@ -102,6 +102,9 @@ export default function MetaCloudConnectionsCard() {
     setWabaId('');
     setAccessToken('');
     setAppSecret('');
+    if (draftKey) {
+      try { sessionStorage.removeItem(draftKey); } catch {}
+    }
   };
 
   const handleCreate = async () => {
