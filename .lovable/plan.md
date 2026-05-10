@@ -1,101 +1,48 @@
-## Objetivo
+## Problema
 
-Permitir que UAZAPI e Meta Cloud API coexistam ativas no mesmo tenant, com **roteamento automático por conversa** + **seletor de instância** quando há mais de uma opção. Nada de remover UAZAPI — apenas adicionar a camada de decisão.
+Ao abrir "Adicionar conexão" em Configurações → WhatsApp Oficial (Meta Cloud API), basta o usuário clicar fora do diálogo (ou voltar de outra aba/janela onde foi copiar credenciais da Meta) para o diálogo fechar e perder o que estava digitado.
 
-## Princípio do roteamento
+Causas:
+1. O Radix `Dialog` fecha automaticamente em três eventos: clique fora (`pointerDownOutside`), interação fora (`interactOutside`) e tecla `Esc`. Ao alternar entre abas/janelas para copiar credenciais, o navegador frequentemente dispara um `pointerDown` no overlay quando o foco volta, fechando o diálogo.
+2. Os campos `Phone Number ID`, `WABA ID`, `Access Token` e `App Secret` ficam apenas em estado local do componente; ao fechar o diálogo, esses valores são perdidos.
 
-A `conversations.whatsapp_instance_id` é a fonte da verdade. A partir dela lemos `whatsapp_instances.provider` e despachamos:
+## Solução
 
-```text
-provider = 'meta_cloud'  → wa-meta-send  (envio + upload + download via Graph)
-provider = 'uazapi'      → uazapi-proxy  (comportamento atual)
-provider null/ausente    → fallback para UAZAPI (compat retroativa)
-```
+Ajuste único e localizado no componente do diálogo de cadastro Meta. Sem mudanças de regra de negócio, sem mudanças no backend.
 
-Conversas novas precisam escolher a instância na criação se houver mais de uma ativa.
+### 1. Travar o auto-fechamento do diálogo Meta
 
----
+Em `src/components/settings/MetaCloudConnectionsCard.tsx`, no `<DialogContent>` do diálogo "Adicionar conexão Meta Cloud API":
 
-## Mudanças
+- Adicionar `onPointerDownOutside={(e) => e.preventDefault()}`
+- Adicionar `onInteractOutside={(e) => e.preventDefault()}`
+- Adicionar `onEscapeKeyDown={(e) => e.preventDefault()}`
 
-### 1. Helper centralizado de roteamento (frontend)
+Resultado: o diálogo só fecha pelos botões "Cancelar" ou "Salvar" (ou pelo ícone de fechar nativo do Radix, se desejado, mas o usuário pode controlar via clique no X).
 
-Criar `src/lib/whatsappRouter.ts` com:
+### 2. Preservar o que foi digitado mesmo se fechar
 
-- `getInstanceProvider(conversationId)` — busca `conversations.whatsapp_instance_id` e retorna `{ instance_id, provider }`.
-- `sendText({ conversationId, phone, text })` — escolhe edge function correta.
-- `sendMedia({ conversationId, phone, file, mediaType, caption })` — idem (faz upload Meta quando `meta_cloud`).
-- `downloadMedia({ conversationId, providerMessageId, instanceId? })` — para Meta usa `wa-meta-send action=download_media` (a criar); para UAZAPI mantém atual.
+Persistir o rascunho do formulário em `sessionStorage` enquanto o diálogo está aberto:
 
-Esse helper concentra a lógica e padroniza retornos `{ ok, provider_message_id, error }`.
+- Ao montar o diálogo, hidratar os campos a partir de `sessionStorage` (chave `meta_connection_draft_<tenantId>`).
+- A cada `onChange` dos inputs, gravar o objeto atualizado em `sessionStorage` (debounce simples de 200 ms).
+- Ao salvar com sucesso ou ao clicar em "Cancelar", limpar a chave do `sessionStorage`.
 
-### 2. ChatPanel — usar o router
+Assim, mesmo numa eventual remontagem (refresh, troca de aba longa que descarta a aba pelo navegador, etc.), o usuário recupera os dados que digitou ao reabrir o diálogo.
 
-Substituir as 3 chamadas diretas a `uazapi-proxy` (linhas 96, 365, 443) por `whatsappRouter.*`. Sem mudança de UX.
+### 3. Pequeno ajuste UX
 
-### 3. wa-meta-send — adicionar ações faltantes
-
-- `action: 'download_media'` — recebe `media_id` (extraído de `provider_metadata.meta_media_id`), chama `GET /{media_id}` no Graph, baixa o binário, retorna base64 + mimetype. Tratamento de "expirado" devolvendo `{ ok:false }` igual ao padrão UAZAPI (sem crashar).
-- `action: 'send_media'` por upload de arquivo (base64) — já existe `upload_media` por URL; adicionar variante que aceita `media_base64` direto e depois envia.
-
-### 4. Seletor de instância na criação de conversa
-
-`StartConversationDialog`: quando o canal for `whatsapp` e o tenant tiver **2+ instâncias ativas** (somando providers), exibir `<Select>` "Número de envio" listando `whatsapp_instances` ativas (display_name + badge UAZAPI/Meta). Persistir em `conversations.whatsapp_instance_id` no insert.
-
-Se houver só 1 instância ativa, seleciona automaticamente sem mostrar o campo.
-
-### 5. SettingsPage — visão unificada
-
-Garantir que `MetaCloudConnectionsCard` e o card UAZAPI existente fiquem visíveis lado a lado com explicação "Você pode usar ambos simultaneamente; cada conversa fica vinculada ao número que recebeu/iniciou o contato."
-
-### 6. ScheduleMessageDialog + check-scheduled-messages
-
-`check-scheduled-messages` hoje sempre enfileira `send_whatsapp` (worker UAZAPI). Mudar para:
-
-1. Ler `conversation.whatsapp_instance_id` + provider.
-2. Se `meta_cloud` → invocar `wa-meta-send` direto (não passa pelo worker).
-3. Caso contrário → mantém `enqueue_job send_whatsapp`.
-
-### 7. ChatPanel — indicador visual
-
-No header da conversa, mostrar pequeno badge: "via WhatsApp Oficial" ou "via UAZAPI" (cinza, sutil) baseado no provider. Ajuda o atendente a saber por qual número está respondendo.
-
-### 8. Compat retroativa
-
-Conversas antigas sem `whatsapp_instance_id` continuam roteando via UAZAPI (comportamento atual). Nenhuma migração de dados necessária.
-
----
-
-## Detalhes técnicos
-
-- Nenhuma mudança de schema. Tudo se apoia em colunas existentes (`whatsapp_instances.provider`, `conversations.whatsapp_instance_id`).
-- `wa-meta-send` ganha 2 novas actions; manter assinatura `{ ok, error, ... }` compatível com o padrão UAZAPI para o router não precisar de branches.
-- Cache de mídia (`mediaCache` no ChatPanel) continua funcionando — chave segue sendo `provider_message_id`.
-- Edge function `check-scheduled-messages` precisa do `Authorization: Bearer <SERVICE_ROLE>` ao invocar `wa-meta-send` (que valida JWT). Alternativa mais limpa: tornar `wa-meta-send` aceitar uma chamada interna autenticada por service role detectando `req.headers.get('x-internal-call')` + comparação com env. Vou implementar passando service-role no Authorization (mais simples e já usado em outros pontos).
-
----
+- Manter o `<Input type="password">` para Access Token e App Secret (já está).
+- Adicionar `autoComplete="off"` em todos os inputs do formulário Meta para evitar interferência do gerenciador de senhas do navegador.
 
 ## Arquivos afetados
 
-**Novos**
-- `src/lib/whatsappRouter.ts`
+- `src/components/settings/MetaCloudConnectionsCard.tsx` (apenas frontend)
 
-**Editados**
-- `src/components/inbox/ChatPanel.tsx` (3 call sites + badge no header)
-- `src/components/crm/StartConversationDialog.tsx` (seletor de instância)
-- `supabase/functions/wa-meta-send/index.ts` (actions `download_media`, `send_media` base64)
-- `supabase/functions/check-scheduled-messages/index.ts` (roteamento por provider)
+Nada mais é tocado: nenhuma migration, nenhuma Edge Function, nenhum hook global, nenhuma mudança em `SettingsPage.tsx` ou `AuthContext.tsx`.
 
-**Não muda**
-- `webhook-meta`, `webhook-uazapi`, `campaign-dispatch`, `uazapi-proxy`, schema do banco.
+## Detalhes técnicos
 
----
-
-## Resultado para o usuário
-
-- Tenant pode cadastrar UAZAPI **e** Meta simultaneamente.
-- Cada conversa fica "amarrada" ao número/provider pelo qual entrou.
-- Ao iniciar conversa nova, escolhe pelo qual número quer mandar.
-- Inbox mostra qual provider está em uso na conversa.
-- Campanhas e templates continuam usando Meta (já estava ok).
-- Mensagens agendadas respeitam o provider da conversa.
+- A causa raiz não é o polling/cron — `AuthContext` tem guarda `dataLoaded` que evita recarregar dados em `TOKEN_REFRESHED`, e `SettingsPage` só recarrega em mudança de `tenant`. O componente Meta não é desmontado por re-render normal.
+- O culpado é o comportamento padrão do Radix `Dialog` que fecha em qualquer `pointerDownOutside`. Ao retornar de outra janela, o primeiro clique dentro do iframe (mesmo que para focar) é interpretado como "fora do conteúdo do diálogo".
+- `preventDefault` em `onPointerDownOutside` é o padrão recomendado pela documentação do Radix para diálogos onde a perda acidental de dados é inaceitável (formulários longos, fluxos de credenciais).

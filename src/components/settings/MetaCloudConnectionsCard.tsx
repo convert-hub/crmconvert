@@ -44,6 +44,38 @@ export default function MetaCloudConnectionsCard() {
   const [accessToken, setAccessToken] = useState('');
   const [appSecret, setAppSecret] = useState('');
 
+  const draftKey = tenant?.id ? `meta_connection_draft_${tenant.id}` : '';
+
+  // Hydrate draft from sessionStorage when dialog opens
+  useEffect(() => {
+    if (!createOpen || !draftKey) return;
+    try {
+      const raw = sessionStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        setDisplayName(d.displayName ?? '');
+        setPhoneNumberId(d.phoneNumberId ?? '');
+        setWabaId(d.wabaId ?? '');
+        setAccessToken(d.accessToken ?? '');
+        setAppSecret(d.appSecret ?? '');
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createOpen, draftKey]);
+
+  // Persist draft (debounced)
+  useEffect(() => {
+    if (!createOpen || !draftKey) return;
+    const t = setTimeout(() => {
+      try {
+        sessionStorage.setItem(draftKey, JSON.stringify({
+          displayName, phoneNumberId, wabaId, accessToken, appSecret,
+        }));
+      } catch {}
+    }, 200);
+    return () => clearTimeout(t);
+  }, [createOpen, draftKey, displayName, phoneNumberId, wabaId, accessToken, appSecret]);
+
   const webhookUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/webhook-meta`;
 
   const load = useCallback(async () => {
