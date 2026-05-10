@@ -95,30 +95,26 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
 
     setLoading(true);
     try {
-      const res = await supabase.functions.invoke('uazapi-proxy', {
-        body: { action: 'download_media', tenant_id: tenantId, message_id: providerMsgId },
+      const res = await downloadMedia({
+        conversationId,
+        tenantId,
+        providerMessageId: providerMsgId,
+        metaMediaId,
+        providerInfo: providerInfo ?? undefined,
       });
 
-      const data = res.data;
-      const error = res.error;
-
-      if (error || data?.ok === false || data?.error) {
+      if (!res.ok) {
         mediaCache.set(providerMsgId, 'expired');
         setMediaData('expired');
         return;
       }
 
       let result: string | null = null;
-      if (data?.base64) {
-        const mime = data.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
-        result = `data:${mime};base64,${data.base64}`;
-      } else if (data?.url) {
-        result = data.url;
-      } else if (data?.data?.fileURL) {
-        result = data.data.fileURL;
-      } else if (data?.data?.base64) {
-        const mime = data.data.mimetype || (isAudio ? 'audio/ogg' : 'image/jpeg');
-        result = `data:${mime};base64,${data.data.base64}`;
+      if (res.base64) {
+        const mime = res.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
+        result = `data:${mime};base64,${res.base64}`;
+      } else if (res.url) {
+        result = res.url;
       }
 
       if (result) {
