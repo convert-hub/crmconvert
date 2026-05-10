@@ -52,39 +52,44 @@ serve(async (req) => {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
 
+    const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
-    const supabaseUser = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      SERVICE_ROLE
     );
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: claimsData, error: claimsErr } =
-      await supabaseUser.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    const isInternalCall = token === SERVICE_ROLE;
+
+    let membership: { id: string | null; tenant_id: string } | null = null;
+
+    if (!isInternalCall) {
+      const supabaseUser = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+      const { data: claimsData, error: claimsErr } =
+        await supabaseUser.auth.getClaims(token);
+      if (claimsErr || !claimsData?.claims) {
+        return jsonResponse({ error: "Unauthorized" }, 401);
+      }
+      const userId = claimsData.claims.sub;
+
+      const { data: m } = await supabaseAdmin
+        .from("tenant_memberships")
+        .select("id, tenant_id, role")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+
+      if (!m) return jsonResponse({ error: "No tenant membership" }, 403);
+      membership = { id: m.id, tenant_id: m.tenant_id };
     }
-    const userId = claimsData.claims.sub;
 
     const body = (await req.json()) as SendBody;
     const action = body.action ?? "send";
-
-    // Resolve membership / tenant
-    const { data: membership } = await supabaseAdmin
-      .from("tenant_memberships")
-      .select("id, tenant_id, role")
-      .eq("user_id", userId)
-      .eq("is_active", true)
-      .limit(1)
-      .single();
-
-    if (!membership) {
-      return jsonResponse({ error: "No tenant membership" }, 403);
-    }
 
     // Resolve instance
     let instanceId = body.whatsapp_instance_id;
@@ -113,7 +118,11 @@ serve(async (req) => {
     if (!instance) {
       return jsonResponse({ error: "Instance not found" }, 404);
     }
-    if (instance.tenant_id !== membership.tenant_id) {
+
+    // Em chamadas internas, derivamos o tenant da própria instance
+    if (isInternalCall) {
+      membership = { id: null, tenant_id: instance.tenant_id };
+    } else if (instance.tenant_id !== membership!.tenant_id) {
       return jsonResponse({ error: "Forbidden" }, 403);
     }
     if (instance.provider !== "meta_cloud") {
