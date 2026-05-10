@@ -19,7 +19,7 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 interface SendBody {
-  action?: "send" | "test_connection" | "upload_media";
+  action?: "send" | "test_connection" | "upload_media" | "send_media_base64" | "download_media";
   conversation_id?: string;
   whatsapp_instance_id?: string;
   to?: string; // E.164 sem +
@@ -27,10 +27,13 @@ interface SendBody {
   text?: string;
   media_url?: string;
   media_id?: string;
+  media_base64?: string; // base64 puro (sem data:...)
+  media_mime?: string;
   filename?: string;
   caption?: string;
   reply_to_message_id?: string;
   emoji?: string;
+  skip_persist?: boolean; // quando o caller já criou a row de messages (ChatPanel optimistic)
   template?: {
     name: string;
     language: string; // 'pt_BR'
