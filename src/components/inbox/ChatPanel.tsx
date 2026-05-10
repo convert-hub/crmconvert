@@ -362,13 +362,17 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         }).eq('id', conversationId);
 
         if (isWhatsApp && contactPhone) {
-          const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-            body: { action: 'send_message', tenant_id: tenant.id, phone: contactPhone, message: msgContent, conversation_id: conversationId },
+          const res = await sendText({
+            conversationId,
+            tenantId: tenant.id,
+            phone: contactPhone,
+            text: msgContent,
+            providerInfo: providerInfo ?? undefined,
           });
-          if (error || data?.error) {
-            toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
-          } else if (savedMsg?.id && data?.provider_message_id) {
-            await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+          if (!res.ok) {
+            toast.warning('Falha ao enviar via WhatsApp: ' + (res.error ?? 'erro desconhecido'));
+          } else if (savedMsg?.id && res.provider_message_id) {
+            await supabase.from('messages').update({ provider_message_id: res.provider_message_id }).eq('id', savedMsg.id);
           }
         }
       }
