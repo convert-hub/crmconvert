@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock, FileCheck2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels } from '@/lib/labels';
 import { format } from 'date-fns';
