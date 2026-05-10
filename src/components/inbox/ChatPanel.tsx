@@ -444,22 +444,22 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
-      const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-        body: {
-          action: 'send_media',
-          tenant_id: tenant.id,
-          phone: contactPhone,
-          media_base64: `data:${file.type};base64,${base64}`,
-          media_type: mediaType,
-          caption: '',
-          conversation_id: conversationId,
-        },
+      const res = await sendMedia({
+        conversationId,
+        tenantId: tenant.id,
+        phone: contactPhone,
+        fileBase64: base64,
+        mimeType: file.type,
+        mediaType: mediaType as any,
+        filename: file.name,
+        caption: '',
+        providerInfo: providerInfo ?? undefined,
       });
 
-      if (error || data?.error) {
-        toast.warning('Falha ao enviar mídia: ' + (data?.error || error?.message));
-      } else if (savedMsg?.id && data?.provider_message_id) {
-        await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+      if (!res.ok) {
+        toast.warning('Falha ao enviar mídia: ' + (res.error ?? 'erro desconhecido'));
+      } else if (savedMsg?.id && res.provider_message_id) {
+        await supabase.from('messages').update({ provider_message_id: res.provider_message_id }).eq('id', savedMsg.id);
       }
 
       supabase.from('conversations').update({
