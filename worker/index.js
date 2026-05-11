@@ -613,23 +613,66 @@ const handlers = {
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
         } else if (node.type === 'message') {
-          // Send message via WhatsApp
-          const content = (node.data?.content || '').replace(/\{\{(\w+)\}\}/g, (_, key) => ctx.variables[key] || '');
-          if (content && ctx.conversation_id) {
-            await supabase.from('messages').insert({
-              tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
-              content, is_ai_generated: false,
+          const mode = node.data?.mode || 'text';
+          // Resolve conversation's instance + provider once
+          let convInstance = null;
+          if (ctx.conversation_id) {
+            const { data: conv } = await supabase.from('conversations')
+              .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+            if (conv?.whatsapp_instance_id) {
+              const { data: inst } = await supabase.from('whatsapp_instances')
+                .select('id, provider').eq('id', conv.whatsapp_instance_id).maybeSingle();
+              convInstance = inst;
+            }
+          }
+          const isMetaConv = convInstance?.provider === 'meta_cloud';
+
+          // Resolve contact phone for sending
+          let contactPhone = null;
+          if (ctx.contact_id) {
+            const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+            contactPhone = c?.phone || null;
+          }
+
+          if (mode === 'template' && isMetaConv && node.data?.templateId && contactPhone) {
+            // Send Meta template via dedicated handler
+            await supabase.rpc('enqueue_job', {
+              _type: 'send_whatsapp_template',
+              _payload: JSON.stringify({
+                tenant_id,
+                whatsapp_instance_id: convInstance.id,
+                template_id: node.data.templateId,
+                template_variables: node.data.templateVariables || {},
+                phone: contactPhone,
+                conversation_id: ctx.conversation_id,
+                contact_id: ctx.contact_id,
+              }),
+              _tenant_id: tenant_id,
             });
-            // Send via WhatsApp
-            if (ctx.contact_id) {
-              const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
-              if (contact?.phone) {
+            console.log(`[Worker] Flow ${flow_id}: enqueued Meta template "${node.data.templateName || node.data.templateId}"`);
+          } else {
+            // Text mode (or template fallback for UAZAPI / sem instância Meta)
+            const rawText = mode === 'template' ? (node.data?.content || '') : (node.data?.content || '');
+            const content = rawText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => {
+              if (key === 'contact.name' || key === 'contact.phone' || key === 'contact.email') {
+                return ctx.variables[key] || '';
+              }
+              return ctx.variables[key] || '';
+            });
+            if (content && ctx.conversation_id) {
+              await supabase.from('messages').insert({
+                tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                content, is_ai_generated: false,
+              });
+              if (contactPhone) {
                 await supabase.rpc('enqueue_job', {
                   _type: 'send_whatsapp',
-                  _payload: JSON.stringify({ tenant_id, phone: contact.phone, message: content, conversation_id: ctx.conversation_id }),
+                  _payload: JSON.stringify({ tenant_id, phone: contactPhone, message: content, conversation_id: ctx.conversation_id }),
                   _tenant_id: tenant_id,
                 });
               }
+            } else if (mode === 'template' && !isMetaConv) {
+              console.log(`[Worker] Flow ${flow_id}: template node sem fallback de texto e conversa não-Meta — ignorado`);
             }
           }
           const next = adjacency[nodeId] || [];
