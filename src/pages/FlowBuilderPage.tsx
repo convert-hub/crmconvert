@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag, HelpCircle, Shuffle } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
+import PipelineStagePicker from '@/components/flow-builder/PipelineStagePicker';
 
 // ---- Custom Node Component ----
 import MessageNode from '@/components/flow-builder/MessageNode';
@@ -631,6 +632,33 @@ export default function FlowBuilderPage() {
                         rows={3} className="text-sm"
                         placeholder="Texto da mensagem..."
                       />
+                    </div>
+                  )}
+
+                  {(editingNode.data as any).actionType === 'move_stage' && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Mover oportunidade para</Label>
+                      <PipelineStagePicker
+                        tenantId={tenant?.id ?? null}
+                        pipelineId={(editingNode.data as any).config?.pipeline_id}
+                        stageId={(editingNode.data as any).config?.stage_id}
+                        onChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), ...v } } })}
+                        requireBoth
+                      />
+                      <p className="text-[11px] text-muted-foreground">Move a oportunidade aberta do contato para esta etapa. Se o pipeline for informado, busca apenas oportunidades dele.</p>
+                    </div>
+                  )}
+
+                  {(editingNode.data as any).actionType === 'create_opportunity' && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Pipeline e etapa inicial</Label>
+                      <PipelineStagePicker
+                        tenantId={tenant?.id ?? null}
+                        pipelineId={(editingNode.data as any).config?.pipeline_id}
+                        stageId={(editingNode.data as any).config?.stage_id}
+                        onChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), ...v } } })}
+                      />
+                      <p className="text-[11px] text-muted-foreground">Se vazio, usa o pipeline padrão e a primeira etapa. Não cria se já houver oportunidade aberta para o contato.</p>
                     </div>
                   )}
                 </>
