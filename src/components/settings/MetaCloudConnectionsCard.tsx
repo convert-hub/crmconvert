@@ -94,7 +94,7 @@ export default function MetaCloudConnectionsCard() {
     setLoading(true);
     const { data, error } = await supabase
       .from('whatsapp_instances')
-      .select('id, display_name, instance_name, meta_phone_number_id, meta_waba_id, meta_verify_token, is_active, phone_number, created_at')
+      .select('id, display_name, instance_name, meta_phone_number_id, meta_waba_id, meta_verify_token, is_active, phone_number, created_at, meta_token_status, meta_token_last_error, meta_token_last_error_at, meta_token_type')
       .eq('tenant_id', tenant.id)
       .eq('provider', 'meta_cloud')
       .order('created_at', { ascending: false });
