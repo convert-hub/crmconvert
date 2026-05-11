@@ -190,6 +190,47 @@ export default function MetaCloudConnectionsCard() {
     }
   };
 
+  const handleUpdateToken = async () => {
+    if (!updateTokenInst || !updateTokenValue.trim()) return;
+    setUpdatingToken(true);
+    try {
+      // 1. Salva o novo token
+      const { error: upErr } = await supabase
+        .from('whatsapp_instances')
+        .update({
+          meta_access_token_encrypted: updateTokenValue.trim(),
+          meta_token_type: updateTokenType,
+          meta_token_status: 'unknown',
+          meta_token_last_error: null,
+        })
+        .eq('id', updateTokenInst.id);
+      if (upErr) throw upErr;
+
+      // 2. Valida via test_connection (vai marcar status correto)
+      const { data: testData } = await supabase.functions.invoke('wa-meta-send', {
+        body: { action: 'test_connection', whatsapp_instance_id: updateTokenInst.id },
+      });
+      if (testData?.ok) {
+        toast.success('Token atualizado e validado com sucesso');
+        // 3. Sincroniza templates de imediato
+        supabase.functions.invoke('wa-meta-templates-sync', {
+          body: { whatsapp_instance_id: updateTokenInst.id },
+        }).then(({ data }) => {
+          if (data?.ok) toast.success(`${data.count} templates sincronizados`);
+        });
+      } else {
+        toast.error(testData?.error ?? 'Token salvo mas validação falhou');
+      }
+      setUpdateTokenInst(null);
+      setUpdateTokenValue('');
+      await load();
+    } catch (e: any) {
+      toast.error(e.message ?? 'Erro ao atualizar token');
+    } finally {
+      setUpdatingToken(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('Remover esta conexão Meta? Conversas existentes serão preservadas, mas perderão o vínculo.')) return;
     const { error } = await supabase.from('whatsapp_instances').delete().eq('id', id);
