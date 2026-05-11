@@ -139,6 +139,8 @@ export default function MetaCloudConnectionsCard() {
         meta_access_token_encrypted: accessToken.trim(),
         meta_app_secret_encrypted: appSecret.trim() || null,
         meta_verify_token: verifyToken,
+        meta_token_type: tokenType,
+        meta_token_status: 'unknown',
         is_active: true,
       });
       if (error) throw error;
