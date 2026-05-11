@@ -47,6 +47,13 @@ export default function MetaCloudConnectionsCard() {
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [appSecret, setAppSecret] = useState('');
+  const [tokenType, setTokenType] = useState<'system_user' | 'user'>('system_user');
+
+  // update token dialog
+  const [updateTokenInst, setUpdateTokenInst] = useState<MetaInstance | null>(null);
+  const [updateTokenValue, setUpdateTokenValue] = useState('');
+  const [updateTokenType, setUpdateTokenType] = useState<'system_user' | 'user'>('system_user');
+  const [updatingToken, setUpdatingToken] = useState(false);
 
   const draftKey = tenant?.id ? `meta_connection_draft_${tenant.id}` : '';
 
