@@ -1,61 +1,58 @@
-# Onda 1 — Tornar honesto o que já existe
+## Diagnóstico
 
-Correções pequenas no Flow Builder e no worker para que os nós/ações que aparecem na UI realmente funcionem como prometido. Sem refatorar executor (Delay longo e Pergunta com pausa ficam para a Onda 2).
+Os logs de rede mostram que **todas** as chamadas para a WABA estão falhando com:
 
-## Escopo
+> `Error validating access token: Session has expired on Sunday, 10-May-26 05:00:00 PDT` (Graph API code 190 / subcode 463)
 
-### 1. Nó Mensagem em modo Template Meta (worker)
-Hoje o `MessageNodeEditor` salva `mode: 'template'`, `templateInstanceId`, `templateId`, `templateLanguage`, `templateVariables`, mas o worker (`worker/index.js`, branch `node.type === 'message'`) só lê `node.data.content` e dispara texto via UAZAPI. Vamos:
+O token salvo na instância **PAIPE WABA** (`bf86edc0...`) é um token de **curta duração** (provavelmente copiado do Graph API Explorer ou do botão "Get access token" do app de teste), que dura ~1–24h. Ele expirou ontem.
 
-- Detectar `node.data.mode === 'template'` no executor.
-- Resolver provider da conversa via `whatsapp_instance_id`. Se for `meta_cloud` → enfileirar `send_whatsapp_template` (handler já existe no worker), passando `template_id`, `language`, `variables` interpoladas com `{{contact.name}}`, `{{contact.phone}}`, `{{contact.email}}`, e demais `ctx.variables`.
-- Se a conversa for UAZAPI ou não tiver instância → cair no `node.data.content` (fallback de texto livre). Se também estiver vazio, log e segue.
+Como o mesmo campo `meta_access_token_encrypted` é usado por `wa-meta-templates-sync`, `wa-meta-send` e qualquer ação Meta, **nenhuma operação Cloud API funciona** — não só os templates.
 
-### 2. Roteamento por instância no envio de mensagem livre
-Tanto o nó Mensagem (modo texto) quanto a Ação `send_whatsapp` hoje sempre vão para UAZAPI. Vamos:
+Pior: a edge function devolve HTTP 200 com `{ok:false, error:"..."}`, então o usuário só vê "não acontece nada", sem alerta.
 
-- Antes de enfileirar `send_whatsapp`, ler `conversations.whatsapp_instance_id` da conversa e o `provider` da instância.
-- Se `meta_cloud` → invocar `wa-meta-send` com `type: 'text'` (mesma rota que o `whatsappRouter` do front usa).
-- Se `uazapi` ou indefinido → caminho atual (`enqueue_job send_whatsapp`).
-- Reutilizar helper inline no worker (sem importar do `src`, que não roda no Node).
+## O que será feito
 
-### 3. Ação `move_stage` (UI + worker)
-- **UI** (`FlowBuilderPage.tsx`): quando `actionType === 'move_stage'`, mostrar dois selects encadeados — Pipeline → Etapa de destino — gravando `config.pipeline_id` e `config.stage_id`.
-- **Worker**: adicionar `case 'move_stage'` no switch de ações. Procura a oportunidade aberta do contato no pipeline alvo (ou cria se faltar via fallback simples — a definir: por ora só move se já existir; senão log e segue).
+### 1. Detecção e sinalização clara de token inválido (essencial)
+- Em `wa-meta-templates-sync` e `wa-meta-send`, quando a Graph API retornar `error.code === 190` (token expirado/inválido):
+  - Marcar a instância no banco com um novo campo `meta_token_status` (`valid` | `expired` | `invalid`) e `meta_token_last_error_at`.
+  - Devolver erro normalizado `{ok:false, code:'meta_token_expired', error:'Token Meta expirado — reconecte a instância'}`.
+- Em `MetaCloudConnectionsCard.tsx`, mostrar **badge vermelho "Token expirado — reconectar"** ao lado da instância quando `meta_token_status !== 'valid'`, com botão direto para abrir o diálogo de reconexão.
 
-### 4. Ação `create_opportunity` com pipeline/etapa configuráveis
-Hoje sempre usa o pipeline `is_default = true` e a primeira etapa. Vamos:
+### 2. Botão "Atualizar token" no card da instância
+Hoje só dá para "desconectar e recriar". Adicionar ação **"Atualizar token Meta"** que:
+- Abre o mesmo diálogo de colar token,
+- Faz uma chamada de validação à Graph API (`GET /{waba_id}?fields=id`) antes de salvar,
+- Se válido, atualiza `meta_access_token_encrypted` + `meta_token_status='valid'` e dispara um sync dos templates automaticamente.
 
-- **UI**: campos opcionais Pipeline e Etapa inicial (mantendo o default quando vazios).
-- **Worker**: respeitar `config.pipeline_id` / `config.stage_id` se preenchidos.
+### 3. Suporte a System User Token (permanente) — recomendado
+Adicionar no diálogo de conexão um campo opcional **"Tipo de token"** com explicação curta:
+- **Token de usuário (curta duração)** — expira em horas/dias. Bom só para testes.
+- **System User Token (permanente)** — gerado em Business Settings → System Users. **Não expira.** Recomendado para produção.
 
-### 5. Status final em `flow_executions`
-Hoje a linha em `flow_executions` é criada com `status: 'running'` e nunca é atualizada ao terminar. Vamos:
+Salvar o tipo em `meta_token_type` para podermos avisar o usuário quando ele estiver usando token temporário ("Atenção: este token expira em breve, considere migrar para System User").
 
-- Em sucesso (loop terminou normal ou estourou `MAX_STEPS`): `update status = 'completed'`, `finished_at = now()`.
-- Em erro (catch): `update status = 'failed'`, `last_error = ...`, `finished_at = now()`.
+### 4. Health-check periódico (opcional, defensivo)
+Job diário (pg_cron já existe) `meta-token-healthcheck`:
+- Para cada instância `provider='meta_cloud'` ativa, faz `GET /{waba_id}?fields=id`.
+- Se 401/190 → marca `meta_token_status='expired'`.
+- Não envia notificação por enquanto; só atualiza o badge na UI.
 
-## Arquivos tocados
+### 5. Documentação curta no card
+Texto inline explicando como gerar um **System User Token permanente** (3 passos: Business Settings → System Users → Generate token com permissões `whatsapp_business_management` + `whatsapp_business_messaging`), para o usuário não cair no mesmo problema.
 
-- `worker/index.js` — branch `message` (template + roteamento), branch `action` (`move_stage`, `create_opportunity` com pipeline/etapa, `send_whatsapp` roteado), update final em `flow_executions`.
-- `src/pages/FlowBuilderPage.tsx` — editor das ações `move_stage` e `create_opportunity` (selects de pipeline/etapa).
+## Arquivos afetados
 
-## Sem mudanças de schema
+- `supabase/migrations/...` — adicionar colunas `meta_token_status`, `meta_token_last_error_at`, `meta_token_type` em `whatsapp_instances`.
+- `supabase/functions/wa-meta-templates-sync/index.ts` — detectar 190, atualizar status, retornar erro normalizado.
+- `supabase/functions/wa-meta-send/index.ts` — idem.
+- `src/components/settings/MetaCloudConnectionsCard.tsx` — badge de status, botão "Atualizar token", validação na hora de salvar, campo "tipo de token", helper text com instruções.
+- (Opcional) `supabase/functions/meta-token-healthcheck/index.ts` + cron.
 
-`flow_executions` já tem colunas `status`, `last_error`, `finished_at` (verificável; se faltar `finished_at` ou `last_error`, faço migration mínima junto). Tabelas `pipelines` e `stages` já existem com os campos usados.
+## Ação imediata para destravar agora (sem código)
 
-## Fora desta onda (vai para Onda 2+)
+Independente do plano acima, **enquanto isso**: abra `Configurações → Conexões Meta Cloud → PAIPE WABA`, gere um novo token na Meta (preferencialmente System User permanente) e cole no campo. Os templates voltam a sincronizar na hora.
 
-- Delay > 1 min de verdade (precisa pausar/retomar execução).
-- Pergunta funcional com envio de texto e espera pela resposta do usuário.
-- Lock anti-duplicação por contato e gatilhos `lead_created` / `tag_added` / `keyword_match` / `manual`.
-- Toggle "Ativo" na lista, página de Execuções, modo simulação.
+## Fora de escopo
 
-## Como vou validar
-
-1. Criar fluxo `message_received` com nó Mensagem em modo Template e disparar via mensagem em conversa Meta — confirmar que `wa-meta-templates` recebe a chamada.
-2. Mesmo fluxo, mas conversa UAZAPI — confirmar que cai no fallback de texto.
-3. Fluxo com ação `move_stage` configurada — mover oportunidade e verificar `stage_id` atualizado.
-4. Conferir `flow_executions` ganhando `status = 'completed'` ao final.
-
-Posso seguir?
+- OAuth completo Embedded Signup da Meta (requer app review / Tech Provider).
+- Refresh automático de tokens de curta duração (Meta não oferece refresh para tokens de usuário comuns).
