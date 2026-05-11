@@ -70,7 +70,33 @@ serve(async (req) => {
       { headers: { Authorization: `Bearer ${instance.meta_access_token_encrypted}` } }
     );
     const data = await r.json();
-    if (!r.ok) return jsonResponse({ ok: false, error: data?.error?.message ?? "Sync failed", details: data });
+    if (!r.ok) {
+      const errCode = data?.error?.code;
+      const isAuth = errCode === 190 || r.status === 401;
+      if (isAuth) {
+        await supabaseAdmin
+          .from("whatsapp_instances")
+          .update({
+            meta_token_status: "expired",
+            meta_token_last_error_at: new Date().toISOString(),
+            meta_token_last_error: data?.error?.message ?? "Token inválido",
+          })
+          .eq("id", instance.id);
+        return jsonResponse({
+          ok: false,
+          code: "meta_token_expired",
+          error: "Token Meta expirado ou inválido. Atualize o token nas configurações da instância.",
+          details: data,
+        });
+      }
+      return jsonResponse({ ok: false, error: data?.error?.message ?? "Sync failed", details: data });
+    }
+
+    // Sucesso: marca token como válido
+    await supabaseAdmin
+      .from("whatsapp_instances")
+      .update({ meta_token_status: "valid", meta_token_last_error: null })
+      .eq("id", instance.id);
 
     const templates = data.data || [];
     let upserted = 0;

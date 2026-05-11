@@ -1955,6 +1955,10 @@ export type Database = {
           meta_access_token_encrypted: string | null
           meta_app_secret_encrypted: string | null
           meta_phone_number_id: string | null
+          meta_token_last_error: string | null
+          meta_token_last_error_at: string | null
+          meta_token_status: string
+          meta_token_type: string | null
           meta_verify_token: string | null
           meta_waba_id: string | null
           phone_number: string | null
@@ -1974,6 +1978,10 @@ export type Database = {
           meta_access_token_encrypted?: string | null
           meta_app_secret_encrypted?: string | null
           meta_phone_number_id?: string | null
+          meta_token_last_error?: string | null
+          meta_token_last_error_at?: string | null
+          meta_token_status?: string
+          meta_token_type?: string | null
           meta_verify_token?: string | null
           meta_waba_id?: string | null
           phone_number?: string | null
@@ -1993,6 +2001,10 @@ export type Database = {
           meta_access_token_encrypted?: string | null
           meta_app_secret_encrypted?: string | null
           meta_phone_number_id?: string | null
+          meta_token_last_error?: string | null
+          meta_token_last_error_at?: string | null
+          meta_token_status?: string
+          meta_token_type?: string | null
           meta_verify_token?: string | null
           meta_waba_id?: string | null
           phone_number?: string | null

@@ -136,13 +136,48 @@ serve(async (req) => {
     const phoneNumberId = instance.meta_phone_number_id as string;
     const graphBase = `https://graph.facebook.com/${META_API_VERSION}`;
 
+    // Helper: detecta token Meta inválido/expirado e marca status na instância
+    async function handleGraphError(httpStatus: number, data: any) {
+      const errCode = data?.error?.code;
+      const isAuth = errCode === 190 || httpStatus === 401;
+      if (isAuth) {
+        await supabaseAdmin
+          .from("whatsapp_instances")
+          .update({
+            meta_token_status: "expired",
+            meta_token_last_error_at: new Date().toISOString(),
+            meta_token_last_error: data?.error?.message ?? "Token inválido",
+          })
+          .eq("id", instance.id);
+        return {
+          ok: false,
+          code: "meta_token_expired",
+          error: "Token Meta expirado ou inválido. Atualize o token nas configurações da instância.",
+          details: data,
+        };
+      }
+      return null;
+    }
+
+    async function markTokenValid() {
+      await supabaseAdmin
+        .from("whatsapp_instances")
+        .update({ meta_token_status: "valid", meta_token_last_error: null })
+        .eq("id", instance.id);
+    }
+
     // ── Test connection ───────────────────────────────────────
     if (action === "test_connection") {
       const r = await fetch(`${graphBase}/${phoneNumberId}?fields=display_phone_number,verified_name`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const data = await r.json();
-      if (!r.ok) return jsonResponse({ ok: false, error: data?.error?.message ?? "Test failed", details: data }, 200);
+      if (!r.ok) {
+        const authErr = await handleGraphError(r.status, data);
+        if (authErr) return jsonResponse(authErr);
+        return jsonResponse({ ok: false, error: data?.error?.message ?? "Test failed", details: data }, 200);
+      }
+      await markTokenValid();
       return jsonResponse({ ok: true, info: data });
     }
 
@@ -283,12 +318,15 @@ serve(async (req) => {
     });
     const sendData = await sendR.json();
     if (!sendR.ok) {
+      const authErr = await handleGraphError(sendR.status, sendData);
+      if (authErr) return jsonResponse(authErr);
       return jsonResponse({
         ok: false,
         error: sendData?.error?.message ?? "Send failed",
         details: sendData,
       }, 200);
     }
+    await markTokenValid();
 
     const providerMessageId = sendData?.messages?.[0]?.id ?? null;
 

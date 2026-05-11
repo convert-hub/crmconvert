@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Plus, Trash2, Loader2, Globe, Copy, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Loader2, Globe, Copy, RefreshCw, CheckCircle2, AlertCircle, KeyRound, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface MetaInstance {
@@ -20,6 +20,10 @@ interface MetaInstance {
   is_active: boolean;
   phone_number: string | null;
   created_at: string;
+  meta_token_status: string | null;
+  meta_token_last_error: string | null;
+  meta_token_last_error_at: string | null;
+  meta_token_type: string | null;
 }
 
 function generateVerifyToken(): string {
@@ -43,6 +47,13 @@ export default function MetaCloudConnectionsCard() {
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [appSecret, setAppSecret] = useState('');
+  const [tokenType, setTokenType] = useState<'system_user' | 'user'>('system_user');
+
+  // update token dialog
+  const [updateTokenInst, setUpdateTokenInst] = useState<MetaInstance | null>(null);
+  const [updateTokenValue, setUpdateTokenValue] = useState('');
+  const [updateTokenType, setUpdateTokenType] = useState<'system_user' | 'user'>('system_user');
+  const [updatingToken, setUpdatingToken] = useState(false);
 
   const draftKey = tenant?.id ? `meta_connection_draft_${tenant.id}` : '';
 
@@ -83,7 +94,7 @@ export default function MetaCloudConnectionsCard() {
     setLoading(true);
     const { data, error } = await supabase
       .from('whatsapp_instances')
-      .select('id, display_name, instance_name, meta_phone_number_id, meta_waba_id, meta_verify_token, is_active, phone_number, created_at')
+      .select('id, display_name, instance_name, meta_phone_number_id, meta_waba_id, meta_verify_token, is_active, phone_number, created_at, meta_token_status, meta_token_last_error, meta_token_last_error_at, meta_token_type')
       .eq('tenant_id', tenant.id)
       .eq('provider', 'meta_cloud')
       .order('created_at', { ascending: false });
@@ -128,6 +139,8 @@ export default function MetaCloudConnectionsCard() {
         meta_access_token_encrypted: accessToken.trim(),
         meta_app_secret_encrypted: appSecret.trim() || null,
         meta_verify_token: verifyToken,
+        meta_token_type: tokenType,
+        meta_token_status: 'unknown',
         is_active: true,
       });
       if (error) throw error;
@@ -177,6 +190,47 @@ export default function MetaCloudConnectionsCard() {
     }
   };
 
+  const handleUpdateToken = async () => {
+    if (!updateTokenInst || !updateTokenValue.trim()) return;
+    setUpdatingToken(true);
+    try {
+      // 1. Salva o novo token
+      const { error: upErr } = await supabase
+        .from('whatsapp_instances')
+        .update({
+          meta_access_token_encrypted: updateTokenValue.trim(),
+          meta_token_type: updateTokenType,
+          meta_token_status: 'unknown',
+          meta_token_last_error: null,
+        })
+        .eq('id', updateTokenInst.id);
+      if (upErr) throw upErr;
+
+      // 2. Valida via test_connection (vai marcar status correto)
+      const { data: testData } = await supabase.functions.invoke('wa-meta-send', {
+        body: { action: 'test_connection', whatsapp_instance_id: updateTokenInst.id },
+      });
+      if (testData?.ok) {
+        toast.success('Token atualizado e validado com sucesso');
+        // 3. Sincroniza templates de imediato
+        supabase.functions.invoke('wa-meta-templates-sync', {
+          body: { whatsapp_instance_id: updateTokenInst.id },
+        }).then(({ data }) => {
+          if (data?.ok) toast.success(`${data.count} templates sincronizados`);
+        });
+      } else {
+        toast.error(testData?.error ?? 'Token salvo mas validação falhou');
+      }
+      setUpdateTokenInst(null);
+      setUpdateTokenValue('');
+      await load();
+    } catch (e: any) {
+      toast.error(e.message ?? 'Erro ao atualizar token');
+    } finally {
+      setUpdatingToken(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('Remover esta conexão Meta? Conversas existentes serão preservadas, mas perderão o vínculo.')) return;
     const { error } = await supabase.from('whatsapp_instances').delete().eq('id', id);
@@ -215,20 +269,45 @@ export default function MetaCloudConnectionsCard() {
             Nenhuma conexão Meta cadastrada. A integração UAZAPI continua funcionando normalmente.
           </div>
         ) : (
-          instances.map(inst => (
-            <div key={inst.id} className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+          instances.map(inst => {
+            const tokenExpired = inst.meta_token_status === 'expired' || inst.meta_token_status === 'invalid';
+            return (
+            <div key={inst.id} className={`rounded-xl border p-4 space-y-3 ${tokenExpired ? 'border-destructive/40 bg-destructive/5' : 'border-border bg-muted/30'}`}>
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium">{inst.display_name ?? inst.instance_name}</span>
                   <Badge variant="secondary" className="rounded-full text-xs">Meta Cloud</Badge>
-                  {inst.is_active && <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 rounded-full text-xs">Ativo</Badge>}
+                  {inst.is_active && !tokenExpired && <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 rounded-full text-xs">Ativo</Badge>}
+                  {tokenExpired && (
+                    <Badge className="bg-destructive/10 text-destructive border-destructive/30 rounded-full text-xs gap-1">
+                      <AlertTriangle className="h-3 w-3" /> Token expirado
+                    </Badge>
+                  )}
+                  {inst.meta_token_type === 'user' && !tokenExpired && (
+                    <Badge variant="outline" className="rounded-full text-xs text-amber-600 border-amber-500/30">
+                      Token temporário
+                    </Badge>
+                  )}
                 </div>
                 <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant={tokenExpired ? 'default' : 'outline'}
+                    className="rounded-xl"
+                    onClick={() => {
+                      setUpdateTokenInst(inst);
+                      setUpdateTokenValue('');
+                      setUpdateTokenType((inst.meta_token_type as any) || 'system_user');
+                    }}
+                  >
+                    <KeyRound className="h-3 w-3 mr-1" />
+                    {tokenExpired ? 'Reconectar' : 'Atualizar token'}
+                  </Button>
                   <Button size="sm" variant="outline" className="rounded-xl" disabled={testingId === inst.id} onClick={() => handleTest(inst.id)}>
                     {testingId === inst.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
                     Testar
                   </Button>
-                  <Button size="sm" variant="outline" className="rounded-xl" disabled={syncingId === inst.id} onClick={() => handleSyncTemplates(inst.id)}>
+                  <Button size="sm" variant="outline" className="rounded-xl" disabled={syncingId === inst.id || tokenExpired} onClick={() => handleSyncTemplates(inst.id)}>
                     {syncingId === inst.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
                     Templates
                   </Button>
@@ -237,6 +316,16 @@ export default function MetaCloudConnectionsCard() {
                   </Button>
                 </div>
               </div>
+              {tokenExpired && (
+                <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Token Meta inválido — todas as ações WABA estão bloqueadas.</div>
+                    {inst.meta_token_last_error && <div className="opacity-80 mt-0.5">{inst.meta_token_last_error}</div>}
+                    <div className="mt-1 opacity-80">Clique em <strong>Reconectar</strong> e cole um novo token (preferência: System User permanente).</div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div><span className="font-mono">phone_number_id:</span> {inst.meta_phone_number_id}</div>
                 <div><span className="font-mono">waba_id:</span> {inst.meta_waba_id}</div>
@@ -258,7 +347,7 @@ export default function MetaCloudConnectionsCard() {
                 <code className="block break-all font-mono text-[11px]">{inst.meta_verify_token}</code>
               </div>
             </div>
-          ))
+          );})
         )}
       </CardContent>
 
@@ -289,16 +378,31 @@ export default function MetaCloudConnectionsCard() {
               <Input id="meta-waba-id" autoComplete="off" value={wabaId} onChange={e => setWabaId(e.target.value)} placeholder="987654321098765" />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="meta-token">Access Token (System User permanente) *</Label>
+              <Label htmlFor="meta-token">Access Token *</Label>
               <Input id="meta-token" type="password" autoComplete="off" value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="EAAG..." />
+              <div className="flex gap-3 pt-1 text-xs">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={tokenType === 'system_user'} onChange={() => setTokenType('system_user')} />
+                  <span>System User (permanente) — recomendado</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={tokenType === 'user'} onChange={() => setTokenType('user')} />
+                  <span>Usuário (curta duração)</span>
+                </label>
+              </div>
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-secret">App Secret (recomendado para validação HMAC)</Label>
               <Input id="meta-secret" type="password" autoComplete="off" value={appSecret} onChange={e => setAppSecret(e.target.value)} placeholder="opcional, mas recomendado" />
             </div>
-            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground flex gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Após salvar, copie a Webhook URL e o Verify Token gerados e configure no app Meta Business em <code>WhatsApp → Configuration → Webhook</code>.</span>
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1.5">
+              <div className="flex gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>Após salvar, copie a Webhook URL e o Verify Token gerados e configure no app Meta Business em <code>WhatsApp → Configuration → Webhook</code>.</span>
+              </div>
+              <div className="pl-6 opacity-90">
+                <strong>Como gerar token permanente:</strong> Meta Business Settings → Users → System Users → Add → Generate token com permissões <code>whatsapp_business_management</code> + <code>whatsapp_business_messaging</code>.
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -306,6 +410,42 @@ export default function MetaCloudConnectionsCard() {
             <Button className="rounded-xl" disabled={creating} onClick={handleCreate}>
               {creating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!updateTokenInst} onOpenChange={(o) => { if (!o) { setUpdateTokenInst(null); setUpdateTokenValue(''); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Atualizar token Meta — {updateTokenInst?.display_name ?? updateTokenInst?.instance_name}</DialogTitle>
+            <DialogDescription>
+              Cole um novo Access Token. Validamos automaticamente na Meta antes de salvar e disparamos o sync de templates.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="upd-token">Novo Access Token</Label>
+              <Input id="upd-token" type="password" autoComplete="off" value={updateTokenValue} onChange={e => setUpdateTokenValue(e.target.value)} placeholder="EAAG..." />
+              <div className="flex gap-3 pt-1 text-xs">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={updateTokenType === 'system_user'} onChange={() => setUpdateTokenType('system_user')} />
+                  <span>System User (permanente)</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={updateTokenType === 'user'} onChange={() => setUpdateTokenType('user')} />
+                  <span>Usuário (curta duração)</span>
+                </label>
+              </div>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              <strong>Para token permanente:</strong> Meta Business Settings → Users → System Users → Generate token com permissões <code>whatsapp_business_management</code> + <code>whatsapp_business_messaging</code>.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={() => { setUpdateTokenInst(null); setUpdateTokenValue(''); }}>Cancelar</Button>
+            <Button className="rounded-xl" disabled={updatingToken || !updateTokenValue.trim()} onClick={handleUpdateToken}>
+              {updatingToken && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Validar e salvar
             </Button>
           </DialogFooter>
         </DialogContent>
