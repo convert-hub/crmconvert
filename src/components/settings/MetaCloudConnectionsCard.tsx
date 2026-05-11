@@ -269,20 +269,45 @@ export default function MetaCloudConnectionsCard() {
             Nenhuma conexão Meta cadastrada. A integração UAZAPI continua funcionando normalmente.
           </div>
         ) : (
-          instances.map(inst => (
-            <div key={inst.id} className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+          instances.map(inst => {
+            const tokenExpired = inst.meta_token_status === 'expired' || inst.meta_token_status === 'invalid';
+            return (
+            <div key={inst.id} className={`rounded-xl border p-4 space-y-3 ${tokenExpired ? 'border-destructive/40 bg-destructive/5' : 'border-border bg-muted/30'}`}>
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium">{inst.display_name ?? inst.instance_name}</span>
                   <Badge variant="secondary" className="rounded-full text-xs">Meta Cloud</Badge>
-                  {inst.is_active && <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 rounded-full text-xs">Ativo</Badge>}
+                  {inst.is_active && !tokenExpired && <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 rounded-full text-xs">Ativo</Badge>}
+                  {tokenExpired && (
+                    <Badge className="bg-destructive/10 text-destructive border-destructive/30 rounded-full text-xs gap-1">
+                      <AlertTriangle className="h-3 w-3" /> Token expirado
+                    </Badge>
+                  )}
+                  {inst.meta_token_type === 'user' && !tokenExpired && (
+                    <Badge variant="outline" className="rounded-full text-xs text-amber-600 border-amber-500/30">
+                      Token temporário
+                    </Badge>
+                  )}
                 </div>
                 <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant={tokenExpired ? 'default' : 'outline'}
+                    className="rounded-xl"
+                    onClick={() => {
+                      setUpdateTokenInst(inst);
+                      setUpdateTokenValue('');
+                      setUpdateTokenType((inst.meta_token_type as any) || 'system_user');
+                    }}
+                  >
+                    <KeyRound className="h-3 w-3 mr-1" />
+                    {tokenExpired ? 'Reconectar' : 'Atualizar token'}
+                  </Button>
                   <Button size="sm" variant="outline" className="rounded-xl" disabled={testingId === inst.id} onClick={() => handleTest(inst.id)}>
                     {testingId === inst.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
                     Testar
                   </Button>
-                  <Button size="sm" variant="outline" className="rounded-xl" disabled={syncingId === inst.id} onClick={() => handleSyncTemplates(inst.id)}>
+                  <Button size="sm" variant="outline" className="rounded-xl" disabled={syncingId === inst.id || tokenExpired} onClick={() => handleSyncTemplates(inst.id)}>
                     {syncingId === inst.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
                     Templates
                   </Button>
@@ -291,6 +316,16 @@ export default function MetaCloudConnectionsCard() {
                   </Button>
                 </div>
               </div>
+              {tokenExpired && (
+                <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Token Meta inválido — todas as ações WABA estão bloqueadas.</div>
+                    {inst.meta_token_last_error && <div className="opacity-80 mt-0.5">{inst.meta_token_last_error}</div>}
+                    <div className="mt-1 opacity-80">Clique em <strong>Reconectar</strong> e cole um novo token (preferência: System User permanente).</div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div><span className="font-mono">phone_number_id:</span> {inst.meta_phone_number_id}</div>
                 <div><span className="font-mono">waba_id:</span> {inst.meta_waba_id}</div>
@@ -312,7 +347,7 @@ export default function MetaCloudConnectionsCard() {
                 <code className="block break-all font-mono text-[11px]">{inst.meta_verify_token}</code>
               </div>
             </div>
-          ))
+          );})
         )}
       </CardContent>
 
