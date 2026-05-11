@@ -594,6 +594,15 @@ const handlers = {
       const queue = [triggerNode.id];
       const visited = new Set();
       const ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
+      // Enrich context with contact fields for {{contact.name}} interpolation
+      if (contact_id) {
+        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
+        if (ctc) {
+          ctx.variables['contact.name'] = ctc.name || '';
+          ctx.variables['contact.email'] = ctc.email || '';
+          ctx.variables['contact.phone'] = ctc.phone || '';
+        }
+      }
       let stepCount = 0;
       const MAX_STEPS = 50;
 
