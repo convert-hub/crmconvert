@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Plus, Trash2, Loader2, Globe, Copy, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Loader2, Globe, Copy, RefreshCw, CheckCircle2, AlertCircle, KeyRound, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface MetaInstance {
@@ -20,6 +20,10 @@ interface MetaInstance {
   is_active: boolean;
   phone_number: string | null;
   created_at: string;
+  meta_token_status: string | null;
+  meta_token_last_error: string | null;
+  meta_token_last_error_at: string | null;
+  meta_token_type: string | null;
 }
 
 function generateVerifyToken(): string {
