@@ -155,6 +155,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -235,6 +236,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -264,6 +266,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -332,6 +335,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -365,6 +369,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -401,6 +406,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
@@ -488,6 +494,7 @@ serve(async (req) => {
           .select('*')
           .eq('tenant_id', effectiveTenantId)
           .eq('is_active', true)
+          .eq('provider', 'uazapi')
           .limit(1)
           .single();
 
