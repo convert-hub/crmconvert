@@ -318,12 +318,15 @@ serve(async (req) => {
     });
     const sendData = await sendR.json();
     if (!sendR.ok) {
+      const authErr = await handleGraphError(sendR.status, sendData);
+      if (authErr) return jsonResponse(authErr);
       return jsonResponse({
         ok: false,
         error: sendData?.error?.message ?? "Send failed",
         details: sendData,
       }, 200);
     }
+    await markTokenValid();
 
     const providerMessageId = sendData?.messages?.[0]?.id ?? null;
 
