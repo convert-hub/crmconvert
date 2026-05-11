@@ -414,6 +414,42 @@ export default function MetaCloudConnectionsCard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={!!updateTokenInst} onOpenChange={(o) => { if (!o) { setUpdateTokenInst(null); setUpdateTokenValue(''); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Atualizar token Meta — {updateTokenInst?.display_name ?? updateTokenInst?.instance_name}</DialogTitle>
+            <DialogDescription>
+              Cole um novo Access Token. Validamos automaticamente na Meta antes de salvar e disparamos o sync de templates.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="upd-token">Novo Access Token</Label>
+              <Input id="upd-token" type="password" autoComplete="off" value={updateTokenValue} onChange={e => setUpdateTokenValue(e.target.value)} placeholder="EAAG..." />
+              <div className="flex gap-3 pt-1 text-xs">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={updateTokenType === 'system_user'} onChange={() => setUpdateTokenType('system_user')} />
+                  <span>System User (permanente)</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={updateTokenType === 'user'} onChange={() => setUpdateTokenType('user')} />
+                  <span>Usuário (curta duração)</span>
+                </label>
+              </div>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              <strong>Para token permanente:</strong> Meta Business Settings → Users → System Users → Generate token com permissões <code>whatsapp_business_management</code> + <code>whatsapp_business_messaging</code>.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={() => { setUpdateTokenInst(null); setUpdateTokenValue(''); }}>Cancelar</Button>
+            <Button className="rounded-xl" disabled={updatingToken || !updateTokenValue.trim()} onClick={handleUpdateToken}>
+              {updatingToken && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Validar e salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
