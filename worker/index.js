@@ -594,6 +594,15 @@ const handlers = {
       const queue = [triggerNode.id];
       const visited = new Set();
       const ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
+      // Enrich context with contact fields for {{contact.name}} interpolation
+      if (contact_id) {
+        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
+        if (ctc) {
+          ctx.variables['contact.name'] = ctc.name || '';
+          ctx.variables['contact.email'] = ctc.email || '';
+          ctx.variables['contact.phone'] = ctc.phone || '';
+        }
+      }
       let stepCount = 0;
       const MAX_STEPS = 50;
 
@@ -613,23 +622,66 @@ const handlers = {
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
         } else if (node.type === 'message') {
-          // Send message via WhatsApp
-          const content = (node.data?.content || '').replace(/\{\{(\w+)\}\}/g, (_, key) => ctx.variables[key] || '');
-          if (content && ctx.conversation_id) {
-            await supabase.from('messages').insert({
-              tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
-              content, is_ai_generated: false,
+          const mode = node.data?.mode || 'text';
+          // Resolve conversation's instance + provider once
+          let convInstance = null;
+          if (ctx.conversation_id) {
+            const { data: conv } = await supabase.from('conversations')
+              .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+            if (conv?.whatsapp_instance_id) {
+              const { data: inst } = await supabase.from('whatsapp_instances')
+                .select('id, provider').eq('id', conv.whatsapp_instance_id).maybeSingle();
+              convInstance = inst;
+            }
+          }
+          const isMetaConv = convInstance?.provider === 'meta_cloud';
+
+          // Resolve contact phone for sending
+          let contactPhone = null;
+          if (ctx.contact_id) {
+            const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+            contactPhone = c?.phone || null;
+          }
+
+          if (mode === 'template' && isMetaConv && node.data?.templateId && contactPhone) {
+            // Send Meta template via dedicated handler
+            await supabase.rpc('enqueue_job', {
+              _type: 'send_whatsapp_template',
+              _payload: JSON.stringify({
+                tenant_id,
+                whatsapp_instance_id: convInstance.id,
+                template_id: node.data.templateId,
+                template_variables: node.data.templateVariables || {},
+                phone: contactPhone,
+                conversation_id: ctx.conversation_id,
+                contact_id: ctx.contact_id,
+              }),
+              _tenant_id: tenant_id,
             });
-            // Send via WhatsApp
-            if (ctx.contact_id) {
-              const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
-              if (contact?.phone) {
+            console.log(`[Worker] Flow ${flow_id}: enqueued Meta template "${node.data.templateName || node.data.templateId}"`);
+          } else {
+            // Text mode (or template fallback for UAZAPI / sem instância Meta)
+            const rawText = mode === 'template' ? (node.data?.content || '') : (node.data?.content || '');
+            const content = rawText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => {
+              if (key === 'contact.name' || key === 'contact.phone' || key === 'contact.email') {
+                return ctx.variables[key] || '';
+              }
+              return ctx.variables[key] || '';
+            });
+            if (content && ctx.conversation_id) {
+              await supabase.from('messages').insert({
+                tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                content, is_ai_generated: false,
+              });
+              if (contactPhone) {
                 await supabase.rpc('enqueue_job', {
                   _type: 'send_whatsapp',
-                  _payload: JSON.stringify({ tenant_id, phone: contact.phone, message: content, conversation_id: ctx.conversation_id }),
+                  _payload: JSON.stringify({ tenant_id, phone: contactPhone, message: content, conversation_id: ctx.conversation_id }),
                   _tenant_id: tenant_id,
                 });
               }
+            } else if (mode === 'template' && !isMetaConv) {
+              console.log(`[Worker] Flow ${flow_id}: template node sem fallback de texto e conversa não-Meta — ignorado`);
             }
           }
           const next = adjacency[nodeId] || [];
@@ -715,34 +767,76 @@ const handlers = {
                 .limit(1);
               if (existingOpp && existingOpp.length > 0) break;
 
-              const { data: pipeline } = await supabase.from('pipelines')
-                .select('id')
-                .eq('tenant_id', tenant_id)
-                .eq('is_default', true)
-                .single();
-              if (!pipeline) break;
+              // Resolve pipeline (config or default)
+              let pipelineId = config.pipeline_id || null;
+              if (!pipelineId) {
+                const { data: pipeline } = await supabase.from('pipelines')
+                  .select('id').eq('tenant_id', tenant_id).eq('is_default', true).maybeSingle();
+                pipelineId = pipeline?.id || null;
+              }
+              if (!pipelineId) break;
 
-              const { data: stage } = await supabase.from('stages')
-                .select('id')
-                .eq('pipeline_id', pipeline.id)
-                .order('position')
-                .limit(1)
-                .single();
-              if (!stage) break;
+              // Resolve stage (config or first of pipeline)
+              let stageId = config.stage_id || null;
+              if (!stageId) {
+                const { data: stage } = await supabase.from('stages')
+                  .select('id').eq('pipeline_id', pipelineId).order('position').limit(1).maybeSingle();
+                stageId = stage?.id || null;
+              }
+              if (!stageId) break;
 
               const { data: contact } = await supabase.from('contacts')
-                .select('name')
-                .eq('id', ctx.contact_id)
-                .single();
+                .select('name').eq('id', ctx.contact_id).single();
 
               await supabase.from('opportunities').insert({
                 tenant_id,
                 contact_id: ctx.contact_id,
-                pipeline_id: pipeline.id,
-                stage_id: stage.id,
+                pipeline_id: pipelineId,
+                stage_id: stageId,
                 title: `Lead: ${contact?.name || 'Contato'}`,
                 source: 'flow_builder',
               });
+              break;
+            }
+            case 'move_stage': {
+              if (!ctx.contact_id || !config.stage_id) break;
+              // Find target opportunity: prefer one in the chosen pipeline; else any open
+              let targetOpp = null;
+              if (config.pipeline_id) {
+                const { data: opps } = await supabase.from('opportunities')
+                  .select('id, stage_id')
+                  .eq('tenant_id', tenant_id)
+                  .eq('contact_id', ctx.contact_id)
+                  .eq('pipeline_id', config.pipeline_id)
+                  .eq('status', 'open')
+                  .order('updated_at', { ascending: false })
+                  .limit(1);
+                targetOpp = opps?.[0] || null;
+              }
+              if (!targetOpp) {
+                const { data: opps } = await supabase.from('opportunities')
+                  .select('id, stage_id, pipeline_id')
+                  .eq('tenant_id', tenant_id)
+                  .eq('contact_id', ctx.contact_id)
+                  .eq('status', 'open')
+                  .order('updated_at', { ascending: false })
+                  .limit(1);
+                targetOpp = opps?.[0] || null;
+              }
+              if (!targetOpp) {
+                console.log(`[Worker] Flow ${flow_id}: move_stage — sem oportunidade aberta para contato ${ctx.contact_id}`);
+                break;
+              }
+              if (targetOpp.stage_id === config.stage_id) break;
+              const fromStage = targetOpp.stage_id;
+              await supabase.from('opportunities').update({ stage_id: config.stage_id }).eq('id', targetOpp.id);
+              await supabase.from('stage_moves').insert({
+                tenant_id, opportunity_id: targetOpp.id,
+                from_stage_id: fromStage, to_stage_id: config.stage_id,
+                is_ai_move: false,
+                ai_reason: 'Flow Builder action',
+              });
+              console.log(`[Worker] Flow ${flow_id}: moved opp ${targetOpp.id} to stage ${config.stage_id}`);
               break;
             }
             case 'close_conversation':

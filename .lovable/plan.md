@@ -1,84 +1,61 @@
-# Coexistência UAZAPI + Meta Cloud API
+# Onda 1 — Tornar honesto o que já existe
 
-Hoje cada `conversation` já carrega `whatsapp_instance_id`, e o `whatsappRouter` decide o provedor pela instância. Mas a UI/automatizações ainda assumem "1 contato = 1 canal". O plano abaixo destrava o uso paralelo das duas APIs para o **mesmo número**, com gestão clara.
+Correções pequenas no Flow Builder e no worker para que os nós/ações que aparecem na UI realmente funcionem como prometido. Sem refatorar executor (Delay longo e Pergunta com pausa ficam para a Onda 2).
 
-## 1. Falar com o mesmo número pelas duas APIs
+## Escopo
 
-**Conceito:** uma conversa pertence a um **par (contato, instância WhatsApp)**, não só ao contato.
+### 1. Nó Mensagem em modo Template Meta (worker)
+Hoje o `MessageNodeEditor` salva `mode: 'template'`, `templateInstanceId`, `templateId`, `templateLanguage`, `templateVariables`, mas o worker (`worker/index.js`, branch `node.type === 'message'`) só lê `node.data.content` e dispara texto via UAZAPI. Vamos:
 
-- Quando uma mensagem chega (webhook UAZAPI ou Meta), o sistema já procura/crea a conversation pelo `whatsapp_instance_id` correto. Vamos garantir esse comportamento e **não** reaproveitar uma conversa de outra instância.
-- Na **Inbox**, agrupar conversas pelo contato mas exibir cada thread com um **badge do canal** ("Oficial - Meta" / "UAZAPI - Número X"). O usuário pode alternar entre as threads abertas do mesmo contato.
-- No **detalhe do contato** e no **card da Oportunidade**, listar todas as conversas vinculadas (com badge do provedor) em vez de assumir uma única.
-- No "Iniciar conversa" (`StartConversationDialog`), exigir escolha de **instância** quando o tenant tem mais de uma; isso já está parcialmente feito, vamos reforçar.
+- Detectar `node.data.mode === 'template'` no executor.
+- Resolver provider da conversa via `whatsapp_instance_id`. Se for `meta_cloud` → enfileirar `send_whatsapp_template` (handler já existe no worker), passando `template_id`, `language`, `variables` interpoladas com `{{contact.name}}`, `{{contact.phone}}`, `{{contact.email}}`, e demais `ctx.variables`.
+- Se a conversa for UAZAPI ou não tiver instância → cair no `node.data.content` (fallback de texto livre). Se também estiver vazio, log e segue.
 
-## 2. Enviar template Meta a partir da Inbox e do Card
+### 2. Roteamento por instância no envio de mensagem livre
+Tanto o nó Mensagem (modo texto) quanto a Ação `send_whatsapp` hoje sempre vão para UAZAPI. Vamos:
 
-- **Inbox**: o `SendTemplateDialog` já existe. Adicionar o botão "Enviar template" sempre disponível quando a conversa estiver vinculada a uma instância `meta_cloud` (não só quando expira a janela 24h). Para conversas em UAZAPI, o botão fica oculto.
-- **Card da Oportunidade** (`OpportunityDetail`): novo botão "Enviar template Meta" que:
-  - Se o contato já tem conversa Meta aberta → reusa.
-  - Se não tem → pergunta qual instância Meta usar, cria a conversa e envia.
-- Aproveita o mesmo `SendTemplateDialog` (já lê `whatsapp_message_templates` filtrando por `status = 'APPROVED'`).
+- Antes de enfileirar `send_whatsapp`, ler `conversations.whatsapp_instance_id` da conversa e o `provider` da instância.
+- Se `meta_cloud` → invocar `wa-meta-send` com `type: 'text'` (mesma rota que o `whatsappRouter` do front usa).
+- Se `uazapi` ou indefinido → caminho atual (`enqueue_job send_whatsapp`).
+- Reutilizar helper inline no worker (sem importar do `src`, que não roda no Node).
 
-## 3. Automações cientes do canal (mudança de coluna do Kanban etc.)
+### 3. Ação `move_stage` (UI + worker)
+- **UI** (`FlowBuilderPage.tsx`): quando `actionType === 'move_stage'`, mostrar dois selects encadeados — Pipeline → Etapa de destino — gravando `config.pipeline_id` e `config.stage_id`.
+- **Worker**: adicionar `case 'move_stage'` no switch de ações. Procura a oportunidade aberta do contato no pipeline alvo (ou cria se faltar via fallback simples — a definir: por ora só move se já existir; senão log e segue).
 
-A `AutomationsPage` já tem a action **`send_template`** (Meta) com seletor de instância. Falta cobrir UAZAPI e dar clareza:
+### 4. Ação `create_opportunity` com pipeline/etapa configuráveis
+Hoje sempre usa o pipeline `is_default = true` e a primeira etapa. Vamos:
 
-- Renomear/duplicar action `send_whatsapp` para deixar explícito:
-  - **`send_whatsapp_text`** (UAZAPI ou Meta texto livre — só funciona se houver janela 24h aberta no Meta)
-  - **`send_whatsapp_template`** (somente Meta, exige instância + template)
-- Em ambas, adicionar campo opcional **"Instância WhatsApp"**:
-  - Se vazio → usa a instância da conversa atual do contato (se existir) ou a instância padrão do tenant.
-  - Se preenchido → força aquela instância (ex.: "todo card que cair em 'Aguardando confirmação' dispara template Meta na instância oficial").
-- No `worker/automation-handler.js`, o handler de `send_whatsapp` passa a:
-  1. Resolver provider via instância escolhida.
-  2. Se for `meta_cloud` e ação for template → invocar `wa-meta-send` com `type: 'template'`.
-  3. Se for `meta_cloud` e janela 24h expirou → cair em fallback configurável (template default ou erro registrado).
-  4. Se for UAZAPI → caminho atual.
-- Nas condições do trigger `opportunity_stage_changed`, manter o que já existe (from/to stage). Sem mudança de schema.
+- **UI**: campos opcionais Pipeline e Etapa inicial (mantendo o default quando vazios).
+- **Worker**: respeitar `config.pipeline_id` / `config.stage_id` se preenchidos.
 
-## 4. Sugestões adicionais de gestão
+### 5. Status final em `flow_executions`
+Hoje a linha em `flow_executions` é criada com `status: 'running'` e nunca é atualizada ao terminar. Vamos:
 
-a) **Instância padrão por pipeline / por tag**: configurar no pipeline qual instância (e qual provedor) é a "preferida" para novos leads daquele funil. Reduz a chance do operador escolher errado.
+- Em sucesso (loop terminou normal ou estourou `MAX_STEPS`): `update status = 'completed'`, `finished_at = now()`.
+- Em erro (catch): `update status = 'failed'`, `last_error = ...`, `finished_at = now()`.
 
-b) **Política de fallback 24h Meta**: campo no tenant settings: "Quando a janela 24h expirar, usar template X automaticamente" — usado pelo router e por automações de envio livre.
+## Arquivos tocados
 
-c) **Indicador visual no Kanban**: ícone pequeno no card mostrando o canal da última conversa (Meta oficial vs UAZAPI), para o gestor bater o olho e entender.
+- `worker/index.js` — branch `message` (template + roteamento), branch `action` (`move_stage`, `create_opportunity` com pipeline/etapa, `send_whatsapp` roteado), update final em `flow_executions`.
+- `src/pages/FlowBuilderPage.tsx` — editor das ações `move_stage` e `create_opportunity` (selects de pipeline/etapa).
 
-d) **Página única "Canais WhatsApp"** em Configurações reunindo:
-   - Conexões UAZAPI + Meta Cloud (cards atuais).
-   - Templates Meta (aba já criada).
-   - Política de fallback 24h.
-   - Mapeamento "instância padrão por pipeline".
+## Sem mudanças de schema
 
-e) **Logs de envio unificados**: já temos `messages` com `provider_metadata`. Adicionar uma view simples em Configurações > Diagnóstico mostrando últimos envios por instância com status (entregue/lido/erro), útil para depurar quando algo "não chega".
+`flow_executions` já tem colunas `status`, `last_error`, `finished_at` (verificável; se faltar `finished_at` ou `last_error`, faço migration mínima junto). Tabelas `pipelines` e `stages` já existem com os campos usados.
 
-f) **Bloqueio de duplicidade**: ao iniciar conversa manualmente, se já existir conversa aberta com o mesmo contato em **outra** instância, mostrar aviso "já existe conversa ativa em [Instância X] — deseja abrir paralela?" para evitar atendimentos cruzados sem querer.
+## Fora desta onda (vai para Onda 2+)
 
-## Arquivos que devem ser tocados (resumo)
+- Delay > 1 min de verdade (precisa pausar/retomar execução).
+- Pergunta funcional com envio de texto e espera pela resposta do usuário.
+- Lock anti-duplicação por contato e gatilhos `lead_created` / `tag_added` / `keyword_match` / `manual`.
+- Toggle "Ativo" na lista, página de Execuções, modo simulação.
 
-- `src/components/inbox/ChatPanel.tsx` — botão "Enviar template" sempre visível em conv Meta + badge do canal.
-- `src/components/inbox/ConversationsList` (onde lista threads) — agrupar/exibir múltiplas conversas por contato.
-- `src/components/crm/OpportunityDetail.tsx` — botão "Enviar template Meta" + lista de conversas por instância.
-- `src/components/crm/StartConversationDialog.tsx` — reforçar seletor de instância e aviso de duplicidade.
-- `src/pages/AutomationsPage.tsx` — separar actions `send_whatsapp_text` vs `send_whatsapp_template`, seletor de instância.
-- `worker/automation-handler.js` — roteamento por instância + suporte a template + fallback 24h.
-- `src/pages/SettingsPage.tsx` (+ novos componentes pequenos) — política de fallback e mapeamento por pipeline.
-- `src/lib/whatsappRouter.ts` — helper `resolveInstanceForContact(contactId, preferred)` reutilizável.
+## Como vou validar
 
-## Sem mudanças destrutivas
+1. Criar fluxo `message_received` com nó Mensagem em modo Template e disparar via mensagem em conversa Meta — confirmar que `wa-meta-templates` recebe a chamada.
+2. Mesmo fluxo, mas conversa UAZAPI — confirmar que cai no fallback de texto.
+3. Fluxo com ação `move_stage` configurada — mover oportunidade e verificar `stage_id` atualizado.
+4. Conferir `flow_executions` ganhando `status = 'completed'` ao final.
 
-- Sem migrations obrigatórias agora. Configurações novas (fallback, instância por pipeline) podem morar em `tenants.settings` (jsonb) ou em colunas opcionais — decidimos na hora de implementar conforme você priorizar.
-
-## Fora do escopo deste plano
-
-- Criar/submeter templates Meta direto pelo app.
-- Migração automática de histórico de uma instância pra outra.
-
----
-
-**Pergunta antes de implementar:** quer que eu ataque tudo isso em uma leva só, ou prefere fatiar? Sugiro a ordem:
-1. Botão de template no Inbox e no Card (ganho imediato).
-2. Automações com seletor de instância + template.
-3. Múltiplas conversas por contato (UI) + aviso de duplicidade.
-4. Política de fallback 24h e instância padrão por pipeline.
-5. Diagnóstico de envios.
+Posso seguir?
