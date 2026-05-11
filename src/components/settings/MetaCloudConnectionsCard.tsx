@@ -378,16 +378,31 @@ export default function MetaCloudConnectionsCard() {
               <Input id="meta-waba-id" autoComplete="off" value={wabaId} onChange={e => setWabaId(e.target.value)} placeholder="987654321098765" />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="meta-token">Access Token (System User permanente) *</Label>
+              <Label htmlFor="meta-token">Access Token *</Label>
               <Input id="meta-token" type="password" autoComplete="off" value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="EAAG..." />
+              <div className="flex gap-3 pt-1 text-xs">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={tokenType === 'system_user'} onChange={() => setTokenType('system_user')} />
+                  <span>System User (permanente) — recomendado</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={tokenType === 'user'} onChange={() => setTokenType('user')} />
+                  <span>Usuário (curta duração)</span>
+                </label>
+              </div>
             </div>
             <div className="space-y-1">
               <Label htmlFor="meta-secret">App Secret (recomendado para validação HMAC)</Label>
               <Input id="meta-secret" type="password" autoComplete="off" value={appSecret} onChange={e => setAppSecret(e.target.value)} placeholder="opcional, mas recomendado" />
             </div>
-            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground flex gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Após salvar, copie a Webhook URL e o Verify Token gerados e configure no app Meta Business em <code>WhatsApp → Configuration → Webhook</code>.</span>
+            <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1.5">
+              <div className="flex gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>Após salvar, copie a Webhook URL e o Verify Token gerados e configure no app Meta Business em <code>WhatsApp → Configuration → Webhook</code>.</span>
+              </div>
+              <div className="pl-6 opacity-90">
+                <strong>Como gerar token permanente:</strong> Meta Business Settings → Users → System Users → Add → Generate token com permissões <code>whatsapp_business_management</code> + <code>whatsapp_business_messaging</code>.
+              </div>
             </div>
           </div>
           <DialogFooter>
