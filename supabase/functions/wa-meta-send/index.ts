@@ -95,14 +95,14 @@ serve(async (req) => {
     let instanceId = body.whatsapp_instance_id;
     let conversation: any = null;
 
-    if (!instanceId && body.conversation_id) {
+    if (body.conversation_id) {
       const { data: conv } = await supabaseAdmin
         .from("conversations")
         .select("id, tenant_id, contact_id, whatsapp_instance_id, last_customer_message_at")
         .eq("id", body.conversation_id)
         .single();
       conversation = conv;
-      instanceId = conv?.whatsapp_instance_id || undefined;
+      if (!instanceId) instanceId = conv?.whatsapp_instance_id || undefined;
     }
 
     if (!instanceId) {
