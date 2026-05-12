@@ -514,15 +514,58 @@ const handlers = {
       .replace(/\{\{contact\.phone\}\}/g, contact?.phone || '')
       : s);
 
-    // Build BODY parameters from template_variables
-    const bodyComp = (template.components || []).find((c) => (c.type || '').toUpperCase() === 'BODY');
-    const placeholders = bodyComp?.text ? Array.from(new Set((bodyComp.text.match(/\{\{(\d+)\}\}/g) || [])
-      .map((m) => m.replace(/[{}]/g, '')))).sort((a, b) => Number(a) - Number(b)) : [];
+    // Build components for HEADER (text), BODY and URL BUTTONS — supports
+    // both positional ({{1}}) and named ({{nome}}) placeholders.
+    const VAR_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+    const extractKeys = (text) => {
+      if (!text) return [];
+      const seen = new Set();
+      const out = [];
+      let m;
+      VAR_RE.lastIndex = 0;
+      while ((m = VAR_RE.exec(text)) !== null) {
+        if (seen.has(m[1])) continue;
+        seen.add(m[1]);
+        out.push({ key: m[1], named: !/^\d+$/.test(m[1]) });
+      }
+      out.sort((a, b) => (!a.named && !b.named ? Number(a.key) - Number(b.key) : 0));
+      return out;
+    };
+    const valueFor = (slotId, key) => {
+      // Accept new slot-keyed format (header:nome, body:1) and legacy bare key ("1", "nome")
+      const raw = template_variables?.[slotId] ?? template_variables?.[key] ?? '';
+      return interp(raw);
+    };
+    const toParam = (slotId, k) => {
+      const text = valueFor(slotId, k.key);
+      return k.named ? { type: 'text', parameter_name: k.key, text } : { type: 'text', text };
+    };
+
     const components = [];
-    if (placeholders.length > 0) {
-      components.push({
-        type: 'body',
-        parameters: placeholders.map((p) => ({ type: 'text', text: interp(template_variables?.[p] ?? '') })),
+    const comps = template.components || [];
+    const headerC = comps.find((c) => String(c.type).toUpperCase() === 'HEADER' && String(c.format || 'TEXT').toUpperCase() === 'TEXT');
+    const bodyC = comps.find((c) => String(c.type).toUpperCase() === 'BODY');
+    const buttonsC = comps.find((c) => String(c.type).toUpperCase() === 'BUTTONS');
+
+    if (headerC?.text) {
+      const keys = extractKeys(headerC.text);
+      if (keys.length) components.push({ type: 'header', parameters: keys.map((k) => toParam(`header:${k.key}`, k)) });
+    }
+    if (bodyC?.text) {
+      const keys = extractKeys(bodyC.text);
+      if (keys.length) components.push({ type: 'body', parameters: keys.map((k) => toParam(`body:${k.key}`, k)) });
+    }
+    if (Array.isArray(buttonsC?.buttons)) {
+      buttonsC.buttons.forEach((btn, idx) => {
+        if (String(btn?.type).toUpperCase() !== 'URL') return;
+        const keys = extractKeys(btn.url || '');
+        if (!keys.length) return;
+        components.push({
+          type: 'button',
+          sub_type: 'url',
+          index: String(idx),
+          parameters: keys.map((k) => ({ type: 'text', text: valueFor(`button:${idx}:${k.key}`, k.key) })),
+        });
       });
     }
 
