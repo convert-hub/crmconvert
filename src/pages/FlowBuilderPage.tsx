@@ -319,16 +319,25 @@ export default function FlowBuilderPage() {
 
           <div className="pt-3 border-t border-border mt-3">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1 pb-1">Gatilho</p>
-            <Select value={triggerType} onValueChange={setTriggerType}>
+            <Select value={triggerType} onValueChange={(v) => { setTriggerType(v); setTriggerConfig({}); }}>
               <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="message_received">Mensagem recebida</SelectItem>
-                <SelectItem value="lead_created">Lead criado</SelectItem>
-                <SelectItem value="tag_added">Tag adicionada</SelectItem>
                 <SelectItem value="keyword_match">Palavra-chave</SelectItem>
+                <SelectItem value="tag_added">Tag adicionada</SelectItem>
+                <SelectItem value="lead_created">Lead criado</SelectItem>
+                <SelectItem value="webhook">Webhook</SelectItem>
                 <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
             </Select>
+            <div className="mt-2">
+              <TriggerConfigPanel
+                triggerType={triggerType}
+                config={triggerConfig}
+                onChange={setTriggerConfig}
+                flowId={selectedFlow?.id}
+              />
+            </div>
           </div>
 
           <div className="pt-3 border-t border-border mt-3">
