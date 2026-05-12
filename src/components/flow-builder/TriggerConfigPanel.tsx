@@ -103,9 +103,8 @@ export default function TriggerConfigPanel({ triggerType, config, onChange, flow
         <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Tag</Label>
         <div className="mt-1">
           <TagPickerSelect
-            value={config.tag ? [config.tag] : []}
-            onChange={(v) => set({ tag: v[0] || undefined })}
-            singleSelect
+            value={config.tag || ''}
+            onChange={(v) => set({ tag: v || undefined })}
           />
         </div>
       </div>
