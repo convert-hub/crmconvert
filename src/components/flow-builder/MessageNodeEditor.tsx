@@ -145,10 +145,11 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
               {slots.map(s => (
                 <div key={s.id} className="space-y-1">
                   <Label className="text-[11px]">{s.label}</Label>
-                  <Input
+                  <VariableInput
+                    variables={flowVars}
                     value={data.templateVariables?.[s.id] ?? ''}
-                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: e.target.value } })}
-                    placeholder="Texto fixo ou {{contact.name}}"
+                    onChange={v => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: v } })}
+                    placeholder="Texto fixo ou variável"
                     className="h-8 text-xs"
                   />
                 </div>
@@ -156,13 +157,13 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
               {selectedTpl && slots.length === 0 && (
                 <p className="text-[10px] text-muted-foreground">Este template não tem variáveis.</p>
               )}
-              <p className="text-[10px] text-muted-foreground">Variáveis dinâmicas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
 
               <div className="space-y-1">
                 <Label className="text-[11px]">Fallback texto livre (UAZAPI / janela aberta)</Label>
-                <Textarea
+                <VariableTextarea
+                  variables={flowVars}
                   value={data.content ?? ''}
-                  onChange={e => onChange({ ...data, content: e.target.value })}
+                  onChange={v => onChange({ ...data, content: v })}
                   rows={2} className="text-xs"
                   placeholder="Texto opcional usado em conversas UAZAPI"
                 />
