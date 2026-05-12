@@ -39,6 +39,7 @@ import QuestionNode from '@/components/flow-builder/QuestionNode';
 import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
+import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -84,6 +85,7 @@ export default function FlowBuilderPage() {
   const [flowDescription, setFlowDescription] = useState('');
   const [flowActive, setFlowActive] = useState(false);
   const [triggerType, setTriggerType] = useState('message_received');
+  const [triggerConfig, setTriggerConfig] = useState<TriggerConfig>({});
   const [saving, setSaving] = useState(false);
   const [listView, setListView] = useState(true);
   const [nodeEditOpen, setNodeEditOpen] = useState(false);
@@ -115,6 +117,7 @@ export default function FlowBuilderPage() {
     setFlowDescription(flow.description ?? '');
     setFlowActive(flow.is_active);
     setTriggerType(flow.trigger_type);
+    setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
     setNodes((flow.nodes as Node[]) || []);
     setEdges((flow.edges as Edge[]) || []);
     setListView(false);
@@ -126,6 +129,7 @@ export default function FlowBuilderPage() {
     setFlowDescription('');
     setFlowActive(false);
     setTriggerType('message_received');
+    setTriggerConfig({});
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
@@ -164,7 +168,7 @@ export default function FlowBuilderPage() {
       name: flowName,
       description: flowDescription || null,
       trigger_type: triggerType,
-      trigger_config: {},
+      trigger_config: triggerConfig as any,
       nodes: nodes as any,
       edges: edges as any,
       is_active: flowActive,
@@ -315,16 +319,25 @@ export default function FlowBuilderPage() {
 
           <div className="pt-3 border-t border-border mt-3">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1 pb-1">Gatilho</p>
-            <Select value={triggerType} onValueChange={setTriggerType}>
+            <Select value={triggerType} onValueChange={(v) => { setTriggerType(v); setTriggerConfig({}); }}>
               <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="message_received">Mensagem recebida</SelectItem>
-                <SelectItem value="lead_created">Lead criado</SelectItem>
-                <SelectItem value="tag_added">Tag adicionada</SelectItem>
                 <SelectItem value="keyword_match">Palavra-chave</SelectItem>
+                <SelectItem value="tag_added">Tag adicionada</SelectItem>
+                <SelectItem value="lead_created">Lead criado</SelectItem>
+                <SelectItem value="webhook">Webhook</SelectItem>
                 <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
             </Select>
+            <div className="mt-2">
+              <TriggerConfigPanel
+                triggerType={triggerType}
+                config={triggerConfig}
+                onChange={setTriggerConfig}
+                flowId={selectedFlow?.id}
+              />
+            </div>
           </div>
 
           <div className="pt-3 border-t border-border mt-3">
