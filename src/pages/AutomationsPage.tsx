@@ -314,15 +314,15 @@ export default function AutomationsPage() {
             {placeholders.map((p: string) => (
               <div key={p} className="flex items-center gap-2">
                 <Label className="text-[11px] whitespace-nowrap">Variável {`{{${p}}}`}</Label>
-                <Input
+                <VariableInput
+                  variables={flowVars}
                   value={action.template_variables?.[p] ?? ''}
-                  onChange={e => updateAction(index, { template_variables: { ...(action.template_variables || {}), [p]: e.target.value } })}
-                  placeholder="Texto fixo ou {{contact.name}}, {{contact.email}}"
+                  onChange={v => updateAction(index, { template_variables: { ...(action.template_variables || {}), [p]: v } })}
+                  placeholder="Texto fixo ou variável"
                   className="h-8 text-xs flex-1"
                 />
               </div>
             ))}
-            <p className="text-[10px] text-muted-foreground">Use <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code> ou texto fixo nas variáveis.</p>
           </div>
         );
       }
