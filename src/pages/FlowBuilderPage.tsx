@@ -344,6 +344,8 @@ export default function FlowBuilderPage() {
             onConnect={onConnect}
             onNodeDoubleClick={onNodeDoubleClick}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: 'deletable', animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: 'hsl(var(--primary))' } }}
             fitView
             deleteKeyCode="Delete"
             className="bg-background"
