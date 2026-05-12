@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquare, Move } from 'lucide-react';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
+import { VariableInput } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
