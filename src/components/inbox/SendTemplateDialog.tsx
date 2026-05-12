@@ -74,6 +74,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   }, [slots, values]);
 
   const missingCount = slots.filter(s => !values[s.id]?.trim()).length;
+  const tplVars = useSystemVariables({ tenantId, scope: 'flow' });
 
   const handleSend = async () => {
     if (!selected) return;
