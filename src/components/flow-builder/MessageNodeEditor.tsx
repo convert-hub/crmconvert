@@ -88,11 +88,12 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
       {mode === 'text' && (
         <div className="space-y-1.5">
           <Label className="text-xs">Conteúdo da mensagem</Label>
-          <Textarea
+          <VariableTextarea
+            variables={flowVars}
             value={data.content ?? ''}
-            onChange={e => onChange({ ...data, content: e.target.value })}
+            onChange={v => onChange({ ...data, content: v })}
             rows={4} className="text-sm"
-            placeholder="Olá {{nome}}, como posso ajudar?"
+            placeholder="Olá {{contact.name}}, como posso ajudar?"
           />
         </div>
       )}
