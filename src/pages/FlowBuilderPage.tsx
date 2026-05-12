@@ -38,6 +38,7 @@ import ActionNode from '@/components/flow-builder/ActionNode';
 import QuestionNode from '@/components/flow-builder/QuestionNode';
 import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
+import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -48,6 +49,8 @@ const nodeTypes = {
   question: QuestionNode,
   randomizer: RandomizerNode,
 };
+
+const edgeTypes = { deletable: DeletableEdge };
 
 const NODE_PALETTE = [
   { type: 'trigger', label: 'Gatilho', icon: Play, color: 'text-green-500' },
