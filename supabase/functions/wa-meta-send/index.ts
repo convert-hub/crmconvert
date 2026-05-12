@@ -18,6 +18,57 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+// Renderiza preview de texto a partir dos componentes do template + valores enviados.
+// templateComponents: vindo de whatsapp_message_templates.components (Meta schema com placeholders)
+// sentComponents: o que foi enviado para Meta no payload (header/body/buttons com parameters)
+function renderTemplatePreview(
+  templateComponents: any,
+  sentComponents: any
+): string {
+  if (!Array.isArray(templateComponents)) return "";
+  const sentByType = new Map<string, any>();
+  if (Array.isArray(sentComponents)) {
+    for (const c of sentComponents) {
+      if (c?.type) sentByType.set(String(c.type).toLowerCase(), c);
+    }
+  }
+
+  const substitute = (text: string, params: any[]): string => {
+    if (!text) return "";
+    let out = String(text);
+    if (!Array.isArray(params)) return out;
+    // posicional {{1}}..{{n}}
+    params.forEach((p, idx) => {
+      const val = p?.text ?? "";
+      const re = new RegExp(`\\{\\{\\s*${idx + 1}\\s*\\}\\}`, "g");
+      out = out.replace(re, val);
+    });
+    // nomeado {{nome}} via parameter_name
+    for (const p of params) {
+      if (p?.parameter_name) {
+        const re = new RegExp(`\\{\\{\\s*${p.parameter_name}\\s*\\}\\}`, "g");
+        out = out.replace(re, p?.text ?? "");
+      }
+    }
+    return out;
+  };
+
+  const parts: string[] = [];
+  for (const comp of templateComponents) {
+    const ctype = String(comp?.type || "").toUpperCase();
+    if (ctype === "HEADER" && comp?.format === "TEXT" && comp?.text) {
+      const sent = sentByType.get("header");
+      parts.push(substitute(comp.text, sent?.parameters ?? []));
+    } else if (ctype === "BODY" && comp?.text) {
+      const sent = sentByType.get("body");
+      parts.push(substitute(comp.text, sent?.parameters ?? []));
+    } else if (ctype === "FOOTER" && comp?.text) {
+      parts.push(comp.text);
+    }
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
 interface SendBody {
   action?: "send" | "test_connection" | "upload_media" | "send_media_base64" | "download_media";
   conversation_id?: string;
