@@ -1306,31 +1306,74 @@ function normalizeForPhraseMatch(str) {
     .trim();
 }
 
+async function enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData }) {
+  await supabase.rpc('enqueue_job', {
+    _type: 'execute_flow',
+    _payload: JSON.stringify({
+      flow_id: flow.id,
+      tenant_id: tenantId,
+      contact_id: contactId,
+      conversation_id: conversationId,
+      trigger_data: triggerData,
+    }),
+    _tenant_id: tenantId,
+    _idempotency_key: `flow-${flow.id}-${conversationId || contactId}-${Date.now()}`,
+  });
+}
+
+function keywordMatches(text, cfg) {
+  const keywords = Array.isArray(cfg?.keywords) ? cfg.keywords : [];
+  if (keywords.length === 0) return false;
+  const mode = cfg?.match || 'contains';
+  const cs = !!cfg?.case_sensitive;
+  const haystack = cs ? text : normalizeForPhraseMatch(text);
+  return keywords.some((kw) => {
+    if (!kw) return false;
+    const needle = cs ? String(kw) : normalizeForPhraseMatch(String(kw));
+    if (!needle) return false;
+    if (mode === 'equals') return haystack === needle;
+    if (mode === 'starts_with') return haystack.startsWith(needle);
+    return haystack.includes(needle);
+  });
+}
+
 async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
   const { data: flows } = await supabase.from('chatbot_flows')
-    .select('id')
+    .select('id, trigger_type, trigger_config')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
-    .eq('trigger_type', 'message_received');
+    .in('trigger_type', ['message_received', 'keyword_match']);
+
+  if (!flows || flows.length === 0) return;
+
+  const triggerData = { message: messageText, message_text: messageText, last_answer: messageText };
+
+  for (const flow of flows) {
+    if (flow.trigger_type === 'keyword_match' && !keywordMatches(messageText || '', flow.trigger_config)) {
+      continue;
+    }
+    await enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData });
+  }
+}
+
+async function triggerLeadCreatedFlows(tenantId, contact) {
+  const { data: flows } = await supabase.from('chatbot_flows')
+    .select('id, trigger_type, trigger_config')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .eq('trigger_type', 'lead_created');
 
   if (!flows || flows.length === 0) return;
 
   for (const flow of flows) {
-    await supabase.rpc('enqueue_job', {
-      _type: 'execute_flow',
-      _payload: JSON.stringify({
-        flow_id: flow.id,
-        tenant_id: tenantId,
-        contact_id: contactId,
-        conversation_id: conversationId,
-        trigger_data: {
-          message: messageText,
-          message_text: messageText,
-          last_answer: messageText,
-        },
-      }),
-      _tenant_id: tenantId,
-      _idempotency_key: `flow-${flow.id}-${conversationId}-${Date.now()}`,
+    const cfg = flow.trigger_config || {};
+    if (cfg.source && contact?.source !== cfg.source) continue;
+    if (cfg.require_phone && !contact?.phone) continue;
+    await enqueueFlowExecution(flow, {
+      tenantId,
+      contactId: contact?.id,
+      conversationId: null,
+      triggerData: { contact_name: contact?.name, contact_phone: contact?.phone, source: contact?.source },
     });
   }
 }
