@@ -38,6 +38,7 @@ import ActionNode from '@/components/flow-builder/ActionNode';
 import QuestionNode from '@/components/flow-builder/QuestionNode';
 import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
+import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -48,6 +49,8 @@ const nodeTypes = {
   question: QuestionNode,
   randomizer: RandomizerNode,
 };
+
+const edgeTypes = { deletable: DeletableEdge };
 
 const NODE_PALETTE = [
   { type: 'trigger', label: 'Gatilho', icon: Play, color: 'text-green-500' },
@@ -101,7 +104,7 @@ export default function FlowBuilderPage() {
   const onConnect = useCallback(
     (params: Connection) =>
       setEdges((eds) =>
-        addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed }, animated: true, style: { stroke: 'hsl(var(--primary))' } }, eds)
+        addEdge({ ...params, type: 'deletable', markerEnd: { type: MarkerType.ArrowClosed }, animated: true, style: { stroke: 'hsl(var(--primary))' } }, eds)
       ),
     [setEdges]
   );
@@ -341,6 +344,8 @@ export default function FlowBuilderPage() {
             onConnect={onConnect}
             onNodeDoubleClick={onNodeDoubleClick}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: 'deletable', animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: 'hsl(var(--primary))' } }}
             fitView
             deleteKeyCode="Delete"
             className="bg-background"
