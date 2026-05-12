@@ -39,6 +39,7 @@ import QuestionNode from '@/components/flow-builder/QuestionNode';
 import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
+import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
 
 const nodeTypes = {
   trigger: TriggerNode,
