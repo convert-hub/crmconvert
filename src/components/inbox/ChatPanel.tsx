@@ -594,22 +594,30 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
               <FileCheck2 className="h-4 w-4" />
             </Button>
           )}
-          <Textarea value={newMsg} onChange={e => {
-            const val = e.target.value;
-            setNewMsg(val);
-            // Detect / at start for quick replies
-            if (val.startsWith('/') && val.length > 1) {
-              setQrFilter(val.slice(1).toLowerCase());
-              setShowQuickReplies(true);
-            } else if (val === '/') {
-              setQrFilter('');
-              setShowQuickReplies(true);
-            } else {
-              setShowQuickReplies(false);
-            }
-          }} placeholder={isInternal ? "Escreva uma nota interna..." : "Mensagem..."}
-            className={cn("min-h-[40px] max-h-[120px] resize-none rounded-xl text-sm", isInternal && "border-warning/50 bg-warning/5")}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+          <div className="relative flex-1">
+            <Textarea value={newMsg} onChange={e => {
+              const val = e.target.value;
+              setNewMsg(val);
+              if (val.startsWith('/') && val.length > 1) {
+                setQrFilter(val.slice(1).toLowerCase());
+                setShowQuickReplies(true);
+              } else if (val === '/') {
+                setQrFilter('');
+                setShowQuickReplies(true);
+              } else {
+                setShowQuickReplies(false);
+              }
+            }} placeholder={isInternal ? "Escreva uma nota interna..." : "Mensagem..."}
+              className={cn("min-h-[40px] max-h-[120px] resize-none rounded-xl text-sm pr-9", isInternal && "border-warning/50 bg-warning/5")}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+            <div className="absolute right-1 top-1">
+              <VariablePicker
+                size="xs"
+                variables={composerVars}
+                onPick={(token) => setNewMsg(prev => prev + token)}
+              />
+            </div>
+          </div>
           <Button size="icon" onClick={handleSend} disabled={sending || !newMsg.trim()}
             className={cn("rounded-xl h-10 w-10", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')}>
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : isInternal ? <Lock className="h-4 w-4" /> : <Send className="h-4 w-4" />}
