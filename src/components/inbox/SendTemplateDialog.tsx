@@ -9,6 +9,8 @@ import { Loader2, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WhatsAppMessageTemplate } from '@/types/crm';
 import { extractTemplateSlots, buildMetaComponents, renderPreview, type TemplateSlot } from '@/lib/metaTemplateVars';
+import { VariableInput } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface Props {
   open: boolean;
