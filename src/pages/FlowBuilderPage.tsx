@@ -129,6 +129,7 @@ export default function FlowBuilderPage() {
     setFlowDescription('');
     setFlowActive(false);
     setTriggerType('message_received');
+    setTriggerConfig({});
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
