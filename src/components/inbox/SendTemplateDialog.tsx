@@ -161,10 +161,11 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
             {slots.map(s => (
               <div key={s.id} className="space-y-1">
                 <Label htmlFor={`var-${s.id}`} className="text-xs">{s.label}</Label>
-                <Input
+                <VariableInput
                   id={`var-${s.id}`}
+                  variables={tplVars}
                   value={values[s.id] ?? ''}
-                  onChange={e => setValues(v => ({ ...v, [s.id]: e.target.value }))}
+                  onChange={v => setValues(prev => ({ ...prev, [s.id]: v }))}
                   placeholder={s.named ? s.key : `Valor para {{${s.key}}}`}
                 />
               </div>
