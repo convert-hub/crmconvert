@@ -117,6 +117,7 @@ export default function FlowBuilderPage() {
     setFlowDescription(flow.description ?? '');
     setFlowActive(flow.is_active);
     setTriggerType(flow.trigger_type);
+    setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
     setNodes((flow.nodes as Node[]) || []);
     setEdges((flow.edges as Edge[]) || []);
     setListView(false);
