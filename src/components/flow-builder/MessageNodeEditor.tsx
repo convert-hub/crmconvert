@@ -29,6 +29,7 @@ interface Template { id: string; name: string; language: string; whatsapp_instan
 
 export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
   const mode = data.mode ?? 'text';
+  const flowVars = useSystemVariables({ tenantId, scope: 'flow' });
   const [instances, setInstances] = useState<MetaInstance[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
 
