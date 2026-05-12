@@ -44,6 +44,7 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
       .then(({ data }) => setTemplates((data as any) ?? []));
   }, [tenantId]);
 
+  const selectedTpl = templates.find(t => t.id === data.templateId);
   const slots = useMemo(() => extractTemplateSlots(selectedTpl?.components ?? []), [selectedTpl]);
   const headerComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'HEADER');
   const bodyComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'BODY');
