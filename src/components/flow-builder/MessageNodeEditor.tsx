@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { extractTemplateSlots, renderPreview } from '@/lib/metaTemplateVars';
+import { VariableInput, VariableTextarea } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface MessageNodeData {
   label?: string;
@@ -29,6 +29,7 @@ interface Template { id: string; name: string; language: string; whatsapp_instan
 
 export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
   const mode = data.mode ?? 'text';
+  const flowVars = useSystemVariables({ tenantId, scope: 'flow' });
   const [instances, setInstances] = useState<MetaInstance[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
 
@@ -87,11 +88,12 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
       {mode === 'text' && (
         <div className="space-y-1.5">
           <Label className="text-xs">Conteúdo da mensagem</Label>
-          <Textarea
+          <VariableTextarea
+            variables={flowVars}
             value={data.content ?? ''}
-            onChange={e => onChange({ ...data, content: e.target.value })}
+            onChange={v => onChange({ ...data, content: v })}
             rows={4} className="text-sm"
-            placeholder="Olá {{nome}}, como posso ajudar?"
+            placeholder="Olá {{contact.name}}, como posso ajudar?"
           />
         </div>
       )}
@@ -143,10 +145,11 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
               {slots.map(s => (
                 <div key={s.id} className="space-y-1">
                   <Label className="text-[11px]">{s.label}</Label>
-                  <Input
+                  <VariableInput
+                    variables={flowVars}
                     value={data.templateVariables?.[s.id] ?? ''}
-                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: e.target.value } })}
-                    placeholder="Texto fixo ou {{contact.name}}"
+                    onChange={v => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: v } })}
+                    placeholder="Texto fixo ou variável"
                     className="h-8 text-xs"
                   />
                 </div>
@@ -154,13 +157,13 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
               {selectedTpl && slots.length === 0 && (
                 <p className="text-[10px] text-muted-foreground">Este template não tem variáveis.</p>
               )}
-              <p className="text-[10px] text-muted-foreground">Variáveis dinâmicas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
 
               <div className="space-y-1">
                 <Label className="text-[11px]">Fallback texto livre (UAZAPI / janela aberta)</Label>
-                <Textarea
+                <VariableTextarea
+                  variables={flowVars}
                   value={data.content ?? ''}
-                  onChange={e => onChange({ ...data, content: e.target.value })}
+                  onChange={v => onChange({ ...data, content: v })}
                   rows={2} className="text-xs"
                   placeholder="Texto opcional usado em conversas UAZAPI"
                 />

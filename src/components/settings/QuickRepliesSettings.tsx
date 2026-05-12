@@ -10,6 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Trash2, Pencil, Zap } from 'lucide-react';
+import { VariableTextarea } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 import { toast } from 'sonner';
 
 interface QuickReply {
@@ -24,6 +26,7 @@ interface QuickReply {
 
 export default function QuickRepliesSettings() {
   const { tenant, membership, role } = useAuth();
+  const qrVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'quick-reply' });
   const [replies, setReplies] = useState<QuickReply[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -131,10 +134,7 @@ export default function QuickRepliesSettings() {
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Conteúdo</Label>
-                  <Textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Olá {{nome}}, tudo bem? 😊" className="rounded-xl min-h-[100px]" />
-                  <p className="text-[11px] text-muted-foreground">
-                    Variáveis disponíveis: <code className="bg-muted px-1 rounded">{'{{nome}}'}</code> <code className="bg-muted px-1 rounded">{'{{telefone}}'}</code> <code className="bg-muted px-1 rounded">{'{{email}}'}</code>
-                  </p>
+                  <VariableTextarea variables={qrVars} value={content} onChange={setContent} placeholder="Olá {{nome}}, tudo bem? 😊" className="rounded-xl min-h-[100px]" />
                 </div>
                 <Button className="w-full rounded-xl" onClick={handleSave} disabled={!shortcut.trim() || !content.trim()}>
                   {editId ? 'Salvar Alterações' : 'Criar Resposta Rápida'}

@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquare, Move } from 'lucide-react';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
+import { VariableInput } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
@@ -85,6 +87,7 @@ interface Automation {
 
 export default function AutomationsPage() {
   const { tenant } = useAuth();
+  const flowVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'flow' });
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -270,7 +273,7 @@ export default function AutomationsPage() {
       case 'send_whatsapp':
         return (
           <div className="flex-1 space-y-2">
-            <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar (Meta exige janela 24h aberta)" className="h-9 text-xs" />
+            <VariableInput variables={flowVars} value={action.whatsapp_message || ''} onChange={v => updateAction(index, { whatsapp_message: v })} placeholder="Mensagem a enviar (Meta exige janela 24h aberta)" className="h-9 text-xs" />
             <Select value={action.whatsapp_instance_id || '__auto__'} onValueChange={v => updateAction(index, { whatsapp_instance_id: v === '__auto__' ? undefined : v })}>
               <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Instância (opcional)" /></SelectTrigger>
               <SelectContent>
@@ -311,15 +314,15 @@ export default function AutomationsPage() {
             {placeholders.map((p: string) => (
               <div key={p} className="flex items-center gap-2">
                 <Label className="text-[11px] whitespace-nowrap">Variável {`{{${p}}}`}</Label>
-                <Input
+                <VariableInput
+                  variables={flowVars}
                   value={action.template_variables?.[p] ?? ''}
-                  onChange={e => updateAction(index, { template_variables: { ...(action.template_variables || {}), [p]: e.target.value } })}
-                  placeholder="Texto fixo ou {{contact.name}}, {{contact.email}}"
+                  onChange={v => updateAction(index, { template_variables: { ...(action.template_variables || {}), [p]: v } })}
+                  placeholder="Texto fixo ou variável"
                   className="h-8 text-xs flex-1"
                 />
               </div>
             ))}
-            <p className="text-[10px] text-muted-foreground">Use <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code> ou texto fixo nas variáveis.</p>
           </div>
         );
       }

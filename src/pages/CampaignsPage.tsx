@@ -15,6 +15,8 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import type { Campaign, CampaignAudienceFilter } from '@/types/crm';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
+import { VariableInput } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface MetaInstance { id: string; display_name: string | null; instance_name: string; }
 interface Template { id: string; name: string; language: string; whatsapp_instance_id: string; components: any; }
@@ -31,6 +33,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 
 export default function CampaignsPage() {
   const { tenant } = useAuth();
+  const campaignVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'campaign' });
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [instances, setInstances] = useState<MetaInstance[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -236,10 +239,11 @@ export default function CampaignsPage() {
                   {placeholders.map(p => (
                     <div key={p} className="flex items-center gap-2">
                       <Label className="text-[11px] whitespace-nowrap">{`{{${p}}}`}</Label>
-                      <Input
+                      <VariableInput
+                        variables={campaignVars}
                         value={variables[p] ?? ''}
-                        onChange={e => setVariables(v => ({ ...v, [p]: e.target.value }))}
-                        placeholder="Texto fixo ou {{contact.name}} / {{contact.email}}"
+                        onChange={v => setVariables(prev => ({ ...prev, [p]: v }))}
+                        placeholder="Texto fixo ou variável"
                         className="h-8 text-xs flex-1"
                       />
                     </div>
