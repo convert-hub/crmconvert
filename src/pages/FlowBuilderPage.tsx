@@ -104,7 +104,7 @@ export default function FlowBuilderPage() {
   const onConnect = useCallback(
     (params: Connection) =>
       setEdges((eds) =>
-        addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed }, animated: true, style: { stroke: 'hsl(var(--primary))' } }, eds)
+        addEdge({ ...params, type: 'deletable', markerEnd: { type: MarkerType.ArrowClosed }, animated: true, style: { stroke: 'hsl(var(--primary))' } }, eds)
       ),
     [setEdges]
   );
