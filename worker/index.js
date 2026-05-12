@@ -62,10 +62,11 @@ const handlers = {
       contact_id: contact.id,
     });
 
-    // Trigger automations
+    // Trigger automations + flows
     await executeAutomations(supabase, tenant_id, 'lead_created', {
       contact_id: contact.id, source: 'form_webhook',
     });
+    await triggerLeadCreatedFlows(tenant_id, { ...contact, source: 'form_webhook' });
 
     return { contact_id: contact.id };
   },
