@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { extractTemplateSlots, renderPreview } from '@/lib/metaTemplateVars';
 
 interface MessageNodeData {
   label?: string;
@@ -44,10 +45,19 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
   }, [tenantId]);
 
   const selectedTpl = templates.find(t => t.id === data.templateId);
-  const bodyComp = selectedTpl?.components?.find?.((c: any) => c.type === 'BODY');
-  const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? '').match(/\{\{(\d+)\}\}/g) || []))
-    .map((m: string) => m.replace(/[{}]/g, '')).sort((a, b) => Number(a) - Number(b)) : [];
+  const slots = useMemo(() => extractTemplateSlots(selectedTpl?.components ?? []), [selectedTpl]);
+  const headerComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'HEADER');
+  const bodyComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'BODY');
   const tplsForInstance = templates.filter(t => !data.templateInstanceId || t.whatsapp_instance_id === data.templateInstanceId);
+
+  const valuesByKey = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of slots) {
+      const v = data.templateVariables?.[s.id];
+      if (v) out[s.key] = v;
+    }
+    return out;
+  }, [slots, data.templateVariables]);
 
   return (
     <div className="space-y-3">
@@ -123,22 +133,28 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
                 </div>
               </div>
 
-              {selectedTpl && bodyComp?.text && (
-                <div className="rounded-lg bg-muted/50 p-2 text-[11px] whitespace-pre-wrap">{bodyComp.text}</div>
+              {selectedTpl && (headerComp?.text || bodyComp?.text) && (
+                <div className="rounded-lg bg-muted/50 p-2 text-[11px] whitespace-pre-wrap space-y-1">
+                  {headerComp?.text && <p className="font-semibold">{renderPreview(headerComp.text, valuesByKey)}</p>}
+                  {bodyComp?.text && <p>{renderPreview(bodyComp.text, valuesByKey)}</p>}
+                </div>
               )}
 
-              {placeholders.map(p => (
-                <div key={p} className="space-y-1">
-                  <Label className="text-[11px]">Variável {`{{${p}}}`}</Label>
+              {slots.map(s => (
+                <div key={s.id} className="space-y-1">
+                  <Label className="text-[11px]">{s.label}</Label>
                   <Input
-                    value={data.templateVariables?.[p] ?? ''}
-                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [p]: e.target.value } })}
+                    value={data.templateVariables?.[s.id] ?? ''}
+                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: e.target.value } })}
                     placeholder="Texto fixo ou {{contact.name}}"
                     className="h-8 text-xs"
                   />
                 </div>
               ))}
-              <p className="text-[10px] text-muted-foreground">Variáveis suportadas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
+              {selectedTpl && slots.length === 0 && (
+                <p className="text-[10px] text-muted-foreground">Este template não tem variáveis.</p>
+              )}
+              <p className="text-[10px] text-muted-foreground">Variáveis dinâmicas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
 
               <div className="space-y-1">
                 <Label className="text-[11px]">Fallback texto livre (UAZAPI / janela aberta)</Label>

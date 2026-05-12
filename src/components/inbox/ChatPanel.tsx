@@ -626,6 +626,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           tenantId={tenant.id}
           whatsappInstanceId={providerInfo.instance_id}
           conversationId={conversationId}
+          contactName={contact?.name ?? null}
         />
       )}
     </div>
