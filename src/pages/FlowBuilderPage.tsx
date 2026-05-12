@@ -85,6 +85,7 @@ export default function FlowBuilderPage() {
   const [flowDescription, setFlowDescription] = useState('');
   const [flowActive, setFlowActive] = useState(false);
   const [triggerType, setTriggerType] = useState('message_received');
+  const [triggerConfig, setTriggerConfig] = useState<TriggerConfig>({});
   const [saving, setSaving] = useState(false);
   const [listView, setListView] = useState(true);
   const [nodeEditOpen, setNodeEditOpen] = useState(false);
