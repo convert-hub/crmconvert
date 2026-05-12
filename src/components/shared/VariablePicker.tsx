@@ -43,23 +43,26 @@ export default function VariablePicker({ variables, onPick, className, size = 's
           <Braces className={size === 'xs' ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
+      <PopoverContent align="end" className="w-64 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
         <Command>
-          <CommandInput placeholder="Buscar variável..." className="h-9" />
-          <CommandList>
+          <CommandInput placeholder="Buscar campo" className="h-9 border-0 focus:ring-0" />
+          <CommandList className="max-h-72">
             <CommandEmpty>Nenhuma variável.</CommandEmpty>
             {grouped.map(([group, items]) => (
-              <CommandGroup key={group} heading={group}>
+              <CommandGroup
+                key={group}
+                heading={group.toUpperCase()}
+                className="[&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2"
+              >
                 {items.map((v) => (
                   <CommandItem
                     key={`${group}:${v.token}`}
                     value={`${v.label} ${v.token}`}
                     onSelect={() => { onPick(`{{${v.token}}}`); setOpen(false); }}
-                    className="flex flex-col items-start gap-0.5 py-1.5"
+                    title={v.description || `{{${v.token}}}`}
+                    className="px-3 py-1.5 text-sm font-medium cursor-pointer"
                   >
-                    <span className="text-xs font-medium">{v.label}</span>
-                    <span className="text-[10px] font-mono text-muted-foreground">{`{{${v.token}}}`}</span>
-                    {v.description && <span className="text-[10px] text-muted-foreground">{v.description}</span>}
+                    {v.label}
                   </CommandItem>
                 ))}
               </CommandGroup>
