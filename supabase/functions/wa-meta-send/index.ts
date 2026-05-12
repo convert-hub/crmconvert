@@ -333,16 +333,38 @@ serve(async (req) => {
     // Persist outbound message + reset inactivity (best-effort)
     // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
     if (conversation?.id && !body.skip_persist) {
+      let persistContent: string | null = t === "text" ? (body.text ?? "") : (body.caption ?? null);
+      let persistMediaType: string | null = t === "text" || t === "reaction" || t === "template" ? null : t;
+      const persistMeta: Record<string, unknown> = { provider: "meta_cloud", raw: sendData };
+
+      if (t === "template" && body.template) {
+        persistMediaType = "TemplateMessage";
+        persistMeta.template_name = body.template.name;
+        persistMeta.template_language = body.template.language;
+        try {
+          const { data: tpl } = await supabaseAdmin
+            .from("whatsapp_message_templates")
+            .select("components")
+            .eq("whatsapp_instance_id", instanceId)
+            .eq("name", body.template.name)
+            .eq("language", body.template.language)
+            .maybeSingle();
+          persistContent = renderTemplatePreview(tpl?.components, body.template.components) || `[Template: ${body.template.name}]`;
+        } catch (_e) {
+          persistContent = `[Template: ${body.template.name}]`;
+        }
+      }
+
       await supabaseAdmin.from("messages").insert({
         tenant_id: membership!.tenant_id,
         conversation_id: conversation.id,
         direction: "outbound",
-        content: t === "text" ? (body.text ?? "") : (body.caption ?? null),
-        media_type: t === "text" || t === "reaction" || t === "template" ? null : t,
+        content: persistContent,
+        media_type: persistMediaType,
         media_url: body.media_url ?? null,
         provider_message_id: providerMessageId,
         sender_membership_id: membership!.id,
-        provider_metadata: { provider: "meta_cloud", raw: sendData },
+        provider_metadata: persistMeta,
       });
 
       await supabaseAdmin
