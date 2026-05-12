@@ -10,6 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Trash2, Pencil, Zap } from 'lucide-react';
+import { VariableTextarea } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 import { toast } from 'sonner';
 
 interface QuickReply {
