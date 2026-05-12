@@ -26,6 +26,7 @@ interface QuickReply {
 
 export default function QuickRepliesSettings() {
   const { tenant, membership, role } = useAuth();
+  const qrVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'quick-reply' });
   const [replies, setReplies] = useState<QuickReply[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
