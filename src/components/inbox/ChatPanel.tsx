@@ -249,6 +249,7 @@ interface ChatPanelProps {
 
 export default function ChatPanel({ conversationId, contact, channel, status, showHeader = true, className }: ChatPanelProps) {
   const { tenant, membership } = useAuth();
+  const composerVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'inbox-composer' });
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
