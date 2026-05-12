@@ -87,6 +87,7 @@ interface Automation {
 
 export default function AutomationsPage() {
   const { tenant } = useAuth();
+  const flowVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'flow' });
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
