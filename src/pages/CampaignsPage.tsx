@@ -33,6 +33,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 
 export default function CampaignsPage() {
   const { tenant } = useAuth();
+  const campaignVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'campaign' });
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [instances, setInstances] = useState<MetaInstance[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
