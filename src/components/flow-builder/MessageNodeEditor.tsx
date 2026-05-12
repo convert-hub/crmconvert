@@ -133,22 +133,28 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
                 </div>
               </div>
 
-              {selectedTpl && bodyComp?.text && (
-                <div className="rounded-lg bg-muted/50 p-2 text-[11px] whitespace-pre-wrap">{bodyComp.text}</div>
+              {selectedTpl && (headerComp?.text || bodyComp?.text) && (
+                <div className="rounded-lg bg-muted/50 p-2 text-[11px] whitespace-pre-wrap space-y-1">
+                  {headerComp?.text && <p className="font-semibold">{renderPreview(headerComp.text, valuesByKey)}</p>}
+                  {bodyComp?.text && <p>{renderPreview(bodyComp.text, valuesByKey)}</p>}
+                </div>
               )}
 
-              {placeholders.map(p => (
-                <div key={p} className="space-y-1">
-                  <Label className="text-[11px]">Variável {`{{${p}}}`}</Label>
+              {slots.map(s => (
+                <div key={s.id} className="space-y-1">
+                  <Label className="text-[11px]">{s.label}</Label>
                   <Input
-                    value={data.templateVariables?.[p] ?? ''}
-                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [p]: e.target.value } })}
+                    value={data.templateVariables?.[s.id] ?? ''}
+                    onChange={e => onChange({ ...data, templateVariables: { ...(data.templateVariables || {}), [s.id]: e.target.value } })}
                     placeholder="Texto fixo ou {{contact.name}}"
                     className="h-8 text-xs"
                   />
                 </div>
               ))}
-              <p className="text-[10px] text-muted-foreground">Variáveis suportadas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
+              {selectedTpl && slots.length === 0 && (
+                <p className="text-[10px] text-muted-foreground">Este template não tem variáveis.</p>
+              )}
+              <p className="text-[10px] text-muted-foreground">Variáveis dinâmicas: <code>{'{{contact.name}}'}</code>, <code>{'{{contact.email}}'}</code>, <code>{'{{contact.phone}}'}</code>.</p>
 
               <div className="space-y-1">
                 <Label className="text-[11px]">Fallback texto livre (UAZAPI / janela aberta)</Label>
