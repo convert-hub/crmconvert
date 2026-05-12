@@ -15,6 +15,8 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import type { Campaign, CampaignAudienceFilter } from '@/types/crm';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
+import { VariableInput } from '@/components/shared/VariableField';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface MetaInstance { id: string; display_name: string | null; instance_name: string; }
 interface Template { id: string; name: string; language: string; whatsapp_instance_id: string; components: any; }
