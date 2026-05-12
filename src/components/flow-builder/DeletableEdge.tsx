@@ -19,7 +19,7 @@ export default function DeletableEdge(props: EdgeProps) {
             setEdges((eds) => eds.filter((e) => e.id !== id));
           }}
           title="Remover conexão"
-          className="nodrag nopan absolute flex h-5 w-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground hover:opacity-100 group-hover/edge:opacity-100"
+          className="nodrag nopan absolute flex h-5 w-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground opacity-60 shadow-sm transition-all hover:scale-110 hover:bg-destructive hover:text-destructive-foreground hover:opacity-100"
           style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`, pointerEvents: 'all' }}
         >
           <X className="h-3 w-3" strokeWidth={2.5} />
