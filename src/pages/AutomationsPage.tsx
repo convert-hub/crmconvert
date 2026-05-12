@@ -273,7 +273,7 @@ export default function AutomationsPage() {
       case 'send_whatsapp':
         return (
           <div className="flex-1 space-y-2">
-            <Input value={action.whatsapp_message || ''} onChange={e => updateAction(index, { whatsapp_message: e.target.value })} placeholder="Mensagem a enviar (Meta exige janela 24h aberta)" className="h-9 text-xs" />
+            <VariableInput variables={flowVars} value={action.whatsapp_message || ''} onChange={v => updateAction(index, { whatsapp_message: v })} placeholder="Mensagem a enviar (Meta exige janela 24h aberta)" className="h-9 text-xs" />
             <Select value={action.whatsapp_instance_id || '__auto__'} onValueChange={v => updateAction(index, { whatsapp_instance_id: v === '__auto__' ? undefined : v })}>
               <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Instância (opcional)" /></SelectTrigger>
               <SelectContent>
