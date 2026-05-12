@@ -168,7 +168,7 @@ export default function FlowBuilderPage() {
       name: flowName,
       description: flowDescription || null,
       trigger_type: triggerType,
-      trigger_config: {},
+      trigger_config: triggerConfig as any,
       nodes: nodes as any,
       edges: edges as any,
       is_active: flowActive,
