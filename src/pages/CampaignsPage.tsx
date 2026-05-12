@@ -239,10 +239,11 @@ export default function CampaignsPage() {
                   {placeholders.map(p => (
                     <div key={p} className="flex items-center gap-2">
                       <Label className="text-[11px] whitespace-nowrap">{`{{${p}}}`}</Label>
-                      <Input
+                      <VariableInput
+                        variables={campaignVars}
                         value={variables[p] ?? ''}
-                        onChange={e => setVariables(v => ({ ...v, [p]: e.target.value }))}
-                        placeholder="Texto fixo ou {{contact.name}} / {{contact.email}}"
+                        onChange={v => setVariables(prev => ({ ...prev, [p]: v }))}
+                        placeholder="Texto fixo ou variável"
                         className="h-8 text-xs flex-1"
                       />
                     </div>
