@@ -18,6 +18,57 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+// Renderiza preview de texto a partir dos componentes do template + valores enviados.
+// templateComponents: vindo de whatsapp_message_templates.components (Meta schema com placeholders)
+// sentComponents: o que foi enviado para Meta no payload (header/body/buttons com parameters)
+function renderTemplatePreview(
+  templateComponents: any,
+  sentComponents: any
+): string {
+  if (!Array.isArray(templateComponents)) return "";
+  const sentByType = new Map<string, any>();
+  if (Array.isArray(sentComponents)) {
+    for (const c of sentComponents) {
+      if (c?.type) sentByType.set(String(c.type).toLowerCase(), c);
+    }
+  }
+
+  const substitute = (text: string, params: any[]): string => {
+    if (!text) return "";
+    let out = String(text);
+    if (!Array.isArray(params)) return out;
+    // posicional {{1}}..{{n}}
+    params.forEach((p, idx) => {
+      const val = p?.text ?? "";
+      const re = new RegExp(`\\{\\{\\s*${idx + 1}\\s*\\}\\}`, "g");
+      out = out.replace(re, val);
+    });
+    // nomeado {{nome}} via parameter_name
+    for (const p of params) {
+      if (p?.parameter_name) {
+        const re = new RegExp(`\\{\\{\\s*${p.parameter_name}\\s*\\}\\}`, "g");
+        out = out.replace(re, p?.text ?? "");
+      }
+    }
+    return out;
+  };
+
+  const parts: string[] = [];
+  for (const comp of templateComponents) {
+    const ctype = String(comp?.type || "").toUpperCase();
+    if (ctype === "HEADER" && comp?.format === "TEXT" && comp?.text) {
+      const sent = sentByType.get("header");
+      parts.push(substitute(comp.text, sent?.parameters ?? []));
+    } else if (ctype === "BODY" && comp?.text) {
+      const sent = sentByType.get("body");
+      parts.push(substitute(comp.text, sent?.parameters ?? []));
+    } else if (ctype === "FOOTER" && comp?.text) {
+      parts.push(comp.text);
+    }
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
 interface SendBody {
   action?: "send" | "test_connection" | "upload_media" | "send_media_base64" | "download_media";
   conversation_id?: string;
@@ -333,16 +384,38 @@ serve(async (req) => {
     // Persist outbound message + reset inactivity (best-effort)
     // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
     if (conversation?.id && !body.skip_persist) {
+      let persistContent: string | null = t === "text" ? (body.text ?? "") : (body.caption ?? null);
+      let persistMediaType: string | null = t === "text" || t === "reaction" || t === "template" ? null : t;
+      const persistMeta: Record<string, unknown> = { provider: "meta_cloud", raw: sendData };
+
+      if (t === "template" && body.template) {
+        persistMediaType = "TemplateMessage";
+        persistMeta.template_name = body.template.name;
+        persistMeta.template_language = body.template.language;
+        try {
+          const { data: tpl } = await supabaseAdmin
+            .from("whatsapp_message_templates")
+            .select("components")
+            .eq("whatsapp_instance_id", instanceId)
+            .eq("name", body.template.name)
+            .eq("language", body.template.language)
+            .maybeSingle();
+          persistContent = renderTemplatePreview(tpl?.components, body.template.components) || `[Template: ${body.template.name}]`;
+        } catch (_e) {
+          persistContent = `[Template: ${body.template.name}]`;
+        }
+      }
+
       await supabaseAdmin.from("messages").insert({
         tenant_id: membership!.tenant_id,
         conversation_id: conversation.id,
         direction: "outbound",
-        content: t === "text" ? (body.text ?? "") : (body.caption ?? null),
-        media_type: t === "text" || t === "reaction" || t === "template" ? null : t,
+        content: persistContent,
+        media_type: persistMediaType,
         media_url: body.media_url ?? null,
         provider_message_id: providerMessageId,
         sender_membership_id: membership!.id,
-        provider_metadata: { provider: "meta_cloud", raw: sendData },
+        provider_metadata: persistMeta,
       });
 
       await supabaseAdmin

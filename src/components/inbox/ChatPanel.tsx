@@ -499,6 +499,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const msgStatus = (msg as any).provider_metadata?.status;
           const isMedia = hasMedia(msg);
           const msgIsInternal = (msg as any).is_internal === true;
+          const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
           return (
             <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
               <div className={cn("max-w-[75%] rounded-2xl px-4 py-2.5 text-sm",
@@ -510,8 +511,14 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                     <Lock className="h-3 w-3" /> Nota interna
                   </div>
                 )}
+                {isTemplate && (
+                  <div className={cn("text-[10px] font-medium mb-1 uppercase tracking-wide",
+                    msg.direction === 'outbound' ? 'text-white/80' : 'text-muted-foreground')}>
+                    Template
+                  </div>
+                )}
                 {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} conversationId={conversationId} providerInfo={providerInfo} />}
-                {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span>{msg.content}</span>}
+                {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span className="whitespace-pre-wrap">{msg.content}</span>}
                 <div className={cn("text-[10px] mt-1 flex items-center gap-1",
                   msgIsInternal ? 'text-warning/70 justify-end' :
                   msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
