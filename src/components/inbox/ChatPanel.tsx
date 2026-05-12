@@ -17,6 +17,8 @@ import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
 import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
+import VariablePicker from '@/components/shared/VariablePicker';
+import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface QuickReply {
   id: string;
