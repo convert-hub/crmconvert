@@ -44,11 +44,19 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
       .then(({ data }) => setTemplates((data as any) ?? []));
   }, [tenantId]);
 
-  const selectedTpl = templates.find(t => t.id === data.templateId);
-  const bodyComp = selectedTpl?.components?.find?.((c: any) => c.type === 'BODY');
-  const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? '').match(/\{\{(\d+)\}\}/g) || []))
-    .map((m: string) => m.replace(/[{}]/g, '')).sort((a, b) => Number(a) - Number(b)) : [];
+  const slots = useMemo(() => extractTemplateSlots(selectedTpl?.components ?? []), [selectedTpl]);
+  const headerComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'HEADER');
+  const bodyComp = selectedTpl?.components?.find?.((c: any) => String(c.type).toUpperCase() === 'BODY');
   const tplsForInstance = templates.filter(t => !data.templateInstanceId || t.whatsapp_instance_id === data.templateInstanceId);
+
+  const valuesByKey = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of slots) {
+      const v = data.templateVariables?.[s.id];
+      if (v) out[s.key] = v;
+    }
+    return out;
+  }, [slots, data.templateVariables]);
 
   return (
     <div className="space-y-3">
