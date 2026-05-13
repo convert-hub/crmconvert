@@ -798,9 +798,19 @@ const handlers = {
               if (ctx.contact_id && config.message) {
                 const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
                 if (contact?.phone) {
+                  let convInstId = null;
+                  if (ctx.conversation_id) {
+                    const { data: conv } = await supabase.from('conversations')
+                      .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+                    convInstId = conv?.whatsapp_instance_id || null;
+                  }
                   await supabase.rpc('enqueue_job', {
                     _type: 'send_whatsapp',
-                    _payload: JSON.stringify({ tenant_id, phone: contact.phone, message: config.message, conversation_id: ctx.conversation_id }),
+                    _payload: JSON.stringify({
+                      tenant_id, phone: contact.phone, message: config.message,
+                      conversation_id: ctx.conversation_id,
+                      whatsapp_instance_id: convInstId || flow.whatsapp_instance_id || null,
+                    }),
                     _tenant_id: tenant_id,
                   });
                 }
