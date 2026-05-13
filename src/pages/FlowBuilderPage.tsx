@@ -132,6 +132,7 @@ export default function FlowBuilderPage() {
     setFlowActive(false);
     setTriggerType('message_received');
     setTriggerConfig({});
+    setWhatsappInstanceId(null);
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
