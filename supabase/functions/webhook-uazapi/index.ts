@@ -25,22 +25,37 @@ serve(async (req) => {
       || req.headers.get('x-tenant-id')
       || body.tenant_id;
 
-    if (!tenantId) {
-      const instanceName = body.instanceName || body.instance?.name || body.owner;
-      if (instanceName) {
-        const { data: inst } = await supabase.from('whatsapp_instances')
-          .select('tenant_id')
-          .eq('instance_name', instanceName)
-          .eq('is_active', true)
-          .limit(1)
-          .single();
-        if (inst) tenantId = inst.tenant_id;
+    let instanceId: string | null = null;
+    const instanceName = body.instanceName || body.instance?.name || body.owner;
+    if (instanceName) {
+      const { data: inst } = await supabase.from('whatsapp_instances')
+        .select('id, tenant_id')
+        .eq('instance_name', instanceName)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+      if (inst) {
+        instanceId = inst.id;
+        if (!tenantId) tenantId = inst.tenant_id;
       }
     }
 
     if (!tenantId) {
       console.error('webhook-uazapi: no tenant_id found. Body keys:', Object.keys(body));
       return jsonOk({ error: 'tenant_id required' });
+    }
+
+    // Fallback: pick the tenant's uazapi instance if we couldn't resolve from payload
+    if (!instanceId) {
+      const { data: inst } = await supabase.from('whatsapp_instances')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('provider', 'uazapi')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (inst) instanceId = inst.id;
     }
 
     // Save raw webhook event (fire and forget)
