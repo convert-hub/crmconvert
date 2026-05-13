@@ -358,12 +358,8 @@ export default function RulesTab() {
   };
 
   return (
-    <div className="p-6 max-w-4xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Automações</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">Configure regras automáticas para seus leads</p>
-        </div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-end">
         <Dialog open={dialogOpen} onOpenChange={v => { if (!v) resetForm(); setDialogOpen(v); }}>
           <DialogTrigger asChild>
             <Button size="sm" className="h-9 text-xs"><Plus className="h-3.5 w-3.5 mr-1.5" />Nova Automação</Button>
