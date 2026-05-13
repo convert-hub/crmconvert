@@ -1,51 +1,58 @@
-## Problema
+## Diagnóstico
 
-Hoje não há como dizer "este fluxo deve enviar pelo número X". O worker decide o número assim:
-1. Se a execução já tem `conversation_id` → usa o número daquela conversa.
-2. Senão → pega o **primeiro** número ativo do tenant (imprevisível com múltiplos números).
+Olhei o handler de `execute_flow` no `worker/index.js` (linhas 942–963). O nó `question` hoje:
 
-Resultado: fluxos disparados por webhook, sequência ou lead novo (sem conversa) saem por um número aleatório.
+1. **Não envia nada para o contato.** Só nó `message` envia WhatsApp. O texto digitado em "Pergunta" fica preso no editor, nunca vai para o canal.
+2. **Não pausa o fluxo.** Lê `ctx.variables.message` (que é a mensagem do gatilho — ex.: "Branco"), salva como resposta no campo configurado e segue para o próximo nó imediatamente.
+3. **Não tem mecanismo de retomada.** A tabela `flow_executions` tem `status` e `current_node_id`, mas o `webhook-uazapi` não consulta execuções pausadas ao receber uma nova mensagem.
+
+Resultado prático no caso do Bruno: a mensagem foi enviada, o nó pergunta "executou" sem efeito visível, e o fluxo terminou em `completed` sem nunca conversar de verdade.
 
 ## Solução
 
-Adicionar seletor de número (WhatsApp instance) nos lugares onde o disparo cria a conversa:
+Transformar `question` em um nó que **envia + pausa + retoma**.
 
-- **Fluxo (chatbot_flows)** — número padrão do fluxo.
-- **Sequência (message_sequences)** — número da campanha de mensagens.
-- **Webhook (webhook_endpoints)** — número usado quando o webhook dispara um fluxo.
+### 1. Banco (migration)
+- Adicionar a `flow_executions`:
+  - `pending_queue jsonb` — fila de nodeIds restantes quando pausa.
+  - `pending_save_field text` — campo onde gravar a próxima resposta.
+  - `pending_custom_field_key text` — chave quando `saveField = 'custom'`.
+- Permitir `status = 'awaiting_input'` (já é text, sem constraint).
+- Índice parcial: `(tenant_id, conversation_id) WHERE status = 'awaiting_input'` para lookup rápido na retomada.
 
-Regra de resolução final no worker (ordem de prioridade):
-1. Instance explicitamente passado no payload da ação.
-2. Instance da conversa (quando já existe).
-3. **Instance configurado no fluxo** (novo).
-4. Primeiro instance ativo do tenant (fallback atual).
+### 2. Worker — nó `question` (worker/index.js ~942)
+Quando entrar no nó:
+1. Enviar `node.data.question` como mensagem WhatsApp (mesma lógica do nó `message`: insert em `messages`, enqueue `send_whatsapp` com fallback de instance idêntico).
+2. Persistir em `flow_executions`: `status = 'awaiting_input'`, `current_node_id = nodeId`, `pending_queue = [próximos da adjacency]`, `pending_save_field`, `pending_custom_field_key`, `context = ctx`.
+3. **Parar o loop** (return / break do while).
 
-## Mudanças
+### 3. Worker — novo job `resume_flow_execution`
+Payload: `{ execution_id, answer }`. Faz:
+1. Carrega execução, valida `status = 'awaiting_input'`.
+2. Salva resposta no contato (lógica atual de `saveField` / `custom_fields`).
+3. Reidrata `ctx`, monta `queue = pending_queue`, marca `status = 'running'`, limpa campos `pending_*`.
+4. Continua o loop normal de execução do fluxo (refatorar o while atual em função reutilizável `runFlowQueue(execution, ctx, queue, flow, adjacency, nodes)`).
 
-### Banco
-- `chatbot_flows.whatsapp_instance_id uuid null`
-- `message_sequences.whatsapp_instance_id uuid null`
-- `webhook_endpoints.whatsapp_instance_id uuid null`
+### 4. webhook-uazapi — disparar retomada
+Em `handleIncomingMessage`, depois de criar/atualizar a `messages` inbound:
+- `SELECT id FROM flow_executions WHERE tenant_id=? AND conversation_id=? AND status='awaiting_input' ORDER BY started_at DESC LIMIT 1`
+- Se existir, `enqueue_job('resume_flow_execution', { execution_id, answer: text })` e **bloquear** outros gatilhos de fluxo (keyword/auto-reply de IA) para essa mensagem, para não disparar dois fluxos concorrentes.
 
-### UI
-- **FlowBuilderPage**: no painel lateral de configuração do fluxo (onde já tem nome/trigger/ativo), adicionar `Select` "Número de WhatsApp" listando as instâncias ativas do tenant. Opção "Automático (padrão do tenant / da conversa)".
-- **SequencesTab**: mesmo seletor no editor da sequência.
-- **WebhookEditor**: mesmo seletor no header (ao lado do switch Ativo).
+### 5. Timeout (opcional, fora desta entrega)
+Anotar para depois: pg_cron marcando `awaiting_input` antigos (> X horas) como `expired`. Não implementar agora para manter o escopo enxuto.
 
-### Worker / Edge functions
-- `worker/index.js` `send_whatsapp` e `send_whatsapp_template`: aceitar fallback do `flow.whatsapp_instance_id` quando não vier no payload nem na conversa. Para isso, ao enfileirar a action `send_whatsapp` a partir de um nó de fluxo, preencher `whatsapp_instance_id` com o do fluxo se não houver da conversa.
-- `webhook-flow-trigger`: ao criar conversa nova a partir do webhook, gravar `conversations.whatsapp_instance_id` = webhook.whatsapp_instance_id ?? flow.whatsapp_instance_id.
-- Lógica de criação de conversa no worker (quando flow dispara sem conversa existente): usar a mesma cascata.
-
-### Fora de escopo
-- Trigger `keyword_match` e `message_received` não precisam — já há conversa com instance vinculado.
-- Roteamento round-robin entre múltiplos números (futuro).
+## Fora de escopo
+- Validação do tipo da resposta (regex/email/telefone) — virá depois.
+- Reenvio automático se o contato não responder.
+- UI para visualizar execuções pausadas (dá pra ver via `JobsPage` se quiser).
 
 ## Arquivos afetados
-- migration nova
-- `src/pages/FlowBuilderPage.tsx`
-- `src/components/automations/SequencesTab.tsx`
-- `src/components/automations/WebhookEditor.tsx` + `WebhooksTab.tsx` (tipo)
-- `worker/index.js`
-- `supabase/functions/webhook-flow-trigger/index.ts`
+- migration nova (colunas + índice)
+- `worker/index.js` (nó `question` + novo handler `resume_flow_execution` + refator do loop)
+- `supabase/functions/webhook-uazapi/index.ts` (lookup + enqueue de retomada)
 - `src/integrations/supabase/types.ts` (regenerado)
+
+## Detalhes técnicos
+- Refatorar o while de `execute_flow` em `runFlowQueue(...)` para reuso entre primeira execução e `resume_flow_execution`.
+- `pending_queue` guarda só strings (nodeIds + handles tipo `nodeId:option-0`); nada de funções/closures.
+- Worker precisa ser rebuilt para carregar novo job type (memória do projeto).
