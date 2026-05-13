@@ -1,80 +1,72 @@
-# Variable Picker — inserção com 1 clique + descoberta automática de variáveis
+## Reestruturação de Automações
 
-## Problema
+Unifico Palavras-chave, Sequências e Webhooks numa única página `/automations` com 3 abas, no estilo enxuto dos screenshots.
 
-Hoje os campos que aceitam variáveis (`{{contact.name}}`, `{{nome}}`, `{{1}}`...) só mostram a sintaxe num texto auxiliar — o usuário tem que digitar e adivinhar o nome. Além disso, novos campos personalizados criados no sistema (custom_fields de contato/oportunidade, variáveis de templates Meta, slots de quick reply) precisam aparecer automaticamente nos pickers, sem alteração de código.
+### Decisões registradas
+1. **Mapeamento de webhook**: drag-and-drop dos campos da requisição para as ações.
+2. **Modo Teste**: histórico das últimas 10 requisições (jsonb array).
+3. **Renomear webhook**: só muda nome de exibição — slug/URL nunca muda.
+4. **Regras atuais** (mover etapa, criar atividade por evento) → 4ª aba **"Regras"** dentro de Automações.
+5. **Sequências = drip WhatsApp** (passos com delay, gatilho de entrada, regras de saída).
 
-## Solução
+### Estrutura da página
 
-1. **Componente único `<VariablePicker>`** (botão `{ }` em popover com busca, agrupado) + wrappers `VariableInput` / `VariableTextarea` que inserem o token no cursor.
-2. **Registro dinâmico de variáveis** carregado por hook `useSystemVariables(scope)` que combina:
-   - **Built-ins** já resolvidos pelo backend: `contact.name`, `contact.email`, `contact.phone` (worker `index.js` 640-713 e `wa-meta-send` 511-515) e os aliases curtos `nome`, `telefone`, `email` (resolvidos em `ChatPanel.replaceVariables`).
-   - **Campos personalizados de contatos** (`contacts.custom_fields` JSONB): chaves descobertas via consulta agregada por tenant.
-   - **Campos personalizados de oportunidades** (`opportunities.custom_fields`).
-   - **Variáveis declaradas em templates Meta** (`whatsapp_message_templates.components` → `extractTemplateSlots`) quando o picker é aberto dentro do contexto de um template específico.
-   - **Variáveis declaradas em quick replies** (coluna `quick_replies.variables ARRAY` já existente).
+```
+/automations
+├── Palavras-chave  (tabela enxuta)
+├── Sequências      (drip de mensagens)
+├── Webhooks        (lista + editor full-screen)
+└── Regras          (atual AutomationsPage por evento)
+```
 
-## Backend — apenas resolução, sem novas tabelas
+### Banco de dados
 
-Atualmente o worker só resolve `contact.name|email|phone`. Para que `{{contact.custom.<chave>}}` funcione no envio do fluxo, estender a interpolação:
+**`keyword_automations`**
+- `id`, `tenant_id`, `flow_id` (FK chatbot_flows), `keywords text[]`, `match` (`contains|equals|starts_with`), `case_sensitive bool`, `is_active bool`, `executions_count int`, `created_at`, `updated_at`
 
-- Em `worker/index.js` (interpolação do nó `message`, linha ~708, e do template handler, linha ~511): após carregar o contato, popular `ctx.variables['contact.custom.<key>']` para cada chave em `contacts.custom_fields`. Mesma lógica para `opportunity.custom.<key>` quando a conversa tiver `opportunity_id`.
-- Sem mudança de schema. Sem mudança de RLS.
+**`webhook_endpoints`**
+- `id`, `tenant_id`, `name`, `slug` (único, gerado, imutável), `secret`, `flow_id` (nullable), `is_active`, `test_mode bool`, `sample_payload jsonb`, `request_history jsonb` (últimas 10), `actions jsonb` (mapeamentos: `{field, source_path, action: 'set_phone'|'set_name'|'set_custom_field'|'trigger_flow', target?}`), `created_at`, `updated_at`
 
-Se o usuário inserir uma variável cujo backend ainda não resolve (ex.: `opportunity.value` num quick reply enviado pela inbox), o token será mantido literal — comportamento já existente. Vou marcar essas variáveis no picker com badge "fluxo" para evitar uso indevido fora do contexto certo.
+**`message_sequences`** + **`sequence_steps`** + **`sequence_enrollments`**
+- Sequência: nome, gatilho de entrada (tag/lead/manual), regra de saída (resposta/conversão/tag).
+- Step: ordem, delay (minutos), tipo (texto/template), conteúdo, respeita horário comercial.
+- Enrollment: contato + sequência + step atual + próximo disparo + status.
 
-## Arquivos a criar
+RLS: padrão tenant (membros viewam, admin/manager escrevem, saas_admin bypass).
 
-- `src/lib/systemVariables.ts`
-  - `type SystemVariable = { token: string; label: string; description?: string; group: string; scopes: VariableScope[] }`
-  - `type VariableScope = 'flow' | 'template-meta' | 'quick-reply' | 'inbox-composer' | 'campaign'`
-  - Built-ins exportados como const.
-  - Helpers: `templateSlotVars(components)`, `customFieldVars(prefix, keys)`.
-- `src/hooks/useSystemVariables.ts`
-  - Args: `{ tenantId, scope, templateComponents?, includeCustomFields? }`.
-  - Carrega 1x por sessão (com cache em memória) as chaves distintas de `custom_fields` via duas queries:
-    - `select custom_fields from contacts where tenant_id = ? and custom_fields <> '{}' limit 500` → agrega Object.keys.
-    - idem para `opportunities`.
-  - Filtra por `scope` (ex.: quick-reply só mostra built-ins curtos + custom de contato).
-  - Retorna `SystemVariable[]` agrupado.
-- `src/components/shared/VariablePicker.tsx` — botão (`Braces` 14px, ghost) + Popover + cmdk Command com busca, agrupado por `group`. Props: `variables`, `onPick(token)`.
-- `src/components/shared/VariableTextarea.tsx` e `VariableInput.tsx` — wrappers finos sobre `Textarea`/`Input` shadcn. Picker ancorado absoluto no canto superior direito; `insertAtCursor` preserva seleção e dispara onChange sintético.
+### Backend
 
-## Plugar nos campos existentes
+**`webhook-flow-trigger`** reescrito:
+- Lê `webhook_endpoints` por `slug` (não mais por flow_id).
+- Valida `secret` via header.
+- Se `test_mode=true`: salva payload em `sample_payload` + prepend em `request_history` (max 10), retorna `{ok, captured: true}` SEM disparar fluxo.
+- Se `test_mode=false`: aplica `actions` (resolve `source_path` tipo `body.telefone` via lodash get), cria/atualiza contato, enfileira `execute_flow`.
 
-Cada local recebe um `scope` que determina o conjunto exibido pelo hook:
+**`triggerMessageReceivedFlows`** (worker): passa a consultar `keyword_automations` em vez de `chatbot_flows.trigger_type='keyword_match'`.
 
-| Arquivo | Campos | Scope |
-|---|---|---|
-| `src/components/flow-builder/MessageNodeEditor.tsx` | textarea de mensagem, slots de template, fallback | `flow` |
-| `src/components/inbox/SendTemplateDialog.tsx` | inputs de slot | `template-meta` (recebe `templateComponents`) |
-| `src/pages/AutomationsPage.tsx` | textarea de mensagem livre + slots | `flow` |
-| `src/pages/CampaignsPage.tsx` | inputs por parâmetro do template | `campaign` |
-| `src/components/settings/QuickRepliesSettings.tsx` | textarea de conteúdo | `quick-reply` |
-| `src/components/inbox/ChatPanel.tsx` | composer de nova mensagem | `inbox-composer` |
-| `src/components/inbox/ScheduleMessageDialog.tsx` | textarea (se existir) | `inbox-composer` |
+**Sequências**: pg_cron a cada 5min → função `process_sequence_enrollments` enfileira jobs `send_sequence_step` no worker.
 
-Em todos eles, remover o bloco auxiliar "Variáveis dinâmicas: ..." (vira redundante).
+**Migração de dados**: porta `chatbot_flows` com `trigger_type in ('keyword_match','webhook')` para as novas tabelas, mantendo o flow.
 
-## Backend — alterações pontuais no worker
+### Frontend
 
-Arquivo `worker/index.js`:
+- `src/pages/AutomationsPage.tsx` vira shell com Tabs.
+- `src/components/automations/KeywordsTab.tsx` — tabela: Fluxo | Modo (select inline) | Palavras (TagInput inline) | Case | Ativa | Execuções | ⋮.
+- `src/components/automations/SequencesTab.tsx` — lista de sequências + editor de passos.
+- `src/components/automations/WebhooksTab.tsx` — lista + botão "Novo".
+- `src/components/automations/WebhookEditor.tsx` — full screen, 2 colunas:
+  - Esquerda: header (nome, URL, secret, toggle Teste), painel "Campos recebidos" mostrando flat keys do `sample_payload` (chips draggáveis).
+  - Direita: cards de ação (`Telefone do contato`, `Nome do contato`, `Campo personalizado`, `Disparar fluxo`) — drop zones, mostram chip mapeado, removível.
+- `src/components/automations/RulesTab.tsx` — move conteúdo atual de `AutomationsPage`.
+- Remove configuração de `keyword_match` e `webhook` do `TriggerConfigPanel` no FlowBuilder (esses tipos passam a ser geridos só pela página de Automações; trigger node mostra aviso "Configure em Automações").
 
-1. Bloco "Enrich context with contact fields" (linha 640): após popular as 3 chaves, percorrer `ctc.custom_fields` (selecionar `name, email, phone, custom_fields`) e setar `ctx.variables['contact.custom.<k>'] = String(v ?? '')`.
-2. Quando `ctx.conversation_id`, carregar `opportunity_id` da conversa e, se existir, ler `opportunities.custom_fields` e popular `opportunity.custom.<k>` + `opportunity.value`, `opportunity.title`.
-3. Em `wa-meta-send/index.ts` (`interp`, linha 511): substituir o trio de `replace` literal por uma função genérica que troca `{{contact.custom.X}}` e `{{opportunity.custom.X}}` consultando os mesmos dicionários carregados.
+### Implementação faseada
 
-Sem migração. Sem nova tabela. Sem RLS.
+1. Migration (tabelas + porta dados).
+2. Backend: webhook-flow-trigger reescrito, worker ajustado para keyword_automations.
+3. Página: shell + KeywordsTab + WebhooksTab + WebhookEditor (drag-drop).
+4. Sequências: tabela base + UI mínima (criar/listar/passos); cron e disparo num passo seguinte se necessário.
+5. RulesTab (move atual).
+6. FlowBuilder: TriggerConfigPanel simplificado.
 
-## Detalhes de UX
-
-- Botão picker: ícone `Braces` 14px, `variant="ghost"`, posicionado absoluto top-right do campo (sem deslocar layout). `aria-label="Inserir variável"`.
-- Popover: ~280px, busca `Command` por label/token, agrupado (Contato, Oportunidade, Personalizado, Template, Conversa). Cada item mostra `label` + `{{token}}` em mono pequeno e descrição opcional. Click insere e fecha mantendo foco.
-- Variáveis fora do escopo de envio do contexto atual ficam ocultas — não exibimos `opportunity.*` num quick reply, por exemplo.
-- Loading: enquanto custom_fields carrega, mostra apenas built-ins (não bloqueia).
-
-## Fora de escopo
-
-- Editor visual para criar/renomear chaves de `custom_fields` a partir do picker.
-- Sintaxe destacada dentro do textarea (syntax highlight).
-- Variáveis derivadas (`{{contact.first_name}}`, formatação de data/moeda).
+Começo pela migration.

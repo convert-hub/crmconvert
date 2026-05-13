@@ -1071,6 +1071,45 @@ export type Database = {
           },
         ]
       }
+      keyword_automations: {
+        Row: {
+          case_sensitive: boolean
+          created_at: string
+          executions_count: number
+          flow_id: string
+          id: string
+          is_active: boolean
+          keywords: string[]
+          match: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          case_sensitive?: boolean
+          created_at?: string
+          executions_count?: number
+          flow_id: string
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match?: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          case_sensitive?: boolean
+          created_at?: string
+          executions_count?: number
+          flow_id?: string
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       knowledge_chunks: {
         Row: {
           chunk_index: number
@@ -1184,6 +1223,54 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      message_sequences: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          description: string | null
+          enrollment_config: Json
+          enrollment_trigger: string
+          exit_on_reply: boolean
+          exit_on_tag: string | null
+          id: string
+          is_active: boolean
+          name: string
+          respect_business_hours: boolean
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          enrollment_config?: Json
+          enrollment_trigger?: string
+          exit_on_reply?: boolean
+          exit_on_tag?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          respect_business_hours?: boolean
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          enrollment_config?: Json
+          enrollment_trigger?: string
+          exit_on_reply?: boolean
+          exit_on_tag?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          respect_business_hours?: boolean
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       messages: {
         Row: {
@@ -1684,6 +1771,53 @@ export type Database = {
           },
         ]
       }
+      sequence_steps: {
+        Row: {
+          content: string | null
+          created_at: string
+          delay_minutes: number
+          id: string
+          message_type: string
+          position: number
+          sequence_id: string
+          template_id: string | null
+          template_variables: Json
+          tenant_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string
+          delay_minutes?: number
+          id?: string
+          message_type?: string
+          position?: number
+          sequence_id: string
+          template_id?: string | null
+          template_variables?: Json
+          tenant_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string
+          delay_minutes?: number
+          id?: string
+          message_type?: string
+          position?: number
+          sequence_id?: string
+          template_id?: string | null
+          template_variables?: Json
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sequence_steps_sequence_id_fkey"
+            columns: ["sequence_id"]
+            isOneToOne: false
+            referencedRelation: "message_sequences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       stage_moves: {
         Row: {
           ai_reason: string | null
@@ -1891,6 +2025,57 @@ export type Database = {
           settings?: Json
           slug?: string
           timezone?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      webhook_endpoints: {
+        Row: {
+          actions: Json
+          created_at: string
+          flow_id: string | null
+          id: string
+          is_active: boolean
+          name: string
+          request_history: Json
+          sample_payload: Json | null
+          sample_received_at: string | null
+          secret: string
+          slug: string
+          tenant_id: string
+          test_mode: boolean
+          updated_at: string
+        }
+        Insert: {
+          actions?: Json
+          created_at?: string
+          flow_id?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          request_history?: Json
+          sample_payload?: Json | null
+          sample_received_at?: string | null
+          secret: string
+          slug: string
+          tenant_id: string
+          test_mode?: boolean
+          updated_at?: string
+        }
+        Update: {
+          actions?: Json
+          created_at?: string
+          flow_id?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          request_history?: Json
+          sample_payload?: Json | null
+          sample_received_at?: string | null
+          secret?: string
+          slug?: string
+          tenant_id?: string
+          test_mode?: boolean
           updated_at?: string
         }
         Relationships: []

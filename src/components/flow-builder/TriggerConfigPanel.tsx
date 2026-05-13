@@ -64,35 +64,12 @@ export default function TriggerConfigPanel({ triggerType, config, onChange, flow
     );
   }
 
-  // ── Palavra-chave ──
+  // ── Palavra-chave ── (gerenciado em Automações)
   if (triggerType === 'keyword_match') {
     return (
-      <div className="space-y-2">
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Palavras-chave</Label>
-          <div className="mt-1">
-            <TagInput value={config.keywords || []} onChange={(v) => set({ keywords: v })} />
-          </div>
-        </div>
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Comparação</Label>
-          <Select value={config.match || 'contains'} onValueChange={(v) => set({ match: v as TriggerConfig['match'] })}>
-            <SelectTrigger className="h-8 text-xs mt-1"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="contains">Contém</SelectItem>
-              <SelectItem value="equals">Igual</SelectItem>
-              <SelectItem value="starts_with">Começa com</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center justify-between pt-1">
-          <Label className="text-[11px] text-muted-foreground">Diferenciar maiúsculas</Label>
-          <Switch
-            checked={!!config.case_sensitive}
-            onCheckedChange={(v) => set({ case_sensitive: v })}
-          />
-        </div>
-      </div>
+      <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
+        Configure as palavras-chave em <span className="font-medium text-foreground">Automações → Palavras-chave</span>. Salve este fluxo e adicione a regra lá.
+      </p>
     );
   }
 
@@ -135,58 +112,12 @@ export default function TriggerConfigPanel({ triggerType, config, onChange, flow
     );
   }
 
-  // ── Webhook ──
+  // ── Webhook ── (gerenciado em Automações)
   if (triggerType === 'webhook') {
-    if (!flowId) {
-      return (
-        <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
-          Salve o fluxo primeiro para gerar a URL do webhook.
-        </p>
-      );
-    }
-    if (!config.secret) ensureSecret();
-
-    const copy = (txt: string) => {
-      navigator.clipboard.writeText(txt);
-      setCopied(true);
-      toast.success('Copiado');
-      setTimeout(() => setCopied(false), 1200);
-    };
-
     return (
-      <div className="space-y-2">
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">URL</Label>
-          <div className="flex gap-1 mt-1">
-            <Input readOnly value={webhookUrl} className="h-8 text-[10px] font-mono" />
-            <Button size="icon" variant="outline" className="h-8 w-8 shrink-0" onClick={() => copy(webhookUrl)}>
-              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-            </Button>
-          </div>
-        </div>
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Secret</Label>
-          <div className="flex gap-1 mt-1">
-            <Input readOnly value={config.secret || ''} className="h-8 text-[10px] font-mono" />
-            <Button
-              size="icon" variant="outline" className="h-8 w-8 shrink-0"
-              onClick={() => copy(config.secret || '')}
-            >
-              <Copy className="h-3 w-3" />
-            </Button>
-            <Button
-              size="icon" variant="outline" className="h-8 w-8 shrink-0"
-              onClick={() => set({ secret: genSecret() })}
-              title="Regerar"
-            >
-              <RefreshCw className="h-3 w-3" />
-            </Button>
-          </div>
-        </div>
-        <p className="text-[10px] text-muted-foreground leading-relaxed pt-1">
-          Envie POST com header <span className="font-mono">X-Flow-Secret</span> e corpo JSON. Os campos do JSON ficam disponíveis como variáveis dentro do fluxo.
-        </p>
-      </div>
+      <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
+        Configure URL, secret e mapeamento de campos em <span className="font-medium text-foreground">Automações → Webhooks</span>. Use a ação "Disparar fluxo" e selecione este fluxo.
+      </p>
     );
   }
 

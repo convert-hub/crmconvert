@@ -1340,21 +1340,38 @@ function keywordMatches(text, cfg) {
 }
 
 async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
-  const { data: flows } = await supabase.from('chatbot_flows')
+  const triggerData = { message: messageText, message_text: messageText, last_answer: messageText };
+
+  // 1) message_received flows (any inbound message)
+  const { data: msgFlows } = await supabase.from('chatbot_flows')
     .select('id, trigger_type, trigger_config')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
-    .in('trigger_type', ['message_received', 'keyword_match']);
-
-  if (!flows || flows.length === 0) return;
-
-  const triggerData = { message: messageText, message_text: messageText, last_answer: messageText };
-
-  for (const flow of flows) {
-    if (flow.trigger_type === 'keyword_match' && !keywordMatches(messageText || '', flow.trigger_config)) {
-      continue;
-    }
+    .eq('trigger_type', 'message_received');
+  for (const flow of msgFlows || []) {
     await enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData });
+  }
+
+  // 2) keyword_automations (new unified table)
+  const { data: kwRules } = await supabase.from('keyword_automations')
+    .select('id, flow_id, keywords, match, case_sensitive')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true);
+  if (!kwRules || kwRules.length === 0) return;
+
+  const flowIds = [...new Set(kwRules.map(r => r.flow_id))];
+  const { data: kwFlows } = await supabase.from('chatbot_flows')
+    .select('id, trigger_type, trigger_config')
+    .in('id', flowIds)
+    .eq('is_active', true);
+  const flowMap = new Map((kwFlows || []).map(f => [f.id, f]));
+
+  for (const rule of kwRules) {
+    const flow = flowMap.get(rule.flow_id);
+    if (!flow) continue;
+    if (!keywordMatches(messageText || '', { keywords: rule.keywords, match: rule.match, case_sensitive: rule.case_sensitive })) continue;
+    await enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData });
+    await supabase.from('keyword_automations').update({ executions_count: (rule.executions_count || 0) + 1 }).eq('id', rule.id);
   }
 }
 
