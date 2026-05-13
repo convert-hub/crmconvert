@@ -119,6 +119,7 @@ export default function FlowBuilderPage() {
     setFlowActive(flow.is_active);
     setTriggerType(flow.trigger_type);
     setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
+    setWhatsappInstanceId(((flow as any).whatsapp_instance_id as string | null) ?? null);
     setNodes((flow.nodes as Node[]) || []);
     setEdges((flow.edges as Edge[]) || []);
     setListView(false);
