@@ -69,7 +69,7 @@ serve(async (req) => {
 
     switch (eventType) {
       case 'message':
-        await handleIncomingMessage(supabase, tenantId, body);
+        await handleIncomingMessage(supabase, tenantId, body, instanceId);
         break;
       case 'status_update':
         await handleStatusUpdate(supabase, tenantId, body);
