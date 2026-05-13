@@ -648,6 +648,31 @@ const handlers = {
           ctx.variables['contact.phone'] = ctc.phone || '';
         }
       }
+
+      // If no conversation but we have contact + flow has a default WhatsApp number,
+      // auto-create/reuse an open conversation on that number so messages can be sent.
+      if (!ctx.conversation_id && ctx.contact_id && flow.whatsapp_instance_id) {
+        const { data: existingConv } = await supabase.from('conversations')
+          .select('id')
+          .eq('tenant_id', tenant_id)
+          .eq('contact_id', ctx.contact_id)
+          .eq('whatsapp_instance_id', flow.whatsapp_instance_id)
+          .in('status', ['open', 'waiting_customer', 'waiting_agent'])
+          .maybeSingle();
+        if (existingConv?.id) {
+          ctx.conversation_id = existingConv.id;
+        } else {
+          const { data: newConv } = await supabase.from('conversations').insert({
+            tenant_id, contact_id: ctx.contact_id,
+            channel: 'whatsapp', status: 'open',
+            whatsapp_instance_id: flow.whatsapp_instance_id,
+          }).select('id').single();
+          ctx.conversation_id = newConv?.id || null;
+        }
+        if (ctx.conversation_id) {
+          await supabase.from('flow_executions').update({ conversation_id: ctx.conversation_id }).eq('id', execution.id);
+        }
+      }
       let stepCount = 0;
       const MAX_STEPS = 50;
 
