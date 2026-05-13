@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Trash2, Clock, MessageSquare, ArrowLeft, GripVertical } from 'lucide-react';
 import { toast } from 'sonner';
+import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 
 type Seq = {
   id: string;
@@ -18,6 +19,7 @@ type Seq = {
   enrollment_trigger: string;
   exit_on_reply: boolean;
   is_active: boolean;
+  whatsapp_instance_id: string | null;
 };
 type Step = {
   id: string;
