@@ -531,6 +531,7 @@ export type Database = {
           trigger_config: Json | null
           trigger_type: string
           updated_at: string
+          whatsapp_instance_id: string | null
         }
         Insert: {
           created_at?: string
@@ -545,6 +546,7 @@ export type Database = {
           trigger_config?: Json | null
           trigger_type?: string
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Update: {
           created_at?: string
@@ -559,6 +561,7 @@ export type Database = {
           trigger_config?: Json | null
           trigger_type?: string
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Relationships: [
           {
@@ -1239,6 +1242,7 @@ export type Database = {
           respect_business_hours: boolean
           tenant_id: string
           updated_at: string
+          whatsapp_instance_id: string | null
         }
         Insert: {
           created_at?: string
@@ -1254,6 +1258,7 @@ export type Database = {
           respect_business_hours?: boolean
           tenant_id: string
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Update: {
           created_at?: string
@@ -1269,6 +1274,7 @@ export type Database = {
           respect_business_hours?: boolean
           tenant_id?: string
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Relationships: []
       }
@@ -2045,6 +2051,7 @@ export type Database = {
           tenant_id: string
           test_mode: boolean
           updated_at: string
+          whatsapp_instance_id: string | null
         }
         Insert: {
           actions?: Json
@@ -2061,6 +2068,7 @@ export type Database = {
           tenant_id: string
           test_mode?: boolean
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Update: {
           actions?: Json
@@ -2077,6 +2085,7 @@ export type Database = {
           tenant_id?: string
           test_mode?: boolean
           updated_at?: string
+          whatsapp_instance_id?: string | null
         }
         Relationships: []
       }

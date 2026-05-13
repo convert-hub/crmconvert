@@ -1,21 +1,51 @@
-## Correção: criação de regra de palavra-chave
+## Problema
 
-### Diagnóstico
+Hoje não há como dizer "este fluxo deve enviar pelo número X". O worker decide o número assim:
+1. Se a execução já tem `conversation_id` → usa o número daquela conversa.
+2. Senão → pega o **primeiro** número ativo do tenant (imprevisível com múltiplos números).
 
-Na `KeywordsTab.tsx`, o botão "Criar" valida `newKeywords.length === 0`. O `TagInput` só adiciona a palavra ao array quando o usuário pressiona **Enter**. Se a pessoa digita "agendar" e clica direto em **Criar** sem dar Enter, o texto fica preso no input interno e o array continua vazio → erro "selecione fluxo e palavra-chave", mesmo com fluxo selecionado.
+Resultado: fluxos disparados por webhook, sequência ou lead novo (sem conversa) saem por um número aleatório.
 
-Além disso, hoje só dá pra adicionar uma palavra por vez (Enter a cada uma). O pedido é poder colar várias separadas por `;`.
+## Solução
 
-### Mudanças (somente UI, sem tocar backend nem schema)
+Adicionar seletor de número (WhatsApp instance) nos lugares onde o disparo cria a conversa:
 
-**1. `src/components/automations/KeywordsTab.tsx`**
-- Trocar o `TagInput` do diálogo de criação por um campo simples (`Input` ou `Textarea`) com placeholder `"agendar; preço; horário"`.
-- No `create()`, fazer o parse: `value.split(/[;\n,]/).map(s => s.trim()).filter(Boolean)`. Isso aceita `;`, vírgula e quebra de linha.
-- Validar usando o array já parseado (não o state do TagInput), eliminando o bug do "Enter esquecido".
-- Mensagem de erro mais específica: separar "selecione um fluxo" de "informe ao menos uma palavra-chave".
+- **Fluxo (chatbot_flows)** — número padrão do fluxo.
+- **Sequência (message_sequences)** — número da campanha de mensagens.
+- **Webhook (webhook_endpoints)** — número usado quando o webhook dispara um fluxo.
 
-**2. Edição inline na tabela**
-- Manter o `TagInput` na linha da tabela (lá funciona porque cada chip é editado individualmente), mas adicionar dica visual `Use ; para separar` no diálogo de criação.
+Regra de resolução final no worker (ordem de prioridade):
+1. Instance explicitamente passado no payload da ação.
+2. Instance da conversa (quando já existe).
+3. **Instance configurado no fluxo** (novo).
+4. Primeiro instance ativo do tenant (fallback atual).
+
+## Mudanças
+
+### Banco
+- `chatbot_flows.whatsapp_instance_id uuid null`
+- `message_sequences.whatsapp_instance_id uuid null`
+- `webhook_endpoints.whatsapp_instance_id uuid null`
+
+### UI
+- **FlowBuilderPage**: no painel lateral de configuração do fluxo (onde já tem nome/trigger/ativo), adicionar `Select` "Número de WhatsApp" listando as instâncias ativas do tenant. Opção "Automático (padrão do tenant / da conversa)".
+- **SequencesTab**: mesmo seletor no editor da sequência.
+- **WebhookEditor**: mesmo seletor no header (ao lado do switch Ativo).
+
+### Worker / Edge functions
+- `worker/index.js` `send_whatsapp` e `send_whatsapp_template`: aceitar fallback do `flow.whatsapp_instance_id` quando não vier no payload nem na conversa. Para isso, ao enfileirar a action `send_whatsapp` a partir de um nó de fluxo, preencher `whatsapp_instance_id` com o do fluxo se não houver da conversa.
+- `webhook-flow-trigger`: ao criar conversa nova a partir do webhook, gravar `conversations.whatsapp_instance_id` = webhook.whatsapp_instance_id ?? flow.whatsapp_instance_id.
+- Lógica de criação de conversa no worker (quando flow dispara sem conversa existente): usar a mesma cascata.
 
 ### Fora de escopo
-Sem mudanças em migration, worker, edge functions ou no matching (que já trata `keywords text[]` corretamente).
+- Trigger `keyword_match` e `message_received` não precisam — já há conversa com instance vinculado.
+- Roteamento round-robin entre múltiplos números (futuro).
+
+## Arquivos afetados
+- migration nova
+- `src/pages/FlowBuilderPage.tsx`
+- `src/components/automations/SequencesTab.tsx`
+- `src/components/automations/WebhookEditor.tsx` + `WebhooksTab.tsx` (tipo)
+- `worker/index.js`
+- `supabase/functions/webhook-flow-trigger/index.ts`
+- `src/integrations/supabase/types.ts` (regenerado)
