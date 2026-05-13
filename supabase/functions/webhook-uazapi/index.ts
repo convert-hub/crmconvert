@@ -148,7 +148,7 @@ function normalizeForPhraseMatch(str: string): string {
     .trim();
 }
 
-async function handleIncomingMessage(supabase: any, tenantId: string, body: any) {
+async function handleIncomingMessage(supabase: any, tenantId: string, body: any, instanceId: string | null = null) {
   // UAZAPI v2: message data is nested inside body.message
   const msg = body.message || body;
   
