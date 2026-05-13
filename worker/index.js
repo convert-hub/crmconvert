@@ -607,17 +607,47 @@ const handlers = {
   },
 
   async execute_flow(payload) {
-    const { flow_id, tenant_id, contact_id, conversation_id, trigger_data } = payload;
+    const { flow_id, tenant_id, contact_id, conversation_id, trigger_data, _resume } = payload;
     if (!flow_id || !tenant_id) throw new Error('Missing flow_id or tenant_id');
 
     const { data: flow } = await supabase.from('chatbot_flows').select('*').eq('id', flow_id).eq('is_active', true).single();
     if (!flow) return { skipped: true, reason: 'flow not found or inactive' };
 
-    // Create execution record
-    const { data: execution } = await supabase.from('flow_executions').insert({
-      flow_id, tenant_id, contact_id: contact_id || null, conversation_id: conversation_id || null,
-      status: 'running', context: { trigger_data: trigger_data || {} },
-    }).select().single();
+    // Resume vs fresh execution
+    let execution;
+    let ctx;
+    let initialQueue;
+    let visited;
+
+    if (_resume?.execution_id) {
+      const { data: existing } = await supabase.from('flow_executions').select('*').eq('id', _resume.execution_id).single();
+      if (!existing) return { skipped: true, reason: 'execution not found' };
+      execution = existing;
+      ctx = { ...(existing.context || {}), contact_id: existing.contact_id, conversation_id: existing.conversation_id, tenant_id };
+      ctx.variables = { ...(ctx.variables || {}), ...(_resume.extra_vars || {}) };
+      initialQueue = Array.isArray(_resume.queue) ? [..._resume.queue] : (Array.isArray(existing.pending_queue) ? [...existing.pending_queue] : []);
+      visited = new Set();
+      await supabase.from('flow_executions').update({
+        status: 'running', pending_queue: null, pending_save_field: null, pending_custom_field_key: null,
+      }).eq('id', execution.id);
+    } else {
+      const { data: created } = await supabase.from('flow_executions').insert({
+        flow_id, tenant_id, contact_id: contact_id || null, conversation_id: conversation_id || null,
+        status: 'running', context: { trigger_data: trigger_data || {} },
+      }).select().single();
+      execution = created;
+      ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
+      if (contact_id) {
+        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
+        if (ctc) {
+          ctx.variables['contact.name'] = ctc.name || '';
+          ctx.variables['contact.email'] = ctc.email || '';
+          ctx.variables['contact.phone'] = ctc.phone || '';
+        }
+      }
+      initialQueue = null; // will be set after trigger node lookup
+      visited = new Set();
+    }
 
     try {
       const nodes = flow.nodes || [];
@@ -631,22 +661,13 @@ const handlers = {
         adjacency[key].push(e.target);
       });
 
-      // Find trigger node
-      const triggerNode = nodes.find(n => n.type === 'trigger');
-      if (!triggerNode) throw new Error('No trigger node found');
-
-      // BFS execution
-      const queue = [triggerNode.id];
-      const visited = new Set();
-      const ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
-      // Enrich context with contact fields for {{contact.name}} interpolation
-      if (contact_id) {
-        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
-        if (ctc) {
-          ctx.variables['contact.name'] = ctc.name || '';
-          ctx.variables['contact.email'] = ctc.email || '';
-          ctx.variables['contact.phone'] = ctc.phone || '';
-        }
+      let queue;
+      if (initialQueue) {
+        queue = initialQueue;
+      } else {
+        const triggerNode = nodes.find(n => n.type === 'trigger');
+        if (!triggerNode) throw new Error('No trigger node found');
+        queue = [triggerNode.id];
       }
 
       // If no conversation but we have contact + flow has a default WhatsApp number,
@@ -675,8 +696,9 @@ const handlers = {
       }
       let stepCount = 0;
       const MAX_STEPS = 50;
+      let paused = false;
 
-      while (queue.length > 0 && stepCount < MAX_STEPS) {
+      while (queue.length > 0 && stepCount < MAX_STEPS && !paused) {
         const nodeId = queue.shift();
         if (visited.has(nodeId)) continue;
         visited.add(nodeId);
@@ -940,27 +962,60 @@ const handlers = {
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
         } else if (node.type === 'question') {
-          // Question node: the response is expected in ctx.variables.message (the user's reply)
-          // Save the answer to the configured contact field
+          // Send the question text to the contact, then pause execution waiting for reply.
+          const questionText = (node.data?.question || node.data?.label || '').trim();
           const saveField = node.data?.saveField || '';
-          const answer = ctx.variables.message || ctx.variables.last_answer || '';
-          if (ctx.contact_id && saveField && answer) {
-            if (saveField === 'custom') {
-              const customKey = node.data?.customFieldKey || '';
-              if (customKey) {
-                const { data: c } = await supabase.from('contacts').select('custom_fields').eq('id', ctx.contact_id).single();
-                const customFields = { ...(c?.custom_fields || {}), [customKey]: answer };
-                await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', ctx.contact_id);
-                console.log(`[Worker] Flow: saved custom field "${customKey}" = "${answer}"`);
-              }
-            } else {
-              const updateData = { [saveField]: answer };
-              await supabase.from('contacts').update(updateData).eq('id', ctx.contact_id);
-              console.log(`[Worker] Flow: saved "${saveField}" = "${answer}"`);
+          const customKey = saveField === 'custom' ? (node.data?.customFieldKey || '') : null;
+
+          // Resolve conversation instance for sending
+          let convInstance = null;
+          if (ctx.conversation_id) {
+            const { data: conv } = await supabase.from('conversations')
+              .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+            if (conv?.whatsapp_instance_id) {
+              const { data: inst } = await supabase.from('whatsapp_instances')
+                .select('id').eq('id', conv.whatsapp_instance_id).maybeSingle();
+              convInstance = inst;
             }
           }
-          const next = adjacency[nodeId] || [];
-          next.forEach(n => queue.push(n));
+          let contactPhone = null;
+          if (ctx.contact_id) {
+            const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+            contactPhone = c?.phone || null;
+          }
+
+          if (questionText && ctx.conversation_id) {
+            const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+            await supabase.from('messages').insert({
+              tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+              content: interpolated, is_ai_generated: false,
+            });
+            if (contactPhone) {
+              await supabase.rpc('enqueue_job', {
+                _type: 'send_whatsapp',
+                _payload: JSON.stringify({
+                  tenant_id, phone: contactPhone, message: interpolated,
+                  conversation_id: ctx.conversation_id,
+                  whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                }),
+                _tenant_id: tenant_id,
+              });
+            }
+          }
+
+          // Persist pending state and pause
+          const nextNodes = adjacency[nodeId] || [];
+          await supabase.from('flow_executions').update({
+            status: 'awaiting_input',
+            current_node_id: nodeId,
+            pending_queue: nextNodes,
+            pending_save_field: saveField || null,
+            pending_custom_field_key: customKey || null,
+            context: { ...ctx },
+          }).eq('id', execution.id);
+          console.log(`[Worker] Flow ${flow_id}: question node ${nodeId} sent — awaiting reply`);
+          paused = true;
+          break;
         } else if (node.type === 'randomizer') {
           const mode = node.data?.mode || 'random';
           const options = node.data?.options || [];
@@ -1000,12 +1055,53 @@ const handlers = {
         }
       }
 
-      await supabase.from('flow_executions').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', execution.id);
-      return { execution_id: execution.id, steps: stepCount };
+      if (!paused) {
+        await supabase.from('flow_executions').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', execution.id);
+      }
+      return { execution_id: execution.id, steps: stepCount, paused };
     } catch (err) {
       await supabase.from('flow_executions').update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() }).eq('id', execution.id);
       throw err;
     }
+  },
+
+  async resume_flow_execution(payload) {
+    const { execution_id, answer } = payload;
+    if (!execution_id) throw new Error('Missing execution_id');
+
+    const { data: execution } = await supabase.from('flow_executions').select('*').eq('id', execution_id).single();
+    if (!execution) return { skipped: true, reason: 'execution not found' };
+    if (execution.status !== 'awaiting_input') {
+      return { skipped: true, reason: `status is ${execution.status}` };
+    }
+
+    // Save the answer to the configured contact field
+    const saveField = execution.pending_save_field;
+    const customKey = execution.pending_custom_field_key;
+    const text = (answer || '').trim();
+
+    if (execution.contact_id && saveField && text) {
+      if (saveField === 'custom' && customKey) {
+        const { data: c } = await supabase.from('contacts').select('custom_fields').eq('id', execution.contact_id).single();
+        const customFields = { ...(c?.custom_fields || {}), [customKey]: text };
+        await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', execution.contact_id);
+        console.log(`[Worker] Flow resume: saved custom field "${customKey}" = "${text}"`);
+      } else if (saveField !== 'custom') {
+        await supabase.from('contacts').update({ [saveField]: text }).eq('id', execution.contact_id);
+        console.log(`[Worker] Flow resume: saved "${saveField}" = "${text}"`);
+      }
+    }
+
+    // Re-enter execute_flow in resume mode with the pending queue
+    return await handlers.execute_flow({
+      flow_id: execution.flow_id,
+      tenant_id: execution.tenant_id,
+      _resume: {
+        execution_id,
+        queue: Array.isArray(execution.pending_queue) ? execution.pending_queue : [],
+        extra_vars: { message: text, last_answer: text },
+      },
+    });
   },
 
   async send_scheduled_message(payload) {

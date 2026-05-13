@@ -918,6 +918,9 @@ export type Database = {
           error: string | null
           flow_id: string
           id: string
+          pending_custom_field_key: string | null
+          pending_queue: Json | null
+          pending_save_field: string | null
           started_at: string
           status: string
           tenant_id: string
@@ -931,6 +934,9 @@ export type Database = {
           error?: string | null
           flow_id: string
           id?: string
+          pending_custom_field_key?: string | null
+          pending_queue?: Json | null
+          pending_save_field?: string | null
           started_at?: string
           status?: string
           tenant_id: string
@@ -944,6 +950,9 @@ export type Database = {
           error?: string | null
           flow_id?: string
           id?: string
+          pending_custom_field_key?: string | null
+          pending_queue?: Json | null
+          pending_save_field?: string | null
           started_at?: string
           status?: string
           tenant_id?: string

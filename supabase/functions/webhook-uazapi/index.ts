@@ -391,8 +391,37 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     }
   }
 
+  // Inbound: check if a flow is awaiting this contact's reply (resume) — overrides AI/keyword triggers
+  let resumedFlow = false;
+  if (!fromMe && savedMsg?.id && text) {
+    try {
+      const { data: pending } = await supabase
+        .from('flow_executions')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('conversation_id', conversation.id)
+        .eq('status', 'awaiting_input')
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (pending?.id) {
+        await supabase.rpc('enqueue_job', {
+          _type: 'resume_flow_execution',
+          _payload: JSON.stringify({ execution_id: pending.id, answer: text }),
+          _tenant_id: tenantId,
+          _idempotency_key: `flow-resume-${pending.id}-${savedMsg.id}`,
+        });
+        resumedFlow = true;
+        console.log(`webhook-uazapi: resumed flow execution ${pending.id} for conversation ${conversation.id}`);
+      }
+    } catch (e) {
+      console.error('webhook-uazapi: failed to check awaiting flow:', e);
+    }
+  }
+
   // Enqueue AI processing for inbound messages (worker handles keyword lead creation + AI reply)
-  if (!fromMe && savedMsg?.id) {
+  if (!fromMe && savedMsg?.id && !resumedFlow) {
     try {
       await supabase.rpc('enqueue_job', {
         _type: 'process_uazapi_message',
