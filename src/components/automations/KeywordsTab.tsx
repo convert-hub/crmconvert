@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import TagInput from '@/components/contacts/TagInput';
+import { Textarea } from '@/components/ui/textarea';
 import { Plus, Trash2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 
