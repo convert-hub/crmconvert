@@ -113,7 +113,13 @@ export default function KeywordsTab() {
               </div>
               <div>
                 <Label className="text-[11px]">Palavras-chave</Label>
-                <div className="mt-1"><TagInput value={newKeywords} onChange={setNewKeywords} /></div>
+                <Textarea
+                  className="mt-1 text-xs min-h-[72px]"
+                  placeholder="agendar; preço; horário"
+                  value={newKeywordsText}
+                  onChange={e => setNewKeywordsText(e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Separe com ; , ou nova linha.</p>
               </div>
               <Button className="w-full h-8 text-xs" onClick={create}>Criar</Button>
             </div>
