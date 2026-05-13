@@ -22,6 +22,7 @@ export type Webhook = {
   sample_received_at: string | null;
   request_history: any[];
   actions: any[];
+  whatsapp_instance_id: string | null;
 };
 
 function genSlug() {
