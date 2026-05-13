@@ -40,6 +40,7 @@ import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
+import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -86,6 +87,7 @@ export default function FlowBuilderPage() {
   const [flowActive, setFlowActive] = useState(false);
   const [triggerType, setTriggerType] = useState('message_received');
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig>({});
+  const [whatsappInstanceId, setWhatsappInstanceId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [listView, setListView] = useState(true);
   const [nodeEditOpen, setNodeEditOpen] = useState(false);
@@ -118,6 +120,7 @@ export default function FlowBuilderPage() {
     setFlowActive(flow.is_active);
     setTriggerType(flow.trigger_type);
     setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
+    setWhatsappInstanceId(((flow as any).whatsapp_instance_id as string | null) ?? null);
     setNodes((flow.nodes as Node[]) || []);
     setEdges((flow.edges as Edge[]) || []);
     setListView(false);
@@ -130,6 +133,7 @@ export default function FlowBuilderPage() {
     setFlowActive(false);
     setTriggerType('message_received');
     setTriggerConfig({});
+    setWhatsappInstanceId(null);
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
@@ -172,7 +176,8 @@ export default function FlowBuilderPage() {
       nodes: nodes as any,
       edges: edges as any,
       is_active: flowActive,
-    };
+      whatsapp_instance_id: whatsappInstanceId,
+    } as any;
 
     try {
       if (selectedFlow) {
@@ -338,6 +343,14 @@ export default function FlowBuilderPage() {
                 flowId={selectedFlow?.id}
               />
             </div>
+          </div>
+
+          <div className="pt-3 border-t border-border mt-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1 pb-1">Número de envio</p>
+            <WhatsAppInstancePicker value={whatsappInstanceId} onChange={setWhatsappInstanceId} />
+            <p className="text-[10px] text-muted-foreground px-1 pt-1 leading-relaxed">
+              Usado quando o fluxo dispara sem conversa existente (webhook, lead criado, sequência).
+            </p>
           </div>
 
           <div className="pt-3 border-t border-border mt-3">

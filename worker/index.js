@@ -648,6 +648,31 @@ const handlers = {
           ctx.variables['contact.phone'] = ctc.phone || '';
         }
       }
+
+      // If no conversation but we have contact + flow has a default WhatsApp number,
+      // auto-create/reuse an open conversation on that number so messages can be sent.
+      if (!ctx.conversation_id && ctx.contact_id && flow.whatsapp_instance_id) {
+        const { data: existingConv } = await supabase.from('conversations')
+          .select('id')
+          .eq('tenant_id', tenant_id)
+          .eq('contact_id', ctx.contact_id)
+          .eq('whatsapp_instance_id', flow.whatsapp_instance_id)
+          .in('status', ['open', 'waiting_customer', 'waiting_agent'])
+          .maybeSingle();
+        if (existingConv?.id) {
+          ctx.conversation_id = existingConv.id;
+        } else {
+          const { data: newConv } = await supabase.from('conversations').insert({
+            tenant_id, contact_id: ctx.contact_id,
+            channel: 'whatsapp', status: 'open',
+            whatsapp_instance_id: flow.whatsapp_instance_id,
+          }).select('id').single();
+          ctx.conversation_id = newConv?.id || null;
+        }
+        if (ctx.conversation_id) {
+          await supabase.from('flow_executions').update({ conversation_id: ctx.conversation_id }).eq('id', execution.id);
+        }
+      }
       let stepCount = 0;
       const MAX_STEPS = 50;
 
@@ -721,7 +746,11 @@ const handlers = {
               if (contactPhone) {
                 await supabase.rpc('enqueue_job', {
                   _type: 'send_whatsapp',
-                  _payload: JSON.stringify({ tenant_id, phone: contactPhone, message: content, conversation_id: ctx.conversation_id }),
+                  _payload: JSON.stringify({
+                    tenant_id, phone: contactPhone, message: content,
+                    conversation_id: ctx.conversation_id,
+                    whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                  }),
                   _tenant_id: tenant_id,
                 });
               }
@@ -794,9 +823,19 @@ const handlers = {
               if (ctx.contact_id && config.message) {
                 const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
                 if (contact?.phone) {
+                  let convInstId = null;
+                  if (ctx.conversation_id) {
+                    const { data: conv } = await supabase.from('conversations')
+                      .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+                    convInstId = conv?.whatsapp_instance_id || null;
+                  }
                   await supabase.rpc('enqueue_job', {
                     _type: 'send_whatsapp',
-                    _payload: JSON.stringify({ tenant_id, phone: contact.phone, message: config.message, conversation_id: ctx.conversation_id }),
+                    _payload: JSON.stringify({
+                      tenant_id, phone: contact.phone, message: config.message,
+                      conversation_id: ctx.conversation_id,
+                      whatsapp_instance_id: convInstId || flow.whatsapp_instance_id || null,
+                    }),
                     _tenant_id: tenant_id,
                   });
                 }

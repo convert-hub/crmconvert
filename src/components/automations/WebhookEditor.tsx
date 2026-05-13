@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ArrowLeft, Copy, RefreshCw, Phone, User, Mail, FileCog, GitBranch, X, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { DndContext, useDraggable, useDroppable, DragEndEvent, DragOverlay, closestCenter } from '@dnd-kit/core';
+import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 import type { Webhook } from './WebhooksTab';
 
 type ActionType = 'set_phone' | 'set_name' | 'set_email' | 'set_custom_field' | 'trigger_flow';
@@ -200,6 +201,12 @@ export default function WebhookEditor({
             className="h-8 text-sm font-medium border-none bg-transparent focus-visible:ring-1 max-w-sm"
           />
           <div className="ml-auto flex items-center gap-3">
+            <div className="w-52">
+              <WhatsAppInstancePicker
+                value={w.whatsapp_instance_id}
+                onChange={(id) => persist({ whatsapp_instance_id: id } as any)}
+              />
+            </div>
             <Label className="text-xs text-muted-foreground">Ativo</Label>
             <Switch checked={w.is_active} onCheckedChange={v => persist({ is_active: v })} />
           </div>
