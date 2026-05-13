@@ -1055,12 +1055,53 @@ const handlers = {
         }
       }
 
-      await supabase.from('flow_executions').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', execution.id);
-      return { execution_id: execution.id, steps: stepCount };
+      if (!paused) {
+        await supabase.from('flow_executions').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', execution.id);
+      }
+      return { execution_id: execution.id, steps: stepCount, paused };
     } catch (err) {
       await supabase.from('flow_executions').update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() }).eq('id', execution.id);
       throw err;
     }
+  },
+
+  async resume_flow_execution(payload) {
+    const { execution_id, answer } = payload;
+    if (!execution_id) throw new Error('Missing execution_id');
+
+    const { data: execution } = await supabase.from('flow_executions').select('*').eq('id', execution_id).single();
+    if (!execution) return { skipped: true, reason: 'execution not found' };
+    if (execution.status !== 'awaiting_input') {
+      return { skipped: true, reason: `status is ${execution.status}` };
+    }
+
+    // Save the answer to the configured contact field
+    const saveField = execution.pending_save_field;
+    const customKey = execution.pending_custom_field_key;
+    const text = (answer || '').trim();
+
+    if (execution.contact_id && saveField && text) {
+      if (saveField === 'custom' && customKey) {
+        const { data: c } = await supabase.from('contacts').select('custom_fields').eq('id', execution.contact_id).single();
+        const customFields = { ...(c?.custom_fields || {}), [customKey]: text };
+        await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', execution.contact_id);
+        console.log(`[Worker] Flow resume: saved custom field "${customKey}" = "${text}"`);
+      } else if (saveField !== 'custom') {
+        await supabase.from('contacts').update({ [saveField]: text }).eq('id', execution.contact_id);
+        console.log(`[Worker] Flow resume: saved "${saveField}" = "${text}"`);
+      }
+    }
+
+    // Re-enter execute_flow in resume mode with the pending queue
+    return await handlers.execute_flow({
+      flow_id: execution.flow_id,
+      tenant_id: execution.tenant_id,
+      _resume: {
+        execution_id,
+        queue: Array.isArray(execution.pending_queue) ? execution.pending_queue : [],
+        extra_vars: { message: text, last_answer: text },
+      },
+    });
   },
 
   async send_scheduled_message(payload) {
