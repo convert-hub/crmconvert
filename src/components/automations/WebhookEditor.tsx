@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ArrowLeft, Copy, RefreshCw, Phone, User, Mail, FileCog, GitBranch, X, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { DndContext, useDraggable, useDroppable, DragEndEvent, DragOverlay, closestCenter } from '@dnd-kit/core';
+import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 import type { Webhook } from './WebhooksTab';
 
 type ActionType = 'set_phone' | 'set_name' | 'set_email' | 'set_custom_field' | 'trigger_flow';
