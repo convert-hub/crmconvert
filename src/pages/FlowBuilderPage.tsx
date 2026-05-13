@@ -346,6 +346,14 @@ export default function FlowBuilderPage() {
           </div>
 
           <div className="pt-3 border-t border-border mt-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1 pb-1">Número de envio</p>
+            <WhatsAppInstancePicker value={whatsappInstanceId} onChange={setWhatsappInstanceId} />
+            <p className="text-[10px] text-muted-foreground px-1 pt-1 leading-relaxed">
+              Usado quando o fluxo dispara sem conversa existente (webhook, lead criado, sequência).
+            </p>
+          </div>
+
+          <div className="pt-3 border-t border-border mt-3">
             <Button variant="outline" size="sm" className="w-full h-8 text-xs" onClick={deleteSelectedNodes}>
               <Trash2 className="h-3 w-3 mr-1.5" />Excluir selecionados
             </Button>
