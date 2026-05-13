@@ -65,15 +65,16 @@ export default function KeywordsTab() {
   };
 
   const create = async () => {
-    if (!tenant || !newFlowId || newKeywords.length === 0) {
-      toast.error('Selecione o fluxo e ao menos uma palavra-chave'); return;
-    }
+    if (!tenant) return;
+    if (!newFlowId) { toast.error('Selecione um fluxo'); return; }
+    const parsed = newKeywordsText.split(/[;\n,]/).map(s => s.trim()).filter(Boolean);
+    if (parsed.length === 0) { toast.error('Informe ao menos uma palavra-chave'); return; }
     const { error } = await supabase.from('keyword_automations').insert({
       tenant_id: tenant.id, flow_id: newFlowId,
-      keywords: newKeywords, match: newMatch, is_active: true,
+      keywords: parsed, match: newMatch, is_active: true,
     });
     if (error) return toast.error(error.message);
-    setOpen(false); setNewFlowId(''); setNewKeywords([]); setNewMatch('contains');
+    setOpen(false); setNewFlowId(''); setNewKeywordsText(''); setNewMatch('contains');
     load();
   };
 
