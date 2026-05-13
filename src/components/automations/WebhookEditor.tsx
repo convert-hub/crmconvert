@@ -201,6 +201,12 @@ export default function WebhookEditor({
             className="h-8 text-sm font-medium border-none bg-transparent focus-visible:ring-1 max-w-sm"
           />
           <div className="ml-auto flex items-center gap-3">
+            <div className="w-52">
+              <WhatsAppInstancePicker
+                value={w.whatsapp_instance_id}
+                onChange={(id) => persist({ whatsapp_instance_id: id } as any)}
+              />
+            </div>
             <Label className="text-xs text-muted-foreground">Ativo</Label>
             <Switch checked={w.is_active} onCheckedChange={v => persist({ is_active: v })} />
           </div>
