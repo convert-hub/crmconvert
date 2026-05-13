@@ -25,22 +25,37 @@ serve(async (req) => {
       || req.headers.get('x-tenant-id')
       || body.tenant_id;
 
-    if (!tenantId) {
-      const instanceName = body.instanceName || body.instance?.name || body.owner;
-      if (instanceName) {
-        const { data: inst } = await supabase.from('whatsapp_instances')
-          .select('tenant_id')
-          .eq('instance_name', instanceName)
-          .eq('is_active', true)
-          .limit(1)
-          .single();
-        if (inst) tenantId = inst.tenant_id;
+    let instanceId: string | null = null;
+    const instanceName = body.instanceName || body.instance?.name || body.owner;
+    if (instanceName) {
+      const { data: inst } = await supabase.from('whatsapp_instances')
+        .select('id, tenant_id')
+        .eq('instance_name', instanceName)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+      if (inst) {
+        instanceId = inst.id;
+        if (!tenantId) tenantId = inst.tenant_id;
       }
     }
 
     if (!tenantId) {
       console.error('webhook-uazapi: no tenant_id found. Body keys:', Object.keys(body));
       return jsonOk({ error: 'tenant_id required' });
+    }
+
+    // Fallback: pick the tenant's uazapi instance if we couldn't resolve from payload
+    if (!instanceId) {
+      const { data: inst } = await supabase.from('whatsapp_instances')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('provider', 'uazapi')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (inst) instanceId = inst.id;
     }
 
     // Save raw webhook event (fire and forget)
@@ -54,7 +69,7 @@ serve(async (req) => {
 
     switch (eventType) {
       case 'message':
-        await handleIncomingMessage(supabase, tenantId, body);
+        await handleIncomingMessage(supabase, tenantId, body, instanceId);
         break;
       case 'status_update':
         await handleStatusUpdate(supabase, tenantId, body);
@@ -133,7 +148,7 @@ function normalizeForPhraseMatch(str: string): string {
     .trim();
 }
 
-async function handleIncomingMessage(supabase: any, tenantId: string, body: any) {
+async function handleIncomingMessage(supabase: any, tenantId: string, body: any, instanceId: string | null = null) {
   // UAZAPI v2: message data is nested inside body.message
   const msg = body.message || body;
   
@@ -229,10 +244,15 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any)
       channel: 'whatsapp',
       status: 'open',
       provider_chat_id: chatid,
+      whatsapp_instance_id: instanceId,
       last_message_at: new Date().toISOString(),
     }).select().single();
     conversation = newConv;
-    console.log(`webhook-uazapi: created conversation ${conversation?.id}`);
+    console.log(`webhook-uazapi: created conversation ${conversation?.id} (instance=${instanceId || 'none'})`);
+  } else if (instanceId && !conversation.whatsapp_instance_id) {
+    // Backfill instance on legacy conversations created before instance routing
+    await supabase.from('conversations').update({ whatsapp_instance_id: instanceId }).eq('id', conversation.id);
+    conversation.whatsapp_instance_id = instanceId;
   }
 
   if (!conversation) {
