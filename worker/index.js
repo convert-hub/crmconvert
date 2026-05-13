@@ -962,27 +962,60 @@ const handlers = {
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
         } else if (node.type === 'question') {
-          // Question node: the response is expected in ctx.variables.message (the user's reply)
-          // Save the answer to the configured contact field
+          // Send the question text to the contact, then pause execution waiting for reply.
+          const questionText = (node.data?.question || node.data?.label || '').trim();
           const saveField = node.data?.saveField || '';
-          const answer = ctx.variables.message || ctx.variables.last_answer || '';
-          if (ctx.contact_id && saveField && answer) {
-            if (saveField === 'custom') {
-              const customKey = node.data?.customFieldKey || '';
-              if (customKey) {
-                const { data: c } = await supabase.from('contacts').select('custom_fields').eq('id', ctx.contact_id).single();
-                const customFields = { ...(c?.custom_fields || {}), [customKey]: answer };
-                await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', ctx.contact_id);
-                console.log(`[Worker] Flow: saved custom field "${customKey}" = "${answer}"`);
-              }
-            } else {
-              const updateData = { [saveField]: answer };
-              await supabase.from('contacts').update(updateData).eq('id', ctx.contact_id);
-              console.log(`[Worker] Flow: saved "${saveField}" = "${answer}"`);
+          const customKey = saveField === 'custom' ? (node.data?.customFieldKey || '') : null;
+
+          // Resolve conversation instance for sending
+          let convInstance = null;
+          if (ctx.conversation_id) {
+            const { data: conv } = await supabase.from('conversations')
+              .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+            if (conv?.whatsapp_instance_id) {
+              const { data: inst } = await supabase.from('whatsapp_instances')
+                .select('id').eq('id', conv.whatsapp_instance_id).maybeSingle();
+              convInstance = inst;
             }
           }
-          const next = adjacency[nodeId] || [];
-          next.forEach(n => queue.push(n));
+          let contactPhone = null;
+          if (ctx.contact_id) {
+            const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+            contactPhone = c?.phone || null;
+          }
+
+          if (questionText && ctx.conversation_id) {
+            const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+            await supabase.from('messages').insert({
+              tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+              content: interpolated, is_ai_generated: false,
+            });
+            if (contactPhone) {
+              await supabase.rpc('enqueue_job', {
+                _type: 'send_whatsapp',
+                _payload: JSON.stringify({
+                  tenant_id, phone: contactPhone, message: interpolated,
+                  conversation_id: ctx.conversation_id,
+                  whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                }),
+                _tenant_id: tenant_id,
+              });
+            }
+          }
+
+          // Persist pending state and pause
+          const nextNodes = adjacency[nodeId] || [];
+          await supabase.from('flow_executions').update({
+            status: 'awaiting_input',
+            current_node_id: nodeId,
+            pending_queue: nextNodes,
+            pending_save_field: saveField || null,
+            pending_custom_field_key: customKey || null,
+            context: { ...ctx },
+          }).eq('id', execution.id);
+          console.log(`[Worker] Flow ${flow_id}: question node ${nodeId} sent — awaiting reply`);
+          paused = true;
+          break;
         } else if (node.type === 'randomizer') {
           const mode = node.data?.mode || 'random';
           const options = node.data?.options || [];
