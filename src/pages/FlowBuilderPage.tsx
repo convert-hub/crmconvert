@@ -40,6 +40,7 @@ import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
+import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 
 const nodeTypes = {
   trigger: TriggerNode,
