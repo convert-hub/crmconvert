@@ -696,8 +696,9 @@ const handlers = {
       }
       let stepCount = 0;
       const MAX_STEPS = 50;
+      let paused = false;
 
-      while (queue.length > 0 && stepCount < MAX_STEPS) {
+      while (queue.length > 0 && stepCount < MAX_STEPS && !paused) {
         const nodeId = queue.shift();
         if (visited.has(nodeId)) continue;
         visited.add(nodeId);
