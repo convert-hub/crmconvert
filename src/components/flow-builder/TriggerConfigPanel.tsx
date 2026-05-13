@@ -64,35 +64,12 @@ export default function TriggerConfigPanel({ triggerType, config, onChange, flow
     );
   }
 
-  // ── Palavra-chave ──
+  // ── Palavra-chave ── (gerenciado em Automações)
   if (triggerType === 'keyword_match') {
     return (
-      <div className="space-y-2">
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Palavras-chave</Label>
-          <div className="mt-1">
-            <TagInput value={config.keywords || []} onChange={(v) => set({ keywords: v })} />
-          </div>
-        </div>
-        <div>
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Comparação</Label>
-          <Select value={config.match || 'contains'} onValueChange={(v) => set({ match: v as TriggerConfig['match'] })}>
-            <SelectTrigger className="h-8 text-xs mt-1"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="contains">Contém</SelectItem>
-              <SelectItem value="equals">Igual</SelectItem>
-              <SelectItem value="starts_with">Começa com</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center justify-between pt-1">
-          <Label className="text-[11px] text-muted-foreground">Diferenciar maiúsculas</Label>
-          <Switch
-            checked={!!config.case_sensitive}
-            onCheckedChange={(v) => set({ case_sensitive: v })}
-          />
-        </div>
-      </div>
+      <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
+        Configure as palavras-chave em <span className="font-medium text-foreground">Automações → Palavras-chave</span>. Salve este fluxo e adicione a regra lá.
+      </p>
     );
   }
 
