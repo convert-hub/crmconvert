@@ -85,7 +85,7 @@ interface Automation {
   actions: ActionConfig[]; is_active: boolean; created_at: string;
 }
 
-export default function AutomationsPage() {
+export default function RulesTab() {
   const { tenant } = useAuth();
   const flowVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'flow' });
   const [automations, setAutomations] = useState<Automation[]>([]);
