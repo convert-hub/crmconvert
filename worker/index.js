@@ -607,17 +607,47 @@ const handlers = {
   },
 
   async execute_flow(payload) {
-    const { flow_id, tenant_id, contact_id, conversation_id, trigger_data } = payload;
+    const { flow_id, tenant_id, contact_id, conversation_id, trigger_data, _resume } = payload;
     if (!flow_id || !tenant_id) throw new Error('Missing flow_id or tenant_id');
 
     const { data: flow } = await supabase.from('chatbot_flows').select('*').eq('id', flow_id).eq('is_active', true).single();
     if (!flow) return { skipped: true, reason: 'flow not found or inactive' };
 
-    // Create execution record
-    const { data: execution } = await supabase.from('flow_executions').insert({
-      flow_id, tenant_id, contact_id: contact_id || null, conversation_id: conversation_id || null,
-      status: 'running', context: { trigger_data: trigger_data || {} },
-    }).select().single();
+    // Resume vs fresh execution
+    let execution;
+    let ctx;
+    let initialQueue;
+    let visited;
+
+    if (_resume?.execution_id) {
+      const { data: existing } = await supabase.from('flow_executions').select('*').eq('id', _resume.execution_id).single();
+      if (!existing) return { skipped: true, reason: 'execution not found' };
+      execution = existing;
+      ctx = { ...(existing.context || {}), contact_id: existing.contact_id, conversation_id: existing.conversation_id, tenant_id };
+      ctx.variables = { ...(ctx.variables || {}), ...(_resume.extra_vars || {}) };
+      initialQueue = Array.isArray(_resume.queue) ? [..._resume.queue] : (Array.isArray(existing.pending_queue) ? [...existing.pending_queue] : []);
+      visited = new Set();
+      await supabase.from('flow_executions').update({
+        status: 'running', pending_queue: null, pending_save_field: null, pending_custom_field_key: null,
+      }).eq('id', execution.id);
+    } else {
+      const { data: created } = await supabase.from('flow_executions').insert({
+        flow_id, tenant_id, contact_id: contact_id || null, conversation_id: conversation_id || null,
+        status: 'running', context: { trigger_data: trigger_data || {} },
+      }).select().single();
+      execution = created;
+      ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
+      if (contact_id) {
+        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
+        if (ctc) {
+          ctx.variables['contact.name'] = ctc.name || '';
+          ctx.variables['contact.email'] = ctc.email || '';
+          ctx.variables['contact.phone'] = ctc.phone || '';
+        }
+      }
+      initialQueue = null; // will be set after trigger node lookup
+      visited = new Set();
+    }
 
     try {
       const nodes = flow.nodes || [];
@@ -631,22 +661,13 @@ const handlers = {
         adjacency[key].push(e.target);
       });
 
-      // Find trigger node
-      const triggerNode = nodes.find(n => n.type === 'trigger');
-      if (!triggerNode) throw new Error('No trigger node found');
-
-      // BFS execution
-      const queue = [triggerNode.id];
-      const visited = new Set();
-      const ctx = { contact_id, conversation_id, tenant_id, variables: { ...(trigger_data || {}) } };
-      // Enrich context with contact fields for {{contact.name}} interpolation
-      if (contact_id) {
-        const { data: ctc } = await supabase.from('contacts').select('name, email, phone').eq('id', contact_id).maybeSingle();
-        if (ctc) {
-          ctx.variables['contact.name'] = ctc.name || '';
-          ctx.variables['contact.email'] = ctc.email || '';
-          ctx.variables['contact.phone'] = ctc.phone || '';
-        }
+      let queue;
+      if (initialQueue) {
+        queue = initialQueue;
+      } else {
+        const triggerNode = nodes.find(n => n.type === 'trigger');
+        if (!triggerNode) throw new Error('No trigger node found');
+        queue = [triggerNode.id];
       }
 
       // If no conversation but we have contact + flow has a default WhatsApp number,
