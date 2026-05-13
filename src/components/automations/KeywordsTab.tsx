@@ -36,7 +36,7 @@ export default function KeywordsTab() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [open, setOpen] = useState(false);
   const [newFlowId, setNewFlowId] = useState<string>('');
-  const [newKeywords, setNewKeywords] = useState<string[]>([]);
+  const [newKeywordsText, setNewKeywordsText] = useState<string>('');
   const [newMatch, setNewMatch] = useState<KA['match']>('contains');
 
   const load = async () => {
