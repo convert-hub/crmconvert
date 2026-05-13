@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import TagInput from '@/components/contacts/TagInput';
+import { Textarea } from '@/components/ui/textarea';
 import { Plus, Trash2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -35,7 +36,7 @@ export default function KeywordsTab() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [open, setOpen] = useState(false);
   const [newFlowId, setNewFlowId] = useState<string>('');
-  const [newKeywords, setNewKeywords] = useState<string[]>([]);
+  const [newKeywordsText, setNewKeywordsText] = useState<string>('');
   const [newMatch, setNewMatch] = useState<KA['match']>('contains');
 
   const load = async () => {
@@ -64,15 +65,16 @@ export default function KeywordsTab() {
   };
 
   const create = async () => {
-    if (!tenant || !newFlowId || newKeywords.length === 0) {
-      toast.error('Selecione o fluxo e ao menos uma palavra-chave'); return;
-    }
+    if (!tenant) return;
+    if (!newFlowId) { toast.error('Selecione um fluxo'); return; }
+    const parsed = newKeywordsText.split(/[;\n,]/).map(s => s.trim()).filter(Boolean);
+    if (parsed.length === 0) { toast.error('Informe ao menos uma palavra-chave'); return; }
     const { error } = await supabase.from('keyword_automations').insert({
       tenant_id: tenant.id, flow_id: newFlowId,
-      keywords: newKeywords, match: newMatch, is_active: true,
+      keywords: parsed, match: newMatch, is_active: true,
     });
     if (error) return toast.error(error.message);
-    setOpen(false); setNewFlowId(''); setNewKeywords([]); setNewMatch('contains');
+    setOpen(false); setNewFlowId(''); setNewKeywordsText(''); setNewMatch('contains');
     load();
   };
 
@@ -111,7 +113,13 @@ export default function KeywordsTab() {
               </div>
               <div>
                 <Label className="text-[11px]">Palavras-chave</Label>
-                <div className="mt-1"><TagInput value={newKeywords} onChange={setNewKeywords} /></div>
+                <Textarea
+                  className="mt-1 text-xs min-h-[72px]"
+                  placeholder="agendar; preço; horário"
+                  value={newKeywordsText}
+                  onChange={e => setNewKeywordsText(e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Separe com ; , ou nova linha.</p>
               </div>
               <Button className="w-full h-8 text-xs" onClick={create}>Criar</Button>
             </div>
