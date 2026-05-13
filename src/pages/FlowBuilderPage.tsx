@@ -175,7 +175,8 @@ export default function FlowBuilderPage() {
       nodes: nodes as any,
       edges: edges as any,
       is_active: flowActive,
-    };
+      whatsapp_instance_id: whatsappInstanceId,
+    } as any;
 
     try {
       if (selectedFlow) {
