@@ -1,49 +1,63 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 
-// Public endpoint — autenticação por X-Flow-Secret no body do trigger_config.
-// URL: POST /functions/v1/webhook-flow-trigger/<flow_id>
+// Public endpoint — webhook receiver baseado em slug.
+// URL: POST /functions/v1/webhook-flow-trigger/<slug>
+// Auth: header X-Flow-Secret deve bater com webhook_endpoints.secret
+//
+// test_mode=true  → grava sample_payload + request_history e retorna sem disparar
+// test_mode=false → resolve actions[] (set_phone, set_name, set_email, set_custom_field, trigger_flow),
+//                   cria/atualiza contato e enfileira execute_flow
+
+type ActionMap = {
+  id: string;
+  type: 'set_phone' | 'set_name' | 'set_email' | 'set_custom_field' | 'trigger_flow';
+  source_path?: string;
+  target?: string;
+  flow_id?: string;
+};
+
+function getByPath(obj: any, path: string): any {
+  if (!path) return undefined;
+  return path.split('.').reduce((acc, key) => acc?.[key], obj);
+}
+
+function normalizePhone(p: any): string | null {
+  if (p === undefined || p === null) return null;
+  const digits = String(p).replace(/\D/g, '');
+  return digits || null;
+}
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const url = new URL(req.url);
-    // pathname: /webhook-flow-trigger/<flow_id> ou /functions/v1/webhook-flow-trigger/<flow_id>
     const segments = url.pathname.split('/').filter(Boolean);
     const idx = segments.findIndex((s) => s === 'webhook-flow-trigger');
-    const flowId = idx >= 0 ? segments[idx + 1] : segments[segments.length - 1];
+    const slug = idx >= 0 ? segments[idx + 1] : segments[segments.length - 1];
 
-    if (!flowId || !/^[0-9a-f-]{36}$/i.test(flowId)) {
-      return jsonError(400, 'invalid flow id');
-    }
+    if (!slug) return jsonError(400, 'missing slug');
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { data: flow, error: flowErr } = await supabase
-      .from('chatbot_flows')
-      .select('id, tenant_id, trigger_type, trigger_config, is_active')
-      .eq('id', flowId)
+    const { data: wh, error: whErr } = await supabase
+      .from('webhook_endpoints')
+      .select('*')
+      .eq('slug', slug)
       .maybeSingle();
 
-    if (flowErr || !flow) return jsonError(404, 'flow not found');
-    if (flow.trigger_type !== 'webhook') return jsonError(400, 'flow trigger is not webhook');
-    if (!flow.is_active) return jsonError(403, 'flow inactive');
+    if (whErr || !wh) return jsonError(404, 'webhook not found');
+    if (!wh.is_active) return jsonError(403, 'webhook inactive');
 
-    const expectedSecret = (flow.trigger_config as Record<string, unknown> | null)?.secret as string | undefined;
-    const providedSecret =
+    const provided =
       req.headers.get('x-flow-secret') ||
       req.headers.get('X-Flow-Secret') ||
       url.searchParams.get('secret');
-
-    if (!expectedSecret || providedSecret !== expectedSecret) {
-      return jsonError(401, 'invalid secret');
-    }
+    if (provided !== wh.secret) return jsonError(401, 'invalid secret');
 
     let body: Record<string, unknown> = {};
     if (req.method === 'POST' || req.method === 'PUT') {
@@ -55,63 +69,102 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Field mapping (payload key -> variable name)
-    const mapping = ((flow.trigger_config as Record<string, unknown> | null)?.field_mapping || {}) as Record<string, string>;
-    const triggerData: Record<string, unknown> = { ...body, _raw: body };
-    for (const [from, to] of Object.entries(mapping)) {
-      if (from && to && body[from] !== undefined) triggerData[to] = body[from];
+    const headers: Record<string, string> = {};
+    req.headers.forEach((v, k) => { headers[k] = v; });
+    const fullPayload = { body, query: Object.fromEntries(url.searchParams.entries()), headers };
+
+    // ── TEST MODE ──
+    if (wh.test_mode) {
+      const history = Array.isArray(wh.request_history) ? wh.request_history : [];
+      const newHistory = [
+        { received_at: new Date().toISOString(), payload: fullPayload },
+        ...history,
+      ].slice(0, 10);
+
+      await supabase.from('webhook_endpoints').update({
+        sample_payload: fullPayload,
+        sample_received_at: new Date().toISOString(),
+        request_history: newHistory,
+      }).eq('id', wh.id);
+
+      return json(200, { ok: true, captured: true, message: 'Modo teste ativo — payload registrado' });
     }
 
-    // Resolve contact: try phone or email from body
-    const phone = (body.phone || body.telefone || triggerData.phone) as string | undefined;
-    const email = (body.email || triggerData.email) as string | undefined;
+    // ── LIVE MODE ──
+    const actions: ActionMap[] = Array.isArray(wh.actions) ? wh.actions : [];
+
+    // Resolve mapped values from payload
+    const phone = normalizePhone(getByPath(fullPayload, actions.find(a => a.type === 'set_phone')?.source_path || ''));
+    const name = String(getByPath(fullPayload, actions.find(a => a.type === 'set_name')?.source_path || '') ?? '').trim() || null;
+    const email = String(getByPath(fullPayload, actions.find(a => a.type === 'set_email')?.source_path || '') ?? '').trim().toLowerCase() || null;
+
     let contactId: string | null = null;
     if (phone || email) {
-      let q = supabase.from('contacts').select('id').eq('tenant_id', flow.tenant_id).limit(1);
-      if (phone) q = q.eq('phone', String(phone).replace(/\D/g, ''));
-      else if (email) q = q.eq('email', String(email).toLowerCase());
+      let q = supabase.from('contacts').select('id, custom_fields').eq('tenant_id', wh.tenant_id).limit(1);
+      if (phone) q = q.eq('phone', phone);
+      else if (email) q = q.eq('email', email);
       const { data: c } = await q.maybeSingle();
       contactId = c?.id ?? null;
 
-      if (!contactId && (body.create_contact === true || body.name)) {
+      // Build custom fields from set_custom_field actions
+      const customFields: Record<string, unknown> = c?.custom_fields ?? {};
+      for (const a of actions.filter(x => x.type === 'set_custom_field' && x.target && x.source_path)) {
+        const val = getByPath(fullPayload, a.source_path!);
+        if (val !== undefined) customFields[a.target!] = val;
+      }
+
+      if (!contactId) {
         const { data: newC } = await supabase.from('contacts').insert({
-          tenant_id: flow.tenant_id,
-          name: (body.name as string) || (phone as string) || (email as string) || 'Webhook',
-          phone: phone ? String(phone).replace(/\D/g, '') : null,
-          email: email ? String(email).toLowerCase() : null,
-          source: (body.source as string) || 'webhook',
-          status: 'lead',
+          tenant_id: wh.tenant_id,
+          name: name || phone || email || 'Webhook',
+          phone, email, custom_fields: customFields,
+          source: 'webhook', status: 'lead',
         }).select('id').single();
         contactId = newC?.id ?? null;
+      } else {
+        const update: Record<string, unknown> = { custom_fields: customFields };
+        if (name) update.name = name;
+        await supabase.from('contacts').update(update).eq('id', contactId);
       }
     }
 
-    const { data: jobId, error: jobErr } = await supabase.rpc('enqueue_job', {
-      _type: 'execute_flow',
-      _payload: JSON.stringify({
-        flow_id: flow.id,
-        tenant_id: flow.tenant_id,
-        contact_id: contactId,
-        conversation_id: null,
-        trigger_data: triggerData,
-      }),
-      _tenant_id: flow.tenant_id,
-    });
+    // Trigger flow(s)
+    const flowAction = actions.find(a => a.type === 'trigger_flow' && a.flow_id);
+    const flowId = flowAction?.flow_id || wh.flow_id;
+    let jobId: string | null = null;
+    if (flowId) {
+      const triggerData: Record<string, unknown> = { ...body, _webhook: { slug: wh.slug, name: wh.name } };
+      // Also expose mapped fields by their target name for convenience
+      for (const a of actions) {
+        if (a.source_path && a.target) {
+          triggerData[a.target] = getByPath(fullPayload, a.source_path);
+        }
+      }
+      const { data: enq } = await supabase.rpc('enqueue_job', {
+        _type: 'execute_flow',
+        _payload: JSON.stringify({
+          flow_id: flowId,
+          tenant_id: wh.tenant_id,
+          contact_id: contactId,
+          conversation_id: null,
+          trigger_data: triggerData,
+        }),
+        _tenant_id: wh.tenant_id,
+      });
+      jobId = enq as unknown as string;
+    }
 
-    if (jobErr) return jsonError(500, jobErr.message);
-
-    return new Response(
-      JSON.stringify({ ok: true, job_id: jobId, contact_id: contactId }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return json(200, { ok: true, contact_id: contactId, job_id: jobId });
   } catch (err) {
     return jsonError(500, err instanceof Error ? err.message : 'unknown error');
   }
 });
 
-function jsonError(status: number, message: string) {
-  return new Response(JSON.stringify({ ok: false, error: message }), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+function json(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
+}
+function jsonError(status: number, message: string) {
+  return json(status, { ok: false, error: message });
 }
