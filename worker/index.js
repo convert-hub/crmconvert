@@ -721,7 +721,11 @@ const handlers = {
               if (contactPhone) {
                 await supabase.rpc('enqueue_job', {
                   _type: 'send_whatsapp',
-                  _payload: JSON.stringify({ tenant_id, phone: contactPhone, message: content, conversation_id: ctx.conversation_id }),
+                  _payload: JSON.stringify({
+                    tenant_id, phone: contactPhone, message: content,
+                    conversation_id: ctx.conversation_id,
+                    whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                  }),
                   _tenant_id: tenant_id,
                 });
               }
