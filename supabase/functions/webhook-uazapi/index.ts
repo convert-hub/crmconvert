@@ -244,10 +244,15 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
       channel: 'whatsapp',
       status: 'open',
       provider_chat_id: chatid,
+      whatsapp_instance_id: instanceId,
       last_message_at: new Date().toISOString(),
     }).select().single();
     conversation = newConv;
-    console.log(`webhook-uazapi: created conversation ${conversation?.id}`);
+    console.log(`webhook-uazapi: created conversation ${conversation?.id} (instance=${instanceId || 'none'})`);
+  } else if (instanceId && !conversation.whatsapp_instance_id) {
+    // Backfill instance on legacy conversations created before instance routing
+    await supabase.from('conversations').update({ whatsapp_instance_id: instanceId }).eq('id', conversation.id);
+    conversation.whatsapp_instance_id = instanceId;
   }
 
   if (!conversation) {
