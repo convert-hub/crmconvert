@@ -117,7 +117,7 @@ export default function SequencesTab() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 p-3 rounded-lg border border-border bg-card">
+        <div className="grid grid-cols-4 gap-3 p-3 rounded-lg border border-border bg-card">
           <div>
             <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Entrada</Label>
             <Select value={editing.enrollment_trigger} onValueChange={v => updateSeq({ enrollment_trigger: v })}>
@@ -128,6 +128,15 @@ export default function SequencesTab() {
                 <SelectItem value="lead_created">Lead criado</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Número de envio</Label>
+            <div className="mt-1">
+              <WhatsAppInstancePicker
+                value={editing.whatsapp_instance_id}
+                onChange={(id) => updateSeq({ whatsapp_instance_id: id })}
+              />
+            </div>
           </div>
           <div className="flex items-center justify-between pt-4">
             <Label className="text-xs">Sair se cliente responder</Label>
