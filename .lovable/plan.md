@@ -1,58 +1,45 @@
-## Diagnóstico
+Refatorar a navegação da página de Configurações (`src/pages/SettingsPage.tsx`) de tabs horizontais flex-wrap para uma sidebar vertical com agrupamento por seção, mais responsividade mobile.
 
-Olhei o handler de `execute_flow` no `worker/index.js` (linhas 942–963). O nó `question` hoje:
+## Alterações no arquivo `src/pages/SettingsPage.tsx`
 
-1. **Não envia nada para o contato.** Só nó `message` envia WhatsApp. O texto digitado em "Pergunta" fica preso no editor, nunca vai para o canal.
-2. **Não pausa o fluxo.** Lê `ctx.variables.message` (que é a mensagem do gatilho — ex.: "Branco"), salva como resposta no campo configurado e segue para o próximo nó imediatamente.
-3. **Não tem mecanismo de retomada.** A tabela `flow_executions` tem `status` e `current_node_id`, mas o `webhook-uazapi` não consulta execuções pausadas ao receber uma nova mensagem.
+### 1. Imports
 
-Resultado prático no caso do Bruno: a mensagem foi enviada, o nó pergunta "executou" sem efeito visível, e o fluxo terminou em `completed` sem nunca conversar de verdade.
+- Adicionar ícones novos do lucide-react: `Settings2`, `Palette`, `GitBranch`, `SlidersHorizontal`, `Users`, `Tag`, `Zap`, `FileText`, `Brain`, `BookOpen`, `Plug`.
+- Remover os que deixarem de ser usados se necessário (preservar os demais).
 
-## Solução
+### 2. Estado
 
-Transformar `question` em um nó que **envia + pausa + retoma**.
+- Introduzir `const [activeTab, setActiveTab] = useState("general")`.
+- Trocar `<Tabs defaultValue="general">` por `<Tabs value={activeTab} onValueChange={setActiveTab}>`.
 
-### 1. Banco (migration)
-- Adicionar a `flow_executions`:
-  - `pending_queue jsonb` — fila de nodeIds restantes quando pausa.
-  - `pending_save_field text` — campo onde gravar a próxima resposta.
-  - `pending_custom_field_key text` — chave quando `saveField = 'custom'`.
-- Permitir `status = 'awaiting_input'` (já é text, sem constraint).
-- Índice parcial: `(tenant_id, conversation_id) WHERE status = 'awaiting_input'` para lookup rápido na retomada.
+### 3. Layout desktop (md+)
 
-### 2. Worker — nó `question` (worker/index.js ~942)
-Quando entrar no nó:
-1. Enviar `node.data.question` como mensagem WhatsApp (mesma lógica do nó `message`: insert em `messages`, enqueue `send_whatsapp` com fallback de instance idêntico).
-2. Persistir em `flow_executions`: `status = 'awaiting_input'`, `current_node_id = nodeId`, `pending_queue = [próximos da adjacency]`, `pending_save_field`, `pending_custom_field_key`, `context = ctx`.
-3. **Parar o loop** (return / break do while).
+- Aumentar container de `max-w-5xl` para `max-w-6xl`.
+- Substituir o `<TabsList>` horizontal atual (linhas 456-468) por uma sidebar vertical dentro de `<div className="hidden md:block w-48 shrink-0">`.
+- Agrupar itens em 5 seções com rótulos em `text-xs uppercase text-muted-foreground`:
+  - **Geral**: Geral, Marca, Pipeline, Campos
+  - **Equipe**: Membros
+  - **Comunicação**: Tags, Respostas Rápidas, Templates Meta
+  - **Inteligência**: IA, Base de Conhecimento
+  - **Sistema**: Integrações
+- Cada `TabsTrigger` deve ser `flex flex-row justify-start rounded-lg px-3 py-2 h-auto` com ícone à esquerda e texto, e `data-[state=active]:bg-muted`.
 
-### 3. Worker — novo job `resume_flow_execution`
-Payload: `{ execution_id, answer }`. Faz:
-1. Carrega execução, valida `status = 'awaiting_input'`.
-2. Salva resposta no contato (lógica atual de `saveField` / `custom_fields`).
-3. Reidrata `ctx`, monta `queue = pending_queue`, marca `status = 'running'`, limpa campos `pending_*`.
-4. Continua o loop normal de execução do fluxo (refatorar o while atual em função reutilizável `runFlowQueue(execution, ctx, queue, flow, adjacency, nodes)`).
+### 4. Layout mobile (< md)
 
-### 4. webhook-uazapi — disparar retomada
-Em `handleIncomingMessage`, depois de criar/atualizar a `messages` inbound:
-- `SELECT id FROM flow_executions WHERE tenant_id=? AND conversation_id=? AND status='awaiting_input' ORDER BY started_at DESC LIMIT 1`
-- Se existir, `enqueue_job('resume_flow_execution', { execution_id, answer: text })` e **bloquear** outros gatilhos de fluxo (keyword/auto-reply de IA) para essa mensagem, para não disparar dois fluxos concorrentes.
+- Acima do conteúdo, renderizar um `<Select value={activeTab} onValueChange={setActiveTab}>` visível apenas em `block md:hidden`.
+- O Select conterá os mesmos 11 valores com rótulos legíveis (ex: "Campos" ou "Campos Personalizados").
 
-### 5. Timeout (opcional, fora desta entrega)
-Anotar para depois: pg_cron marcando `awaiting_input` antigos (> X horas) como `expired`. Não implementar agora para manter o escopo enxuto.
+### 5. Estrutura de conteúdo
 
-## Fora de escopo
-- Validação do tipo da resposta (regex/email/telefone) — virá depois.
-- Reenvio automático se o contato não responder.
-- UI para visualizar execuções pausadas (dá pra ver via `JobsPage` se quiser).
+- Envelopar a sidebar + conteúdo em `<div className="flex gap-6">`.
+- Os `<TabsContent>` existentes permanecem intactos dentro de `<div className="flex-1 min-w-0">`.
+- Nenhuma lógica interna dos painéis (estados, funções, permissões) será modificada.
 
-## Arquivos afetados
-- migration nova (colunas + índice)
-- `worker/index.js` (nó `question` + novo handler `resume_flow_execution` + refator do loop)
-- `supabase/functions/webhook-uazapi/index.ts` (lookup + enqueue de retomada)
-- `src/integrations/supabase/types.ts` (regenerado)
+### 6. Semântica preservada
 
-## Detalhes técnicos
-- Refatorar o while de `execute_flow` em `runFlowQueue(...)` para reuso entre primeira execução e `resume_flow_execution`.
-- `pending_queue` guarda só strings (nodeIds + handles tipo `nodeId:option-0`); nada de funções/closures.
-- Worker precisa ser rebuilt para carregar novo job type (memória do projeto).
+- Manter os `value` dos `TabsTrigger` exatamente como estão (`general`, `branding`, `pipeline`, `custom_fields`, `team`, `ai`, `tags`, `quick_replies`, `knowledge`, `integrations`, `meta_templates`).
+- Manter o controle de permissões (`isAdmin`) que condicionalmente desabilita ações dentro dos painéis.  
+  
+**Adendo importante:**
+  1. **Não colocar** `<span>` **de rótulo de seção dentro do** `<TabsList>` — O Radix Tabs espera apenas `TabsTrigger` como filhos do `TabsList`, e elementos extras quebram a navegação por teclado (arrow keys). Em vez disso, usar a sidebar como uma `<nav>` com botões comuns estilizados que chamam `setActiveTab(value)`, e manter o `<TabsList>` oculto (`className="hidden"`) apenas para preservar a semântica do componente `<Tabs>`. Os rótulos de seção ficam como `<p>` ou `<span>` fora do `TabsList`.
+  2. **Aumentar a largura da sidebar de** `w-48` **para** `w-56` — Nomes como "Base de Conhecimento" e "Respostas Rápidas" truncam em 192px com padding + ícone. 224px (`w-56`) garante que todos os labels caibam sem quebrar linha.

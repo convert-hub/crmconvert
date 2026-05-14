@@ -10,7 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText, GitBranch, SlidersHorizontal, Users, BookOpen, Plug } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
 import QuickRepliesSettings from '@/components/settings/QuickRepliesSettings';
@@ -278,6 +279,7 @@ export default function SettingsPage() {
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
   const [cfOptions, setCfOptions] = useState('');
+  const [activeTab, setActiveTab] = useState('general');
 
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
 
@@ -449,23 +451,79 @@ export default function SettingsPage() {
 
   const CF_TYPE_LABELS: Record<string, string> = { text: 'Texto', number: 'Número', select: 'Seleção', date: 'Data', boolean: 'Sim/Não' };
 
+  const navGroups: { label: string; items: { value: string; label: string; icon: any }[] }[] = [
+    { label: 'Geral', items: [
+      { value: 'general', label: 'Geral', icon: Settings2 },
+      { value: 'branding', label: 'Marca', icon: Palette },
+      { value: 'pipeline', label: 'Pipeline', icon: GitBranch },
+      { value: 'custom_fields', label: 'Campos', icon: SlidersHorizontal },
+    ]},
+    { label: 'Equipe', items: [
+      { value: 'team', label: 'Membros', icon: Users },
+    ]},
+    { label: 'Comunicação', items: [
+      { value: 'tags', label: 'Tags', icon: Tag },
+      { value: 'quick_replies', label: 'Respostas Rápidas', icon: Zap },
+      { value: 'meta_templates', label: 'Templates Meta', icon: FileText },
+    ]},
+    { label: 'Inteligência', items: [
+      { value: 'ai', label: 'IA', icon: Brain },
+      { value: 'knowledge', label: 'Base de Conhecimento', icon: BookOpen },
+    ]},
+    { label: 'Sistema', items: [
+      { value: 'integrations', label: 'Integrações', icon: Plug },
+    ]},
+  ];
+  const allNavItems = navGroups.flatMap(g => g.items);
+
   return (
-    <div className="p-6 max-w-5xl bg-background">
+    <div className="p-6 max-w-6xl bg-background">
       <h1 className="text-xl font-bold mb-6 text-foreground">Configurações</h1>
-      <Tabs defaultValue="general">
-        <TabsList className="flex-wrap rounded-xl bg-muted/50 p-1">
-          <TabsTrigger value="general" className="rounded-lg">Geral</TabsTrigger>
-          <TabsTrigger value="branding" className="rounded-lg"><Palette className="h-3.5 w-3.5 mr-1" />Marca</TabsTrigger>
-          <TabsTrigger value="pipeline" className="rounded-lg">Pipeline</TabsTrigger>
-          <TabsTrigger value="custom_fields" className="rounded-lg"><Settings2 className="h-3.5 w-3.5 mr-1" />Campos Personalizados</TabsTrigger>
-          <TabsTrigger value="team" className="rounded-lg">Equipe</TabsTrigger>
-          <TabsTrigger value="ai" className="rounded-lg">IA</TabsTrigger>
-          <TabsTrigger value="tags" className="rounded-lg"><Tag className="h-3.5 w-3.5 mr-1" />Tags</TabsTrigger>
-          <TabsTrigger value="quick_replies" className="rounded-lg"><Zap className="h-3.5 w-3.5 mr-1" />Respostas Rápidas</TabsTrigger>
-          <TabsTrigger value="knowledge" className="rounded-lg"><Brain className="h-3.5 w-3.5 mr-1" />Base de Conhecimento</TabsTrigger>
-          <TabsTrigger value="integrations" className="rounded-lg">Integrações</TabsTrigger>
-          <TabsTrigger value="meta_templates" className="rounded-lg"><FileText className="h-3.5 w-3.5 mr-1" />Templates Meta</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        {/* Hidden TabsList preserves Radix semantics */}
+        <TabsList className="hidden">
+          {allNavItems.map(i => <TabsTrigger key={i.value} value={i.value}>{i.label}</TabsTrigger>)}
         </TabsList>
+
+        {/* Mobile select */}
+        <div className="block md:hidden mb-4">
+          <Select value={activeTab} onValueChange={setActiveTab}>
+            <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {allNavItems.map(i => <SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex gap-6">
+          {/* Sidebar (desktop) */}
+          <nav className="hidden md:block w-56 shrink-0">
+            {navGroups.map(group => (
+              <div key={group.label} className="mb-2">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-3 pt-3 pb-1">{group.label}</p>
+                {group.items.map(item => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      onClick={() => setActiveTab(item.value)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                        isActive ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                      )}
+                    >
+                      <Icon className="h-4 w-4" strokeWidth={1.75} />
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
 
         <TabsContent value="branding" className="space-y-4 pt-4">
           <BrandingSettings />
@@ -836,6 +894,8 @@ export default function SettingsPage() {
         <TabsContent value="meta_templates" className="space-y-4 pt-4">
           <MetaTemplatesCard />
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
     </div>
   );
