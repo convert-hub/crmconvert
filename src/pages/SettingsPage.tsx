@@ -279,6 +279,7 @@ export default function SettingsPage() {
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
   const [cfOptions, setCfOptions] = useState('');
+  const [activeTab, setActiveTab] = useState('general');
 
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
 
