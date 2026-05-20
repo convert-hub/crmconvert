@@ -127,12 +127,14 @@ export default function RulesTab() {
 
   const resetForm = () => {
     setName(''); setTriggerType(TRIGGERS[0].value);
-    setConditions({}); setActions([{ type: 'move_to_stage' }]); setEditId(null);
+    setConditions({}); setFilters([]); setActions([{ type: 'move_to_stage' }]); setEditId(null);
   };
 
   const openEdit = (a: Automation) => {
     setEditId(a.id); setName(a.name); setTriggerType(a.trigger_type);
-    setConditions(a.conditions || {});
+    const norm = normalizeConditions(a.conditions);
+    setConditions((norm.trigger as ConditionConfig) || {});
+    setFilters(norm.filters || []);
     setActions(Array.isArray(a.actions) && a.actions.length > 0 ? a.actions : [{ type: 'move_to_stage' }]);
     setDialogOpen(true);
   };
@@ -143,7 +145,7 @@ export default function RulesTab() {
     const payload = {
       name,
       trigger_type: triggerType as any,
-      conditions: conditions as any,
+      conditions: { trigger: conditions, filters } as any,
       actions: actions as any,
     };
 
