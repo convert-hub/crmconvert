@@ -235,13 +235,16 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       }).select('id').single();
 
       if (opp?.contact?.phone) {
-        const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
-          body: { action: 'send_message', tenant_id: tenant.id, phone: opp.contact.phone, message: newMessage, conversation_id: convId },
+        const result = await sendText({
+          conversationId: convId!,
+          tenantId: tenant.id,
+          phone: opp.contact.phone,
+          text: newMessage,
         });
-        if (error || data?.error) {
-          toast.warning('Falha ao enviar via WhatsApp: ' + (data?.error || error?.message));
-        } else if (savedMsg?.id && data?.provider_message_id) {
-          await supabase.from('messages').update({ provider_message_id: data.provider_message_id }).eq('id', savedMsg.id);
+        if (!result.ok) {
+          toast.warning('Falha ao enviar via WhatsApp: ' + (result.error ?? 'erro desconhecido'));
+        } else if (savedMsg?.id && result.provider_message_id) {
+          await supabase.from('messages').update({ provider_message_id: result.provider_message_id }).eq('id', savedMsg.id);
         }
       }
       setNewMessage(''); toast.success('Mensagem enviada');
