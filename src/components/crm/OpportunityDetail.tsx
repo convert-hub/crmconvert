@@ -17,6 +17,7 @@ import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { opportunityStatusLabels, priorityLabels, activityTypeLabels } from '@/lib/labels';
 import { Checkbox } from '@/components/ui/checkbox';
+import { sendText } from '@/lib/whatsappRouter';
 
 interface CustomFieldDef {
   key: string;
