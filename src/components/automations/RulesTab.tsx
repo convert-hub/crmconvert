@@ -98,6 +98,7 @@ export default function RulesTab() {
   const [name, setName] = useState('');
   const [triggerType, setTriggerType] = useState(TRIGGERS[0].value);
   const [conditions, setConditions] = useState<ConditionConfig>({});
+  const [filters, setFilters] = useState<Filter[]>([]);
   const [actions, setActions] = useState<ActionConfig[]>([{ type: 'move_to_stage' }]);
 
   // Reference data
