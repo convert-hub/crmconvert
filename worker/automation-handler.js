@@ -15,7 +15,15 @@ async function executeAutomations(supabase, tenantId, triggerType, context) {
 
     for (const automation of automations) {
       try {
-        if (!matchConditions(automation.conditions, context, triggerType)) continue;
+        const norm = normalizeConditions(automation.conditions);
+        if (!matchTriggerConditions(norm.trigger, context, triggerType)) continue;
+        if (norm.filters && norm.filters.length > 0) {
+          const data = await loadFilterData(supabase, tenantId, context);
+          if (!evalFilters(norm.filters, data)) {
+            console.log(`[Automations] Skipped "${automation.name}" — filters não bateram`);
+            continue;
+          }
+        }
         console.log(`[Automations] Running "${automation.name}" (${automation.id})`);
 
         const actions = Array.isArray(automation.actions) ? automation.actions : [];
@@ -31,7 +39,15 @@ async function executeAutomations(supabase, tenantId, triggerType, context) {
   }
 }
 
-function matchConditions(conditions, context, triggerType) {
+function normalizeConditions(raw) {
+  const c = (raw && typeof raw === 'object') ? raw : {};
+  if ('trigger' in c || 'filters' in c) {
+    return { trigger: c.trigger || {}, filters: Array.isArray(c.filters) ? c.filters : [] };
+  }
+  return { trigger: { ...c }, filters: [] };
+}
+
+function matchTriggerConditions(conditions, context, triggerType) {
   if (!conditions || Object.keys(conditions).length === 0) return true;
 
   switch (triggerType) {
@@ -39,21 +55,138 @@ function matchConditions(conditions, context, triggerType) {
       if (conditions.from_stage_id && conditions.from_stage_id !== context.from_stage_id) return false;
       if (conditions.to_stage_id && conditions.to_stage_id !== context.to_stage_id) return false;
       return true;
-
     case 'tag_added':
     case 'tag_removed':
       if (conditions.tag && conditions.tag !== context.tag) return false;
       return true;
-
     case 'lead_created':
       if (conditions.source && conditions.source !== context.source) return false;
       return true;
-
-    case 'conversation_no_customer_reply':
-    case 'conversation_no_agent_reply':
-      // hours condition is checked by the cron/check-inactivity function
+    default:
       return true;
+  }
+}
 
+// ─── Filter data loading ──────────────────────────────────────────────────
+
+async function loadFilterData(supabase, tenantId, context) {
+  const data = { opportunity: null, contact: null, conversation: null, tenant: null, now: new Date() };
+
+  const promises = [];
+  if (context.opportunity_id) {
+    promises.push(supabase.from('opportunities').select('*').eq('id', context.opportunity_id).maybeSingle()
+      .then(({ data: d }) => { data.opportunity = d; }));
+  }
+  if (context.contact_id) {
+    promises.push(supabase.from('contacts').select('*').eq('id', context.contact_id).maybeSingle()
+      .then(({ data: d }) => { data.contact = d; }));
+  }
+  if (context.conversation_id) {
+    promises.push(supabase.from('conversations').select('*').eq('id', context.conversation_id).maybeSingle()
+      .then(({ data: d }) => { data.conversation = d; }));
+  }
+  promises.push(supabase.from('tenants').select('business_hours, timezone').eq('id', tenantId).maybeSingle()
+    .then(({ data: d }) => { data.tenant = d; }));
+
+  await Promise.all(promises);
+  return data;
+}
+
+// ─── Filter evaluation ────────────────────────────────────────────────────
+
+function evalFilters(filters, data) {
+  for (const f of filters) {
+    if (!evalFilter(f, data)) return false;
+  }
+  return true;
+}
+
+function getFieldValue(field, data) {
+  const [entity, ...rest] = field.split('.');
+  const key = rest.join('.');
+
+  if (entity === 'opportunity' && data.opportunity) {
+    return data.opportunity[key];
+  }
+  if (entity === 'contact' && data.contact) {
+    switch (key) {
+      case 'tags': return data.contact.tags || [];
+      case 'has_phone': return !!data.contact.phone;
+      case 'has_email': return !!data.contact.email;
+      case 'age_days': {
+        if (!data.contact.created_at) return null;
+        const diff = Date.now() - new Date(data.contact.created_at).getTime();
+        return Math.floor(diff / 86400000);
+      }
+      default: return data.contact[key];
+    }
+  }
+  if (entity === 'conversation' && data.conversation) {
+    return data.conversation[key];
+  }
+  if (entity === 'context') {
+    const tz = data.tenant?.timezone || 'America/Sao_Paulo';
+    const now = data.now;
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(now);
+    const hourStr = parts.find(p => p.type === 'hour')?.value || '0';
+    const minuteStr = parts.find(p => p.type === 'minute')?.value || '0';
+    const weekdayStr = parts.find(p => p.type === 'weekday')?.value || '';
+    const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const weekday = weekdayMap[weekdayStr] ?? new Date(now).getDay();
+    const hour = parseInt(hourStr, 10) % 24;
+
+    if (key === 'hour') return hour;
+    if (key === 'weekday') return String(weekday);
+    if (key === 'business_hours') {
+      const bh = data.tenant?.business_hours || {};
+      const dayKeys = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+      const today = bh[dayKeys[weekday]];
+      if (!today || !today.start || !today.end) return false;
+      const nowMin = hour * 60 + parseInt(minuteStr, 10);
+      const [sH, sM] = today.start.split(':').map(Number);
+      const [eH, eM] = today.end.split(':').map(Number);
+      return nowMin >= (sH * 60 + sM) && nowMin <= (eH * 60 + eM);
+    }
+  }
+  return null;
+}
+
+function evalFilter(filter, data) {
+  const { field, op, value } = filter;
+  const actual = getFieldValue(field, data);
+
+  switch (op) {
+    case 'eq': return String(actual ?? '') === String(value ?? '');
+    case 'neq': return String(actual ?? '') !== String(value ?? '');
+    case 'in': return Array.isArray(value) && value.map(String).includes(String(actual));
+    case 'nin': return Array.isArray(value) && !value.map(String).includes(String(actual));
+    case 'gt': return Number(actual) > Number(value);
+    case 'gte': return Number(actual) >= Number(value);
+    case 'lt': return Number(actual) < Number(value);
+    case 'lte': return Number(actual) <= Number(value);
+    case 'between': {
+      if (!Array.isArray(value) || value.length !== 2) return false;
+      const n = Number(actual);
+      return n >= Number(value[0]) && n <= Number(value[1]);
+    }
+    case 'contains':
+      return String(actual ?? '').toLowerCase().includes(String(value ?? '').toLowerCase());
+    case 'has_any': {
+      const arr = Array.isArray(actual) ? actual : [];
+      const v = Array.isArray(value) ? value : [value];
+      return v.some(x => arr.includes(x));
+    }
+    case 'has_all': {
+      const arr = Array.isArray(actual) ? actual : [];
+      const v = Array.isArray(value) ? value : [value];
+      return v.every(x => arr.includes(x));
+    }
+    case 'is_empty':
+      return actual === null || actual === undefined || actual === '' || (Array.isArray(actual) && actual.length === 0);
+    case 'is_not_empty':
+      return !(actual === null || actual === undefined || actual === '' || (Array.isArray(actual) && actual.length === 0));
     default:
       return true;
   }
@@ -66,7 +199,6 @@ async function executeAction(supabase, tenantId, action, context) {
     case 'move_to_stage': {
       if (!action.stage_id || !context.opportunity_id) break;
       await supabase.from('opportunities').update({ stage_id: action.stage_id }).eq('id', context.opportunity_id);
-      // Record stage move
       await supabase.from('stage_moves').insert({
         tenant_id: tenantId,
         opportunity_id: context.opportunity_id,
@@ -166,18 +298,14 @@ async function executeAction(supabase, tenantId, action, context) {
 
     case 'assign_round_robin': {
       if (!context.opportunity_id) break;
-      
-      // Use DB function for workload-based round-robin
       const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenantId });
 
       if (!workload || workload.length === 0) {
-        // Fallback: simple round-robin from memberships
         const { data: members } = await supabase.from('tenant_memberships')
           .select('id')
           .eq('tenant_id', tenantId)
           .eq('is_active', true)
           .in('role', ['attendant', 'manager', 'admin']);
-        
         if (!members || members.length === 0) break;
         const assignTo = members[Math.floor(Math.random() * members.length)].id;
         await supabase.from('opportunities').update({ assigned_to: assignTo }).eq('id', context.opportunity_id);
@@ -188,14 +316,11 @@ async function executeAction(supabase, tenantId, action, context) {
         break;
       }
 
-      // workload is already sorted by total_load ASC
       const assignTo = workload[0].membership_id;
-
       await supabase.from('opportunities').update({ assigned_to: assignTo }).eq('id', context.opportunity_id);
       if (context.contact_id) {
         await supabase.from('contacts').update({ assigned_to: assignTo }).eq('id', context.contact_id);
       }
-      // Also assign conversation if present
       if (context.conversation_id) {
         await supabase.from('conversations').update({ assigned_to: assignTo }).eq('id', context.conversation_id);
       }
