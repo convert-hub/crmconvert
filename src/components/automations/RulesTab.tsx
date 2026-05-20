@@ -83,7 +83,7 @@ interface ConditionConfig {
 }
 
 interface Automation {
-  id: string; name: string; trigger_type: string; conditions: ConditionConfig;
+  id: string; name: string; trigger_type: string; conditions: any;
   actions: ActionConfig[]; is_active: boolean; created_at: string;
 }
 
