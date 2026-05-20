@@ -13,6 +13,8 @@ import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquar
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import { VariableInput } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+import ConditionsBuilder from './ConditionsBuilder';
+import { normalizeConditions, type Filter } from '@/types/automation';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
