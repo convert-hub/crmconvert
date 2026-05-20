@@ -406,11 +406,20 @@ export default function RulesTab() {
 
               {/* Conditions */}
               <div className="space-y-2">
-                <Label className="text-xs font-medium">Condições</Label>
+                <Label className="text-xs font-medium">Condições do gatilho</Label>
                 <div className="rounded-lg border border-border bg-accent/30 p-3">
                   {renderConditions()}
                 </div>
               </div>
+
+              {/* Additional filters */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Condições adicionais (todas devem ser verdadeiras)</Label>
+                <div className="rounded-lg border border-border bg-accent/30 p-3">
+                  <ConditionsBuilder value={filters} onChange={setFilters} />
+                </div>
+              </div>
+
 
               {/* Actions */}
               <div className="space-y-2">
