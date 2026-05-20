@@ -13,6 +13,8 @@ import { Plus, Zap, Trash2, Edit, ArrowRight, Clock, Tag, UserPlus, MessageSquar
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import { VariableInput } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+import ConditionsBuilder from './ConditionsBuilder';
+import { normalizeConditions, type Filter } from '@/types/automation';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 
@@ -81,7 +83,7 @@ interface ConditionConfig {
 }
 
 interface Automation {
-  id: string; name: string; trigger_type: string; conditions: ConditionConfig;
+  id: string; name: string; trigger_type: string; conditions: any;
   actions: ActionConfig[]; is_active: boolean; created_at: string;
 }
 
@@ -96,6 +98,7 @@ export default function RulesTab() {
   const [name, setName] = useState('');
   const [triggerType, setTriggerType] = useState(TRIGGERS[0].value);
   const [conditions, setConditions] = useState<ConditionConfig>({});
+  const [filters, setFilters] = useState<Filter[]>([]);
   const [actions, setActions] = useState<ActionConfig[]>([{ type: 'move_to_stage' }]);
 
   // Reference data
@@ -124,12 +127,14 @@ export default function RulesTab() {
 
   const resetForm = () => {
     setName(''); setTriggerType(TRIGGERS[0].value);
-    setConditions({}); setActions([{ type: 'move_to_stage' }]); setEditId(null);
+    setConditions({}); setFilters([]); setActions([{ type: 'move_to_stage' }]); setEditId(null);
   };
 
   const openEdit = (a: Automation) => {
     setEditId(a.id); setName(a.name); setTriggerType(a.trigger_type);
-    setConditions(a.conditions || {});
+    const norm = normalizeConditions(a.conditions);
+    setConditions((norm.trigger as ConditionConfig) || {});
+    setFilters(norm.filters || []);
     setActions(Array.isArray(a.actions) && a.actions.length > 0 ? a.actions : [{ type: 'move_to_stage' }]);
     setDialogOpen(true);
   };
@@ -140,7 +145,7 @@ export default function RulesTab() {
     const payload = {
       name,
       trigger_type: triggerType as any,
-      conditions: conditions as any,
+      conditions: { trigger: conditions, filters } as any,
       actions: actions as any,
     };
 
@@ -401,11 +406,20 @@ export default function RulesTab() {
 
               {/* Conditions */}
               <div className="space-y-2">
-                <Label className="text-xs font-medium">Condições</Label>
+                <Label className="text-xs font-medium">Condições do gatilho</Label>
                 <div className="rounded-lg border border-border bg-accent/30 p-3">
                   {renderConditions()}
                 </div>
               </div>
+
+              {/* Additional filters */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Condições adicionais (todas devem ser verdadeiras)</Label>
+                <div className="rounded-lg border border-border bg-accent/30 p-3">
+                  <ConditionsBuilder value={filters} onChange={setFilters} />
+                </div>
+              </div>
+
 
               {/* Actions */}
               <div className="space-y-2">
