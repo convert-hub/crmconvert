@@ -114,6 +114,8 @@ serve(async (req) => {
 
     let membership: { id: string | null; tenant_id: string } | null = null;
 
+    let isSaasAdmin = false;
+
     if (!isInternalCall) {
       const supabaseUser = createClient(
         Deno.env.get("SUPABASE_URL")!,
@@ -127,16 +129,25 @@ serve(async (req) => {
       }
       const userId = claimsData.claims.sub;
 
-      const { data: m } = await supabaseAdmin
-        .from("tenant_memberships")
-        .select("id, tenant_id, role")
+      const { data: adminRow } = await supabaseAdmin
+        .from("saas_admins")
+        .select("user_id")
         .eq("user_id", userId)
-        .eq("is_active", true)
-        .limit(1)
-        .single();
+        .maybeSingle();
+      isSaasAdmin = !!adminRow;
 
-      if (!m) return jsonResponse({ error: "No tenant membership" }, 403);
-      membership = { id: m.id, tenant_id: m.tenant_id };
+      if (!isSaasAdmin) {
+        const { data: m } = await supabaseAdmin
+          .from("tenant_memberships")
+          .select("id, tenant_id, role")
+          .eq("user_id", userId)
+          .eq("is_active", true)
+          .limit(1)
+          .single();
+
+        if (!m) return jsonResponse({ error: "No tenant membership" }, 403);
+        membership = { id: m.id, tenant_id: m.tenant_id };
+      }
     }
 
     const body = (await req.json()) as SendBody;
