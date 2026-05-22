@@ -182,7 +182,8 @@ serve(async (req) => {
     }
 
     // Em chamadas internas, derivamos o tenant da própria instance
-    if (isInternalCall) {
+    // Em chamadas internas ou de SaaS admin, derivamos o tenant da própria instance
+    if (isInternalCall || isSaasAdmin) {
       membership = { id: null, tenant_id: instance.tenant_id };
     } else if (instance.tenant_id !== membership!.tenant_id) {
       return jsonResponse({ error: "Forbidden" }, 403);
