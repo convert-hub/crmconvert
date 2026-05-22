@@ -44,21 +44,32 @@ serve(async (req) => {
     const { whatsapp_instance_id } = await req.json();
     if (!whatsapp_instance_id) return jsonResponse({ error: "whatsapp_instance_id required" }, 400);
 
-    const { data: membership } = await supabaseAdmin
-      .from("tenant_memberships")
-      .select("tenant_id, role")
+    const { data: isAdminRow } = await supabaseAdmin
+      .from("saas_admins")
+      .select("user_id")
       .eq("user_id", userId)
-      .eq("is_active", true)
-      .limit(1)
-      .single();
-    if (!membership) return jsonResponse({ error: "No tenant" }, 403);
+      .maybeSingle();
+    const isSaasAdmin = !!isAdminRow;
+
+    let membershipTenantId: string | null = null;
+    if (!isSaasAdmin) {
+      const { data: membership } = await supabaseAdmin
+        .from("tenant_memberships")
+        .select("tenant_id, role")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+      if (!membership) return jsonResponse({ error: "No tenant" }, 403);
+      membershipTenantId = membership.tenant_id;
+    }
 
     const { data: instance } = await supabaseAdmin
       .from("whatsapp_instances")
       .select("*")
       .eq("id", whatsapp_instance_id)
       .single();
-    if (!instance || instance.tenant_id !== membership.tenant_id) {
+    if (!instance || (!isSaasAdmin && instance.tenant_id !== membershipTenantId)) {
       return jsonResponse({ error: "Forbidden" }, 403);
     }
     if (instance.provider !== "meta_cloud" || !instance.meta_waba_id || !instance.meta_access_token_encrypted) {
