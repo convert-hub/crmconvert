@@ -181,7 +181,6 @@ serve(async (req) => {
       return jsonResponse({ error: "Instance not found" }, 404);
     }
 
-    // Em chamadas internas, derivamos o tenant da própria instance
     // Em chamadas internas ou de SaaS admin, derivamos o tenant da própria instance
     if (isInternalCall || isSaasAdmin) {
       membership = { id: null, tenant_id: instance.tenant_id };
