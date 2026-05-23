@@ -83,171 +83,194 @@ serve(async (req) => {
   }
 
   const throttle = Math.max(1, Math.min(campaign.throttle_per_minute ?? 60, 200));
-  // Process at most `throttle` recipients per invocation; cron should call once/minute.
-  const { data: pending } = await supabase
-    .from("campaign_recipients")
-    .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)")
-    .eq("campaign_id", campaignId)
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(throttle);
 
-  if (!pending || pending.length === 0) {
-    // Nothing left → mark complete if no other pending
-    const { count } = await supabase
+  // Concurrency safety: multiple invocations (cron + manual click) are expected.
+  // Protected by a row-level lease on campaigns.tick_lock_until + atomic claim
+  // via claim_campaign_recipients (FOR UPDATE SKIP LOCKED). The lease auto-expires
+  // in 90s so an edge-function timeout cannot permanently block the campaign.
+  const { data: gotLease } = await supabase.rpc('acquire_campaign_tick_lease', { _campaign_id: campaignId });
+  if (!gotLease) {
+    return jsonOk({ ok: true, skipped: 'locked', processed: 0 });
+  }
+
+  try {
+    // Only the lease holder reaps stuck 'sending' rows (>10min) back to 'pending'.
+    await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
+
+    // Atomic claim — guarantees no two invocations grab the same recipient.
+    const { data: claimed } = await supabase.rpc('claim_campaign_recipients', {
+      _campaign_id: campaignId,
+      _limit: throttle,
+    });
+
+    const claimedIds = (claimed ?? []).map((r: any) => r.id);
+
+    if (claimedIds.length === 0) {
+      const { count } = await supabase
+        .from("campaign_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaignId)
+        .in("status", ["pending", "sending"]);
+      if ((count ?? 0) === 0) {
+        await supabase.from("campaigns").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+        }).eq("id", campaignId);
+      }
+      return jsonOk({ ok: true, processed: 0 });
+    }
+
+    // Hydrate contact data preserving FIFO order.
+    const { data: pending } = await supabase
+      .from("campaign_recipients")
+      .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)")
+      .in("id", claimedIds)
+      .order("created_at", { ascending: true });
+
+    const bodyComp = (template.components as any[])?.find((c: any) => c.type === "BODY");
+    const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? "").match(/\{\{(\d+)\}\}/g) || []))
+      .map((m: string) => m.replace(/[{}]/g, "")).sort((a, b) => Number(a) - Number(b)) : [];
+
+    let processed = 0;
+    let sent = 0;
+    let failed = 0;
+
+    for (const rcp of (pending ?? [])) {
+      const contact = (rcp as any).contact;
+      if (!contact?.phone || contact.do_not_contact) {
+        await supabase.from("campaign_recipients").update({
+          status: "skipped",
+          error: contact?.do_not_contact ? "contact_do_not_contact" : "no_phone",
+        }).eq("id", rcp.id);
+        processed++;
+        continue;
+      }
+
+      const resolved: Record<string, string> = {};
+      for (const p of placeholders) {
+        const tplVar = (campaign.template_variables as any)?.[p] ?? "";
+        resolved[p] = resolveTemplateVariable(tplVar, contact);
+      }
+
+      let { data: conversation } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("tenant_id", campaign.tenant_id)
+        .eq("contact_id", contact.id)
+        .eq("whatsapp_instance_id", instance.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!conversation) {
+        const { data: newConv } = await supabase
+          .from("conversations")
+          .insert({
+            tenant_id: campaign.tenant_id,
+            contact_id: contact.id,
+            whatsapp_instance_id: instance.id,
+            channel: "whatsapp",
+            status: "open",
+          })
+          .select("id")
+          .single();
+        conversation = newConv;
+      }
+
+      // Link conversation + persist resolved vars. Status already 'sending' (from claim RPC).
+      await supabase.from("campaign_recipients").update({
+        conversation_id: conversation?.id ?? null,
+        variables_used: resolved,
+      }).eq("id", rcp.id);
+
+      const components: any[] = [];
+      if (placeholders.length > 0) {
+        components.push({
+          type: "body",
+          parameters: placeholders.map(p => ({ type: "text", text: resolved[p] ?? "" })),
+        });
+      }
+
+      try {
+        const { data: sendRes, error: sendErr } = await supabase.functions.invoke("wa-meta-send", {
+          body: {
+            action: "send",
+            conversation_id: conversation?.id,
+            whatsapp_instance_id: instance.id,
+            type: "template",
+            template: {
+              name: template.name,
+              language: template.language,
+              components,
+            },
+          },
+        });
+
+        if (sendErr || !sendRes?.ok) {
+          const errMsg = sendErr?.message ?? sendRes?.error ?? "unknown_error";
+          await supabase.from("campaign_recipients").update({
+            status: "failed",
+            error: String(errMsg).slice(0, 500),
+          }).eq("id", rcp.id);
+          failed++;
+        } else {
+          await supabase.from("campaign_recipients").update({
+            status: "sent",
+            sent_at: new Date().toISOString(),
+            provider_message_id: sendRes?.provider_message_id ?? null,
+            message_id: sendRes?.message_id ?? null,
+          }).eq("id", rcp.id);
+          sent++;
+        }
+      } catch (e: any) {
+        await supabase.from("campaign_recipients").update({
+          status: "failed",
+          error: String(e?.message ?? e).slice(0, 500),
+        }).eq("id", rcp.id);
+        failed++;
+      }
+
+      processed++;
+    }
+
+    // Update aggregate counters on the campaign
+    const { data: counts } = await supabase
+      .from("campaign_recipients")
+      .select("status")
+      .eq("campaign_id", campaignId);
+    const tally = (counts ?? []).reduce((acc: any, r: any) => {
+      acc[r.status] = (acc[r.status] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    await supabase.from("campaigns").update({
+      sent_count: (tally.sent ?? 0) + (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
+      delivered_count: (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
+      read_count: (tally.read ?? 0) + (tally.replied ?? 0),
+      replied_count: tally.replied ?? 0,
+      failed_count: tally.failed ?? 0,
+    }).eq("id", campaignId);
+
+    // Auto-complete if no pending/sending left
+    const { count: stillPending } = await supabase
       .from("campaign_recipients")
       .select("id", { count: "exact", head: true })
       .eq("campaign_id", campaignId)
       .in("status", ["pending", "sending"]);
-    if ((count ?? 0) === 0) {
+    if ((stillPending ?? 0) === 0) {
       await supabase.from("campaigns").update({
         status: "completed",
         completed_at: new Date().toISOString(),
       }).eq("id", campaignId);
     }
-    return jsonOk({ ok: true, processed: 0 });
-  }
 
-  const bodyComp = (template.components as any[])?.find((c: any) => c.type === "BODY");
-  const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? "").match(/\{\{(\d+)\}\}/g) || []))
-    .map((m: string) => m.replace(/[{}]/g, "")).sort((a, b) => Number(a) - Number(b)) : [];
-
-  let processed = 0;
-  let sent = 0;
-  let failed = 0;
-
-  for (const rcp of pending) {
-    const contact = (rcp as any).contact;
-    if (!contact?.phone || contact.do_not_contact) {
-      await supabase.from("campaign_recipients").update({
-        status: "skipped",
-        error: contact?.do_not_contact ? "contact_do_not_contact" : "no_phone",
-      }).eq("id", rcp.id);
-      processed++;
-      continue;
-    }
-
-    // Resolve variables: campaign-level template_variables (with {{contact.field}} support)
-    const resolved: Record<string, string> = {};
-    for (const p of placeholders) {
-      const tplVar = (campaign.template_variables as any)?.[p] ?? "";
-      resolved[p] = resolveTemplateVariable(tplVar, contact);
-    }
-
-    // Find/create conversation tied to this instance
-    let { data: conversation } = await supabase
-      .from("conversations")
-      .select("id")
-      .eq("tenant_id", campaign.tenant_id)
-      .eq("contact_id", contact.id)
-      .eq("whatsapp_instance_id", instance.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!conversation) {
-      const { data: newConv } = await supabase
-        .from("conversations")
-        .insert({
-          tenant_id: campaign.tenant_id,
-          contact_id: contact.id,
-          whatsapp_instance_id: instance.id,
-          channel: "whatsapp",
-          status: "open",
-        })
-        .select("id")
-        .single();
-      conversation = newConv;
-    }
-
-    await supabase.from("campaign_recipients").update({
-      status: "sending",
-      conversation_id: conversation?.id ?? null,
-      variables_used: resolved,
-    }).eq("id", rcp.id);
-
-    // Build template payload
-    const components: any[] = [];
-    if (placeholders.length > 0) {
-      components.push({
-        type: "body",
-        parameters: placeholders.map(p => ({ type: "text", text: resolved[p] ?? "" })),
-      });
-    }
-
+    return jsonOk({ ok: true, processed, sent, failed });
+  } finally {
+    // Best-effort release. If it throws, the lease auto-expires in 90s.
     try {
-      const { data: sendRes, error: sendErr } = await supabase.functions.invoke("wa-meta-send", {
-        body: {
-          action: "send",
-          conversation_id: conversation?.id,
-          whatsapp_instance_id: instance.id,
-          type: "template",
-          template: {
-            name: template.name,
-            language: template.language,
-            components,
-          },
-        },
-      });
-
-      if (sendErr || !sendRes?.ok) {
-        const errMsg = sendErr?.message ?? sendRes?.error ?? "unknown_error";
-        await supabase.from("campaign_recipients").update({
-          status: "failed",
-          error: String(errMsg).slice(0, 500),
-        }).eq("id", rcp.id);
-        failed++;
-      } else {
-        await supabase.from("campaign_recipients").update({
-          status: "sent",
-          sent_at: new Date().toISOString(),
-          provider_message_id: sendRes?.provider_message_id ?? null,
-          message_id: sendRes?.message_id ?? null,
-        }).eq("id", rcp.id);
-        sent++;
-      }
-    } catch (e: any) {
-      await supabase.from("campaign_recipients").update({
-        status: "failed",
-        error: String(e?.message ?? e).slice(0, 500),
-      }).eq("id", rcp.id);
-      failed++;
+      await supabase.rpc('release_campaign_tick_lease', { _campaign_id: campaignId });
+    } catch (releaseErr) {
+      console.error('[campaign-dispatch] release_campaign_tick_lease failed', releaseErr);
     }
-
-    processed++;
   }
-
-  // Update aggregate counters on the campaign
-  await supabase.rpc; // noop placeholder for typing
-  const { data: counts } = await supabase
-    .from("campaign_recipients")
-    .select("status")
-    .eq("campaign_id", campaignId);
-  const tally = (counts ?? []).reduce((acc: any, r: any) => {
-    acc[r.status] = (acc[r.status] ?? 0) + 1;
-    return acc;
-  }, {});
-
-  await supabase.from("campaigns").update({
-    sent_count: (tally.sent ?? 0) + (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
-    delivered_count: (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
-    read_count: (tally.read ?? 0) + (tally.replied ?? 0),
-    replied_count: tally.replied ?? 0,
-    failed_count: tally.failed ?? 0,
-  }).eq("id", campaignId);
-
-  // Auto-complete if no pending left
-  const { count: stillPending } = await supabase
-    .from("campaign_recipients")
-    .select("id", { count: "exact", head: true })
-    .eq("campaign_id", campaignId)
-    .in("status", ["pending", "sending"]);
-  if ((stillPending ?? 0) === 0) {
-    await supabase.from("campaigns").update({
-      status: "completed",
-      completed_at: new Date().toISOString(),
-    }).eq("id", campaignId);
-  }
-
-  return jsonOk({ ok: true, processed, sent, failed });
 });

@@ -434,6 +434,7 @@ export type Database = {
           template_variables: Json
           tenant_id: string
           throttle_per_minute: number
+          tick_lock_until: string | null
           total_recipients: number
           updated_at: string
           whatsapp_instance_id: string | null
@@ -458,6 +459,7 @@ export type Database = {
           template_variables?: Json
           tenant_id: string
           throttle_per_minute?: number
+          tick_lock_until?: string | null
           total_recipients?: number
           updated_at?: string
           whatsapp_instance_id?: string | null
@@ -482,6 +484,7 @@ export type Database = {
           template_variables?: Json
           tenant_id?: string
           throttle_per_minute?: number
+          tick_lock_until?: string | null
           total_recipients?: number
           updated_at?: string
           whatsapp_instance_id?: string | null
@@ -2347,6 +2350,10 @@ export type Database = {
       }
     }
     Functions: {
+      acquire_campaign_tick_lease: {
+        Args: { _campaign_id: string }
+        Returns: boolean
+      }
       acquire_next_job: {
         Args: { _types?: string[] }
         Returns: {
@@ -2372,6 +2379,14 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      claim_campaign_recipients: {
+        Args: { _campaign_id: string; _limit: number }
+        Returns: {
+          contact_id: string
+          id: string
+          variables_used: Json
+        }[]
       }
       complete_job: {
         Args: { _job_id: string; _result?: Json }
@@ -2419,6 +2434,11 @@ export type Database = {
       is_admin_or_manager: { Args: { _tenant_id: string }; Returns: boolean }
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       is_saas_admin: { Args: never; Returns: boolean }
+      reap_stuck_sending: { Args: { _campaign_id: string }; Returns: undefined }
+      release_campaign_tick_lease: {
+        Args: { _campaign_id: string }
+        Returns: undefined
+      }
       search_knowledge:
         | {
             Args: {
