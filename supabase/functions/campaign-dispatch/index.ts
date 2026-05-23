@@ -83,30 +83,49 @@ serve(async (req) => {
   }
 
   const throttle = Math.max(1, Math.min(campaign.throttle_per_minute ?? 60, 200));
-  // Process at most `throttle` recipients per invocation; cron should call once/minute.
-  const { data: pending } = await supabase
-    .from("campaign_recipients")
-    .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)")
-    .eq("campaign_id", campaignId)
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(throttle);
 
-  if (!pending || pending.length === 0) {
-    // Nothing left → mark complete if no other pending
-    const { count } = await supabase
-      .from("campaign_recipients")
-      .select("id", { count: "exact", head: true })
-      .eq("campaign_id", campaignId)
-      .in("status", ["pending", "sending"]);
-    if ((count ?? 0) === 0) {
-      await supabase.from("campaigns").update({
-        status: "completed",
-        completed_at: new Date().toISOString(),
-      }).eq("id", campaignId);
-    }
-    return jsonOk({ ok: true, processed: 0 });
+  // Concurrency safety: multiple invocations (cron + manual click) are expected.
+  // Protected by a row-level lease on campaigns.tick_lock_until + atomic claim
+  // via claim_campaign_recipients (FOR UPDATE SKIP LOCKED). The lease auto-expires
+  // in 90s so an edge-function timeout cannot permanently block the campaign.
+  const { data: gotLease } = await supabase.rpc('acquire_campaign_tick_lease', { _campaign_id: campaignId });
+  if (!gotLease) {
+    return jsonOk({ ok: true, skipped: 'locked', processed: 0 });
   }
+
+  try {
+    // Only the lease holder reaps stuck 'sending' rows (>10min) back to 'pending'.
+    await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
+
+    // Atomic claim — guarantees no two invocations grab the same recipient.
+    const { data: claimed } = await supabase.rpc('claim_campaign_recipients', {
+      _campaign_id: campaignId,
+      _limit: throttle,
+    });
+
+    const claimedIds = (claimed ?? []).map((r: any) => r.id);
+
+    if (claimedIds.length === 0) {
+      const { count } = await supabase
+        .from("campaign_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaignId)
+        .in("status", ["pending", "sending"]);
+      if ((count ?? 0) === 0) {
+        await supabase.from("campaigns").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+        }).eq("id", campaignId);
+      }
+      return jsonOk({ ok: true, processed: 0 });
+    }
+
+    // Hydrate contact data preserving FIFO order.
+    const { data: pending } = await supabase
+      .from("campaign_recipients")
+      .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)")
+      .in("id", claimedIds)
+      .order("created_at", { ascending: true });
 
   const bodyComp = (template.components as any[])?.find((c: any) => c.type === "BODY");
   const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? "").match(/\{\{(\d+)\}\}/g) || []))
