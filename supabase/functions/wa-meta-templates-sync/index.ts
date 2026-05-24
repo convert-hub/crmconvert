@@ -69,11 +69,54 @@ serve(async (req) => {
       .select("*")
       .eq("id", whatsapp_instance_id)
       .single();
-    if (!instance || (!isSaasAdmin && instance.tenant_id !== membershipTenantId)) {
+    if (!instance) {
+      console.warn("[wa-meta-templates-sync] precondition_failed", { code: "instance_not_found", instance_id: whatsapp_instance_id });
+      return jsonResponse({
+        ok: false,
+        code: "instance_not_found",
+        error: "Instância do WhatsApp não encontrada.",
+        instance_id: whatsapp_instance_id,
+      });
+    }
+    if (!isSaasAdmin && instance.tenant_id !== membershipTenantId) {
       return jsonResponse({ error: "Forbidden" }, 403);
     }
-    if (instance.provider !== "meta_cloud" || !instance.meta_waba_id || !instance.meta_access_token_encrypted) {
-      return jsonResponse({ error: "Instance not configured for Meta" }, 400);
+    if (instance.provider !== "meta_cloud") {
+      console.warn("[wa-meta-templates-sync] precondition_failed", { code: "instance_wrong_provider", instance_id: instance.id, actual_provider: instance.provider });
+      return jsonResponse({
+        ok: false,
+        code: "instance_wrong_provider",
+        error: `Esta instância usa o provedor "${instance.provider}", não Meta Cloud. Sincronização de templates disponível apenas para instâncias Meta Cloud.`,
+        instance_id: instance.id,
+        actual_provider: instance.provider,
+      });
+    }
+    {
+      const missing: string[] = [];
+      if (!instance.meta_waba_id) missing.push("meta_waba_id");
+      if (!instance.meta_access_token_encrypted) missing.push("meta_access_token_encrypted");
+      if (missing.length > 0) {
+        const code =
+          missing.length > 1
+            ? "meta_credentials_incomplete"
+            : missing[0] === "meta_waba_id"
+              ? "meta_missing_waba_id"
+              : "meta_missing_access_token";
+        const messages: Record<string, string> = {
+          meta_missing_waba_id: "Configure o WABA ID (WhatsApp Business Account ID) da Meta nas configurações da instância.",
+          meta_missing_access_token: "Configure o Access Token da Meta nas configurações da instância.",
+          meta_credentials_incomplete: "Credenciais Meta incompletas. Configure WABA ID e Access Token nas configurações da instância.",
+        };
+        console.warn("[wa-meta-templates-sync] precondition_failed", { code, instance_id: instance.id, missing });
+        return jsonResponse({
+          ok: false,
+          code,
+          error: messages[code],
+          missing,
+          instance_id: instance.id,
+          provider: instance.provider,
+        });
+      }
     }
 
     const r = await fetch(
