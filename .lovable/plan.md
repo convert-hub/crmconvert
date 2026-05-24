@@ -1,156 +1,72 @@
-## Objetivo
+# Melhorar mensagens de erro Meta Cloud (wa-meta-send e wa-meta-templates-sync)
 
-Eliminar race condition no `campaign-dispatch` (cron + clique manual em paralelo) sem alterar payload Meta, RLS, schema de `campaigns` (exceto adicionar uma coluna de lease), `wa-meta-send`, `webhook-meta`, nem a UI.
+## Problema
+Hoje, quando o usuário clica em "Testar conexão" ou "Sincronizar templates" em uma instância Meta Cloud mal configurada, as edge functions retornam mensagens genéricas como `"Instance not configured for Meta"`, `"Meta credentials incomplete"` ou `"Instance is not Meta Cloud"`. A UI mostra "erro na add function 2xx" sem indicar o que falta preencher, dificultando o diagnóstico.
 
-## Decisão técnica (correções ao plano anterior)
+## Escopo
+Apenas as duas edge functions abaixo. Sem mudanças de UI, schema ou outras funções.
 
-- `pg_try_advisory_xact_lock` via `supabase.rpc()` é inútil aqui: o lock é da transação da própria RPC e libera imediatamente no retorno. **Substituir** por lease em coluna que sobrevive a timeout da edge function.
-- Trigger `trg_campaign_recipients_updated_at` já existe (confirmado em `20260421233833_*.sql`), então o reaper baseado em `updated_at` funciona — apenas reusar.
+- `supabase/functions/wa-meta-send/index.ts`
+- `supabase/functions/wa-meta-templates-sync/index.ts`
 
-## Migration `supabase/migrations/<timestamp>_campaign_dispatch_concurrency.sql`
+## Mudanças
 
-### Coluna de lease
+### 1. Padronizar formato de erro acionável
+Todos os retornos de erro de pré-condição (instância faltante, provider errado, credenciais incompletas) passam a usar o mesmo envelope JSON, sempre com HTTP 200 + `ok:false` (mantém compatibilidade com clientes que não tratam 4xx):
 
-```sql
-ALTER TABLE public.campaigns
-  ADD COLUMN tick_lock_until timestamptz;
+```json
+{
+  "ok": false,
+  "code": "meta_missing_phone_number_id",
+  "error": "Configure o Phone Number ID da Meta nas configurações da instância.",
+  "missing": ["meta_phone_number_id"],
+  "instance_id": "...",
+  "provider": "meta_cloud"
+}
 ```
 
-Nullable, sem default. Não toca em RLS nem em índices existentes.
+Campos:
+- `code`: identificador estável e granular (ver tabela abaixo)
+- `error`: mensagem em pt-BR pronta para `toast()`
+- `missing`: array dos campos exatos que faltam, quando aplicável
+- `instance_id` e `provider`: contexto para o usuário identificar qual instância
 
-### Índice parcial para claim
+### 2. Novos códigos de erro
 
-```sql
-CREATE INDEX IF NOT EXISTS idx_campaign_recipients_claim
-  ON public.campaign_recipients (campaign_id, created_at)
-  WHERE status = 'pending';
-```
+| code | Quando | missing |
+|---|---|---|
+| `instance_not_found` | `whatsapp_instances` não encontrada | — |
+| `instance_wrong_provider` | provider ≠ `meta_cloud` (atual provider devolvido em campo `actual_provider`) | — |
+| `meta_missing_phone_number_id` | falta `meta_phone_number_id` | `["meta_phone_number_id"]` |
+| `meta_missing_access_token` | falta `meta_access_token_encrypted` | `["meta_access_token_encrypted"]` |
+| `meta_missing_waba_id` (sync apenas) | falta `meta_waba_id` | `["meta_waba_id"]` |
+| `meta_credentials_incomplete` | múltiplos faltando | lista de todos |
+| `meta_token_expired` | já existe — mantido como está |
 
-### RPC `acquire_campaign_tick_lease(_campaign_id uuid) RETURNS boolean`
+### 3. wa-meta-send — pontos exatos
+Substituir os 3 retornos atuais:
+- `"Instance not found"` → `code: instance_not_found`
+- `"Instance is not Meta Cloud"` → `code: instance_wrong_provider` + `actual_provider`
+- `"Meta credentials incomplete"` → detectar quais campos faltam (`meta_phone_number_id` e/ou `meta_access_token_encrypted`) e devolver `missing[]` + `code` granular
 
-`SECURITY DEFINER`, `search_path=public`.
+### 4. wa-meta-templates-sync — pontos exatos
+Substituir o retorno único `"Instance not configured for Meta"` por verificações separadas:
+- Provider errado → `instance_wrong_provider`
+- Falta `meta_waba_id` → `meta_missing_waba_id`
+- Falta `meta_access_token_encrypted` → `meta_missing_access_token`
+- Múltiplos faltando → `meta_credentials_incomplete` com `missing[]`
 
-```sql
-UPDATE public.campaigns
-   SET tick_lock_until = now() + interval '90 seconds'
- WHERE id = _campaign_id
-   AND (tick_lock_until IS NULL OR tick_lock_until < now())
-RETURNING 1;
--- retorna true se afetou linha, false caso contrário
-```
-
-### RPC `release_campaign_tick_lease(_campaign_id uuid) RETURNS void`
-
-```sql
-UPDATE public.campaigns SET tick_lock_until = NULL WHERE id = _campaign_id;
-```
-
-### RPC `claim_campaign_recipients(_campaign_id uuid, _limit int)`
-
-`SECURITY DEFINER`, `search_path=public`. Retorna `TABLE(id uuid, contact_id uuid, variables_used jsonb)`.
-
-```sql
-UPDATE public.campaign_recipients
-   SET status = 'sending', updated_at = now()
- WHERE id IN (
-   SELECT id FROM public.campaign_recipients
-    WHERE campaign_id = _campaign_id AND status = 'pending'
-    ORDER BY created_at ASC
-    LIMIT _limit
-    FOR UPDATE SKIP LOCKED
- )
-RETURNING id, contact_id, variables_used;
-```
-
-### RPC `reap_stuck_sending(_campaign_id uuid) RETURNS void`
-
-```sql
-UPDATE public.campaign_recipients
-   SET status = 'pending', updated_at = now()
- WHERE campaign_id = _campaign_id
-   AND status = 'sending'
-   AND updated_at < now() - interval '10 minutes';
-```
-
-(Trigger BEFORE UPDATE em `campaign_recipients` já mantém `updated_at`; o `SET updated_at = now()` é defensivo.)
-
-### Permissões
-
-Para as 4 RPCs:
-
-```sql
-REVOKE ALL ON FUNCTION public.<fn>(...) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.<fn>(...) TO service_role;
-```
-
-## `supabase/functions/campaign-dispatch/index.ts`
-
-Comentário no topo: "múltiplas invocações concorrentes (cron + manual) são esperadas; segurança via lease em `campaigns.tick_lock_until` + `claim_campaign_recipients` com `FOR UPDATE SKIP LOCKED`."
-
-Ordem no handler, depois de carregar `campaign` e validar `instance`/`template`:
-
-1. **Adquirir lease**:
-  ```ts
-   const { data: gotLease } = await supabase.rpc('acquire_campaign_tick_lease', { _campaign_id: campaignId });
-   if (!gotLease) return jsonOk({ ok: true, skipped: 'locked', processed: 0 });
-  ```
-2. **Try/finally** garantindo release:
-  ```ts
-   try {
-     // 3 + 4 + 5 abaixo
-   } finally {
-     await supabase.rpc('release_campaign_tick_lease', { _campaign_id: campaignId });
-   }
-  ```
-3. **Reaper** (só o dono do lease recicla):
-  ```ts
-   await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
-  ```
-4. **Claim atômico** (substitui o `SELECT pending`):
-  ```ts
-   const { data: claimed } = await supabase.rpc('claim_campaign_recipients',
-     { _campaign_id: campaignId, _limit: throttle });
-  ```
-   Auto-complete preservado: se `claimed` vazio, manter a lógica atual que checa se ainda há `pending|sending` e, se não, marca `completed`.
-5. **Hidratar contatos preservando FIFO**:
-  ```ts
-   const ids = (claimed ?? []).map((r:any) => r.id);
-   const { data: pending } = await supabase
-     .from('campaign_recipients')
-     .select('id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)')
-     .in('id', ids)
-     .order('created_at', { ascending: true });
-  ```
-6. **Remover** o `UPDATE ... status='sending'` que existia dentro do loop antes do envio (o claim já fez). Manter apenas os `UPDATE` finais por recipient para `sent`/`failed`/`skipped` e os contadores agregados.
-
-Nomes de parâmetros padronizados com underscore (`_campaign_id`, `_limit`) tanto no SQL quanto nas chamadas `supabase.rpc(...)`.
-
-## Cron
-
-Sem mudanças no SQL do `campaigns-tick-every-minute`. Proteção 100% dentro da função.
+### 5. Logging
+Adicionar `console.warn("[wa-meta-send] precondition_failed", { code, instance_id, missing })` antes de cada retorno de erro de pré-condição, para facilitar leitura nos Edge Function logs.
 
 ## Fora de escopo
-
-- Payload Meta, `wa-meta-send`, `webhook-meta`.
-- RLS, demais colunas de `campaigns`, schema de `campaign_recipients`.
-- UI / frontend.
-- Deploy automático ou validação contra ambiente rodando — apenas escrever o código e avisar.
+- Não alterar UI (toasts continuam recebendo `error` em pt-BR, agora mais específico)
+- Não alterar autenticação, RLS, schema ou outras funções
+- Não tocar o fluxo `test_connection` que chama o Graph API (já trata `meta_token_expired`)
+- Não fazer deploy automático — apenas escrever o código
 
 ## Critério de pronto
-
-- 2 invocações simultâneas na mesma campanha: 1 retorna `processed>0`, a outra `{skipped:'locked'}`.
-- Nenhum `campaign_recipient` é enviado em duplicado (garantido por `UPDATE...RETURNING` + `FOR UPDATE SKIP LOCKED`).
-- Edge function caindo no meio do tick: o lease vence em 90 s e os `sending` zumbis voltam para `pending` após 10 min via `reap_stuck_sending` no próximo tick válido.  
-  
-Plano aprovado, com 3 microajustes obrigatórios antes de gerar:
-  1. Padronize TODOS os parâmetros das RPCs como *campaign*id e _limit
-     (com underscore), tanto no SQL quanto em supabase.rpc({...}).
-     Não use "campaignid".
-  2. acquire_campaign_tick_lease deve ser LANGUAGE plpgsql RETURNS boolean,
-     capturando o id atualizado em variável local com RETURNING id INTO
-     v_locked e retornando v_locked IS NOT NULL. Evita ambiguidade de
-     tipo em LANGUAGE sql RETURNING 1.
-  3. release_campaign_tick_lease no finally deve ser envolvido em try/catch
-     interno que apenas loga em caso de falha (nunca relança). Se o release
-     falhar, o lease vence sozinho em 90s.
-  Pode prosseguir com a geração do código depois desses ajustes.
+- Instância sem `meta_phone_number_id` → `{ok:false, code:"meta_missing_phone_number_id", missing:["meta_phone_number_id"], error:"Configure o Phone Number ID..."}`
+- Instância sem `meta_waba_id` ao sincronizar templates → `{ok:false, code:"meta_missing_waba_id", missing:["meta_waba_id"], ...}`
+- Instância UAZAPI tentando rodar Meta send → `{ok:false, code:"instance_wrong_provider", actual_provider:"uazapi"}`
+- Comportamento de sucesso e de `meta_token_expired` inalterado
