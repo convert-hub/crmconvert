@@ -178,7 +178,13 @@ serve(async (req) => {
       .single();
 
     if (!instance) {
-      return jsonResponse({ error: "Instance not found" }, 404);
+      console.warn("[wa-meta-send] precondition_failed", { code: "instance_not_found", instance_id: instanceId });
+      return jsonResponse({
+        ok: false,
+        code: "instance_not_found",
+        error: "Instância do WhatsApp não encontrada. Verifique se ela ainda existe nas configurações.",
+        instance_id: instanceId,
+      });
     }
 
     // Em chamadas internas ou de SaaS admin, derivamos o tenant da própria instance
@@ -188,10 +194,41 @@ serve(async (req) => {
       return jsonResponse({ error: "Forbidden" }, 403);
     }
     if (instance.provider !== "meta_cloud") {
-      return jsonResponse({ error: "Instance is not Meta Cloud" }, 400);
+      console.warn("[wa-meta-send] precondition_failed", { code: "instance_wrong_provider", instance_id: instance.id, actual_provider: instance.provider });
+      return jsonResponse({
+        ok: false,
+        code: "instance_wrong_provider",
+        error: `Esta instância usa o provedor "${instance.provider}", não Meta Cloud. Selecione uma instância Meta Cloud.`,
+        instance_id: instance.id,
+        actual_provider: instance.provider,
+      });
     }
-    if (!instance.meta_phone_number_id || !instance.meta_access_token_encrypted) {
-      return jsonResponse({ error: "Meta credentials incomplete" }, 400);
+    {
+      const missing: string[] = [];
+      if (!instance.meta_phone_number_id) missing.push("meta_phone_number_id");
+      if (!instance.meta_access_token_encrypted) missing.push("meta_access_token_encrypted");
+      if (missing.length > 0) {
+        const code =
+          missing.length > 1
+            ? "meta_credentials_incomplete"
+            : missing[0] === "meta_phone_number_id"
+              ? "meta_missing_phone_number_id"
+              : "meta_missing_access_token";
+        const messages: Record<string, string> = {
+          meta_missing_phone_number_id: "Configure o Phone Number ID da Meta nas configurações da instância.",
+          meta_missing_access_token: "Configure o Access Token da Meta nas configurações da instância.",
+          meta_credentials_incomplete: "Credenciais Meta incompletas. Configure Phone Number ID e Access Token nas configurações da instância.",
+        };
+        console.warn("[wa-meta-send] precondition_failed", { code, instance_id: instance.id, missing });
+        return jsonResponse({
+          ok: false,
+          code,
+          error: messages[code],
+          missing,
+          instance_id: instance.id,
+          provider: instance.provider,
+        });
+      }
     }
 
     const accessToken = instance.meta_access_token_encrypted as string;
