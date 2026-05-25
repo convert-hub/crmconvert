@@ -364,7 +364,7 @@ export default function CampaignsPage() {
             <Card key={c.id} className="hover-lift">
               <CardContent className="py-3.5 px-4">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
+                  <Link to={`/campaigns/${c.id}`} className="min-w-0 flex-1 block">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-sm font-medium truncate">{c.name}</h3>
                       <Badge className={`text-[10px] h-5 rounded-md font-normal ${status.color}`}>{status.label}</Badge>
@@ -380,8 +380,8 @@ export default function CampaignsPage() {
                       <span>💬 {c.replied_count} respostas</span>
                       <span className="text-destructive">⚠ {c.failed_count} falhas</span>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  </Link>
+                  <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {(c.status === 'draft' || c.status === 'scheduled' || c.status === 'paused') && (
                       <Button size="sm" variant="default" className="h-8 text-xs" disabled={busy === c.id} onClick={() => dispatch(c, 'start')}>
                         {busy === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Play className="h-3 w-3 mr-1" />Iniciar</>}
