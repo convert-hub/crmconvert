@@ -2435,6 +2435,10 @@ export type Database = {
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       is_saas_admin: { Args: never; Returns: boolean }
       reap_stuck_sending: { Args: { _campaign_id: string }; Returns: undefined }
+      recompute_campaign_counters: {
+        Args: { _campaign_id: string }
+        Returns: undefined
+      }
       release_campaign_tick_lease: {
         Args: { _campaign_id: string }
         Returns: undefined
