@@ -54,11 +54,22 @@ export default function CampaignsPage() {
   const [filter, setFilter] = useState<CampaignAudienceFilter>({ exclude_do_not_contact: true, has_phone: true });
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [audienceCount, setAudienceCount] = useState<number | null>(null);
+  const loadingRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const load = () => {
+  const load = async () => {
     if (!tenant) return;
-    supabase.from('campaigns').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false })
-      .then(({ data }) => setCampaigns((data as any) ?? []));
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      const { data } = await supabase.from('campaigns').select('*').eq('tenant_id', tenant.id)
+        .order('created_at', { ascending: false }).abortSignal(ac.signal);
+      if (!ac.signal.aborted) setCampaigns((data as any) ?? []);
+    } catch { /* aborted */ }
+    finally { loadingRef.current = false; }
   };
 
   useEffect(() => {
@@ -66,11 +77,30 @@ export default function CampaignsPage() {
     load();
     (supabase.from as any)('whatsapp_instances_public').select('id, display_name, instance_name')
       .eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
-      .then(({ data }) => setInstances(data ?? []));
+      .then(({ data }: any) => setInstances(data ?? []));
     supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components')
       .eq('tenant_id', tenant.id).eq('status', 'APPROVED').order('name')
       .then(({ data }) => setTemplates((data as any) ?? []));
+    return () => { abortRef.current?.abort(); };
   }, [tenant]);
+
+  // Realtime: merge campaign UPDATEs into local state
+  useCampaignRealtime({
+    tenantId: tenant?.id ?? null,
+    onCampaignChange: (row: any) => {
+      setCampaigns(prev => prev.map(c => c.id === row.id ? { ...c, ...row } : c));
+    },
+  });
+
+  // Polling fallback only while at least one campaign is 'running'
+  const hasRunning = campaigns.some(c => c.status === 'running');
+  useEffect(() => {
+    if (!hasRunning) return;
+    const id = setInterval(() => { load(); }, 15000);
+    return () => clearInterval(id);
+  }, [hasRunning, tenant?.id]);
+
+
 
   const selectedTpl = templates.find(t => t.id === templateId);
   const bodyComp = selectedTpl?.components?.find?.((c: any) => c.type === 'BODY');
