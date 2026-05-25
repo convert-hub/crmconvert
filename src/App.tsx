@@ -19,6 +19,7 @@ import PromptStudioPage from "@/pages/PromptStudioPage";
 import ReportsPage from "@/pages/ReportsPage";
 import FlowBuilderPage from "@/pages/FlowBuilderPage";
 import CampaignsPage from "@/pages/CampaignsPage";
+import CampaignDetailPage from "@/pages/CampaignDetailPage";
 
 import ActivitiesPage from "@/pages/ActivitiesPage";
 import AdminLayout from "@/pages/admin/AdminLayout";
