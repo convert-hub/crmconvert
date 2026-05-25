@@ -70,6 +70,7 @@ function AppRoutes() {
         <Route path="inbox" element={<InboxPage />} />
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
+        <Route path="campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="flow-builder" element={<FlowBuilderPage />} />
         <Route path="prompt-studio" element={<PromptStudioPage />} />
         <Route path="settings" element={<SettingsPage />} />
