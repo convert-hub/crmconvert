@@ -22,10 +22,12 @@ function getByPath(obj: any, path: string): any {
   return path.split('.').reduce((acc, key) => acc?.[key], obj);
 }
 
+import { normalizeBrazilPhone } from '../_shared/phone.ts';
+
 function normalizePhone(p: any): string | null {
   if (p === undefined || p === null) return null;
-  const digits = String(p).replace(/\D/g, '');
-  return digits || null;
+  const norm = normalizeBrazilPhone(p);
+  return norm || null;
 }
 
 Deno.serve(async (req) => {
@@ -114,13 +116,19 @@ Deno.serve(async (req) => {
       }
 
       if (!contactId) {
-        const { data: newC } = await supabase.from('contacts').insert({
+        const { data: newC, error: insErr } = await supabase.from('contacts').insert({
           tenant_id: wh.tenant_id,
           name: name || phone || email || 'Webhook',
           phone, email, custom_fields: customFields,
           source: 'webhook', status: 'lead',
         }).select('id').single();
-        contactId = newC?.id ?? null;
+        if (insErr && (insErr as any).code === '23505' && phone) {
+          const { data: race } = await supabase.from('contacts').select('id')
+            .eq('tenant_id', wh.tenant_id).eq('phone', phone).single();
+          contactId = race?.id ?? null;
+        } else {
+          contactId = newC?.id ?? null;
+        }
       } else {
         const update: Record<string, unknown> = { custom_fields: customFields };
         if (name) update.name = name;

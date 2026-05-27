@@ -67,12 +67,10 @@ function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
   return { headers, rows };
 }
 
+import { normalizeBrazilPhone } from '@/lib/phone';
+
 function normalizePhone(phone: string): string {
-  let cleaned = phone.replace(/\D/g, '');
-  if (cleaned.startsWith('0')) cleaned = cleaned.slice(1);
-  if (cleaned.length === 10 || cleaned.length === 11) cleaned = '55' + cleaned;
-  if (cleaned && !cleaned.startsWith('+')) cleaned = '+' + cleaned;
-  return cleaned;
+  return normalizeBrazilPhone(phone);
 }
 
 export default function ImportContactsDialog({ open, onOpenChange, tenantId, onImported }: ImportContactsDialogProps) {

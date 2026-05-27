@@ -203,23 +203,36 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     return;
   }
 
-  // Find or create contact
+  // Find or create contact (normalized phone within tenant)
+  const { normalizeBrazilPhone } = await import('../_shared/phone.ts');
+  const normPhone = normalizeBrazilPhone(phone);
+  if (!normPhone) {
+    console.log('webhook-uazapi: phone failed normalization', phone);
+    return;
+  }
+
   const { data: existingContacts } = await supabase.from('contacts')
     .select('*')
     .eq('tenant_id', tenantId)
-    .eq('phone', phone)
+    .eq('phone', normPhone)
     .limit(1);
-  
+
   let contact = existingContacts?.[0];
   if (!contact) {
     // For outbound (fromMe) messages, senderName is the agent's name, not the contact's.
-    // Use phone as fallback name for outbound; use senderName only for inbound.
-    const name = fromMe ? phone : (senderName || phone);
-    const { data: newContact } = await supabase.from('contacts').insert({
-      tenant_id: tenantId, name, phone, source: 'whatsapp', status: 'lead',
+    const name = fromMe ? normPhone : (senderName || normPhone);
+    const { data: newContact, error: insErr } = await supabase.from('contacts').insert({
+      tenant_id: tenantId, name, phone: normPhone, source: 'whatsapp', status: 'lead',
     }).select().single();
-    contact = newContact;
-    console.log(`webhook-uazapi: created contact ${contact?.id} for ${phone}`);
+    if (insErr && (insErr as any).code === '23505') {
+      const { data: race } = await supabase.from('contacts').select('*')
+        .eq('tenant_id', tenantId).eq('phone', normPhone).single();
+      contact = race;
+      console.log(`webhook-uazapi: race-recovered contact ${contact?.id} for ${normPhone}`);
+    } else {
+      contact = newContact;
+      console.log(`webhook-uazapi: created contact ${contact?.id} for ${normPhone}`);
+    }
   }
 
   if (!contact) {

@@ -78,9 +78,11 @@ export default function ContactsPage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tenant) return;
+    const { normalizeBrazilPhone } = await import('@/lib/phone');
+    const normalizedPhone = form.phone ? normalizeBrazilPhone(form.phone) : '';
     const payload = {
       name: form.name,
-      phone: form.phone || null,
+      phone: normalizedPhone || null,
       email: form.email || null,
       status: form.status,
       tags: form.tags,
@@ -89,11 +91,19 @@ export default function ContactsPage() {
 
     if (editingContact) {
       const { error } = await supabase.from('contacts').update(payload).eq('id', editingContact.id);
-      if (error) { toast.error(error.message); return; }
+      if (error) {
+        if ((error as any).code === '23505') toast.error('Já existe um contato com este número neste tenant.');
+        else toast.error(error.message);
+        return;
+      }
       toast.success('Contato atualizado!');
     } else {
       const { error } = await supabase.from('contacts').insert({ ...payload, tenant_id: tenant.id });
-      if (error) { toast.error(error.message); return; }
+      if (error) {
+        if ((error as any).code === '23505') toast.error('Já existe um contato com este número neste tenant.');
+        else toast.error(error.message);
+        return;
+      }
       toast.success('Contato criado!');
     }
     setShowDialog(false);
