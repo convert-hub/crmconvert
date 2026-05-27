@@ -1,0 +1,1 @@
+ALTER FUNCTION public.normalize_brazil_phone(text) SET search_path = pg_catalog, public;
