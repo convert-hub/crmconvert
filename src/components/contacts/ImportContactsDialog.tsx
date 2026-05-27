@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Upload, FileText, AlertTriangle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { normalizeBrazilPhone } from '@/lib/phone';
 
 interface ImportContactsDialogProps {
   open: boolean;
@@ -66,8 +67,6 @@ function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
 
   return { headers, rows };
 }
-
-import { normalizeBrazilPhone } from '@/lib/phone';
 
 function normalizePhone(phone: string): string {
   return normalizeBrazilPhone(phone);
