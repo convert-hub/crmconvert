@@ -4,6 +4,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { executeAutomations } = require('./automation-handler');
+const { normalizeBrazilPhone, upsertContactByPhone } = require('./lib/phone');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -1408,13 +1409,12 @@ const handlers = {
 };
 
 // Helpers
+// normalizePhone: agora devolve apenas dígitos (sem '+') e aplica o nono dígito BR,
+// alinhado a src/lib/phone.ts / supabase/functions/_shared/phone.ts / SQL normalize_brazil_phone.
+// Retorna '' (não null) quando inválido — chamadores devem tratar string vazia.
 function normalizePhone(phone) {
-  if (!phone) return null;
-  let cleaned = phone.replace(/\D/g, '');
-  if (cleaned.startsWith('0')) cleaned = cleaned.slice(1);
-  if (cleaned.length === 10 || cleaned.length === 11) cleaned = '55' + cleaned;
-  if (!cleaned.startsWith('+')) cleaned = '+' + cleaned;
-  return cleaned;
+  const out = normalizeBrazilPhone(phone);
+  return out || null;
 }
 
 async function findContact(tenantId, phone, email) {
