@@ -37,11 +37,17 @@ const handlers = {
 
     let contact = await findContact(tenant_id, phone, email);
     if (!contact) {
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, email, source: 'form_webhook',
         status: 'lead', ...utm,
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505' && phone) {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     } else {
       await supabase.from('contacts').update({ ...utm, source: 'form_webhook' }).eq('id', contact.id);
     }
@@ -93,11 +99,17 @@ const handlers = {
 
     let contact = await findContact(tenant_id, phone, email);
     if (!contact) {
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, email, source: 'facebook_lead_ads',
         status: 'lead', ...utm,
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505' && phone) {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     }
 
     const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
@@ -302,10 +314,16 @@ const handlers = {
     let contact = await findContact(tenant_id, phone, null);
     if (!contact) {
       const name = senderName || phone;
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, source: 'whatsapp', status: 'lead',
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505') {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     }
 
     // Find or create conversation
