@@ -4,6 +4,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { executeAutomations } = require('./automation-handler');
+const { normalizeBrazilPhone, upsertContactByPhone } = require('./lib/phone');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -36,11 +37,17 @@ const handlers = {
 
     let contact = await findContact(tenant_id, phone, email);
     if (!contact) {
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, email, source: 'form_webhook',
         status: 'lead', ...utm,
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505' && phone) {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     } else {
       await supabase.from('contacts').update({ ...utm, source: 'form_webhook' }).eq('id', contact.id);
     }
@@ -92,11 +99,17 @@ const handlers = {
 
     let contact = await findContact(tenant_id, phone, email);
     if (!contact) {
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, email, source: 'facebook_lead_ads',
         status: 'lead', ...utm,
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505' && phone) {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     }
 
     const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
@@ -301,10 +314,16 @@ const handlers = {
     let contact = await findContact(tenant_id, phone, null);
     if (!contact) {
       const name = senderName || phone;
-      const { data: c } = await supabase.from('contacts').insert({
+      const ins = await supabase.from('contacts').insert({
         tenant_id, name, phone, source: 'whatsapp', status: 'lead',
       }).select().single();
-      contact = c;
+      if (ins.error && ins.error.code === '23505') {
+        const { data: race } = await supabase.from('contacts').select('*')
+          .eq('tenant_id', tenant_id).eq('phone', phone).single();
+        contact = race;
+      } else {
+        contact = ins.data;
+      }
     }
 
     // Find or create conversation
@@ -1408,13 +1427,12 @@ const handlers = {
 };
 
 // Helpers
+// normalizePhone: agora devolve apenas dígitos (sem '+') e aplica o nono dígito BR,
+// alinhado a src/lib/phone.ts / supabase/functions/_shared/phone.ts / SQL normalize_brazil_phone.
+// Retorna '' (não null) quando inválido — chamadores devem tratar string vazia.
 function normalizePhone(phone) {
-  if (!phone) return null;
-  let cleaned = phone.replace(/\D/g, '');
-  if (cleaned.startsWith('0')) cleaned = cleaned.slice(1);
-  if (cleaned.length === 10 || cleaned.length === 11) cleaned = '55' + cleaned;
-  if (!cleaned.startsWith('+')) cleaned = '+' + cleaned;
-  return cleaned;
+  const out = normalizeBrazilPhone(phone);
+  return out || null;
 }
 
 async function findContact(tenantId, phone, email) {

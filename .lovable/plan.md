@@ -1,111 +1,113 @@
-# Normalização de telefones BR + dedup de contatos (revisado)
+## Correção do plano anterior
 
-Ajustes aplicados: race-safe insert (23505 fallback), FKs reais verificadas, `CREATE UNIQUE INDEX` sem `CONCURRENTLY`, log de divergência em `wa-meta-send`.
+Auditei os três alvos e o que eu havia listado para `webhook-meta-leads` / `webhook-form-intake` estava **errado**: essas duas edge functions NÃO escrevem em `contacts` — só salvam `webhook_events` e enfileiram job (`process_meta_lead` / `process_form_webhook`). Quem cria/atualiza contatos a partir desses eventos é o **worker** (`worker/index.js`).
 
-## FKs reais para `public.contacts.id` (verificadas via `pg_constraint`)
+Portanto a normalização precisa entrar no worker, não nessas edge functions.
+
+## Achados da auditoria
+
+### `supabase/functions/webhook-meta-leads/index.ts`
+Apenas insert em `webhook_events` + `rpc('enqueue_job', ...)`. **Nada a fazer.**
+
+### `supabase/functions/webhook-form-intake/index.ts`
+Mesmo padrão. **Nada a fazer.**
+
+### `worker/automation-handler.js`
+Só faz `select` / `update` em `contacts` por `id` (tags, status, assigned_to). **Não cria contatos** e **não altera `phone`**. **Nada a fazer.**
+
+### `worker/index.js` (TEM problema — 3 sites)
+Atualmente usa `normalizePhone` local que devolve `+5511...` (com `+`) — incompatível com nossa normalização digits-only. Consequência depois das migrations: `findContact` nunca casa (busca `+...`, banco guarda `55...`), insert dispara 23505, worker quebra.
+
+Inserts/lookups afetados:
+- linha 25-45 — `process_form_webhook`
+- linha 81-100 — `process_meta_lead`
+- linha 294-310 — fluxo WhatsApp (sender → contato)
+
+Helpers compartilhados:
+- linha 1411 — `normalizePhone`
+- linha 1420 — `findContact`
+
+## Mudanças propostas
+
+### 1. Novo arquivo `worker/lib/phone.js` (CommonJS)
+Espelho 1:1 de `src/lib/phone.ts` / `supabase/functions/_shared/phone.ts`:
+- mesmo `VALID_BR_DDDS`
+- `normalizeBrazilPhone(input)` com mesma lógica (digits-only, sem `+`)
+- `phoneDigitsOnly(input)`
+- `upsertContactByPhone(supabase, tenantId, phoneRaw, extra)` com fallback 23505
+
+Não importo o `.ts` pra não introduzir transpile no Node. Cópia explícita, com comentário apontando o arquivo-fonte de verdade.
+
+### 2. `worker/index.js`
+- Trocar `normalizePhone` local pelo `normalizeBrazilPhone` do novo módulo (mesmo nome de variável local pra minimizar diff).
+- `findContact`: continua igual (já busca por `.eq('phone', phone)`), mas agora `phone` chega normalizado digits-only.
+- Nos 3 sites de insert (`form_webhook`, `facebook_lead_ads`, `whatsapp`), envolver o `insert` com try/catch e, em erro `code === '23505'`, refazer `select * from contacts where tenant_id=? and phone=?` e seguir com o existente — ou simplesmente trocar `findContact + insert` por `upsertContactByPhone` quando os campos extras encaixarem direto.
+
+### 3. `worker/automation-handler.js`
+Nenhuma alteração. Documentado no resumo final.
+
+### 4. Edge functions de webhook (leads / form-intake)
+Nenhuma alteração. Plano anterior tinha um erro — corrijo aqui.
+
+## Diff resumido (worker/index.js)
+
+```text
+- function normalizePhone(phone) {
+-   ...lógica antiga +5511...
+- }
++ const { normalizeBrazilPhone, upsertContactByPhone } = require('./lib/phone');
++ const normalizePhone = normalizeBrazilPhone; // alias p/ minimizar diff
+
+  // process_form_webhook
+- const { data: c } = await supabase.from('contacts').insert({
+-   tenant_id, name, phone, email, source: 'form_webhook', ...
+- }).select().single();
++ const c = await upsertContactByPhone(supabase, tenant_id, phone, {
++   name, email, source: 'form_webhook', ...
++ }, '*');
+
+  // idem process_meta_lead e fluxo whatsapp
+```
+
+(Detalhes: nos 2 primeiros sites o contato pode chegar sem phone — manter caminho legado por email; só usar upsert quando phone presente.)
+
+## Re-preview de dedup (pós-backfill, atual)
+
+25 grupos duplicados, 27 contatos a serem mesclados (2 grupos com 3 ids, 23 com 2):
+
+```text
+tenant 770531cc-...  6 grupos  (inclui o caso 5531980175217 da SOS? — não, SOS é 4c4064bd)
+tenant 3e1d7df9-...  9 grupos
+tenant cab34c54-...  8 grupos
+tenant 4c4064bd-... (SOS)  1 grupo — 5531980175217 (o caso original do bug)
+tenant af071ce4-...  1 grupo
+```
+
+O caso reproduzido em produção (SOS, `5531980175217`) aparece confirmado: 2 ids (`dcabc211...` cadastrado manualmente, `9698bd51...` criado pelo webhook).
+
+## FKs em `contacts.id` (confirmadas via `pg_constraint`)
 
 | Tabela | ON DELETE |
 |---|---|
+| `conversations` | SET NULL |
 | `opportunities` | SET NULL |
 | `activities` | SET NULL |
 | `flow_executions` | SET NULL |
-| `conversations` | SET NULL |
-| `campaign_recipients` | CASCADE |
+| `campaign_recipients` | CASCADE ⚠ |
 
-A migration de dedup precisa reapontar todas as 5 antes de deletar duplicatas (CASCADE em `campaign_recipients` significa que apagar duplicado sem reapontar destruiria recipients válidos).
+Migration 2 (dedup) **precisa reapontar todas as 5** antes do delete, senão `campaign_recipients` válidos são destruídos por cascade.
 
-## 1. `src/lib/phone.ts` + `supabase/functions/_shared/phone.ts`
+## Próximos passos manuais (depois deste loop)
 
-Conteúdo idêntico. Exporta:
-- `normalizeBrazilPhone(input): string` — só dígitos (sem `+`):
-  1. Strip não-dígitos, remove zeros à esquerda.
-  2. `55` + 12 dígitos e 5º dígito ∈ {6,7,8,9} → insere `9` após DDD → 13.
-  3. 11 dígitos com DDD BR válido → prefixa `55`.
-  4. 10 dígitos com DDD BR válido + local começando 6–9 → insere `9` e prefixa `55`.
-  5. Caso contrário (não-BR / já 13 com 55) → só dígitos.
-  6. Vazio / `null` / < 8 dígitos pós-strip → `""`.
-- `phoneDigitsOnly(input): string` — strip puro.
-
-DDDs válidos: lista ANATEL hardcoded.
-
-## 2. Aplicar `normalizeBrazilPhone` em todos os writes
-
-**Race-safe insert** (ajuste 1): em todos os webhooks, ao tentar `insert` em `contacts` e receber Postgres `23505` (unique violation), refazer `SELECT … WHERE tenant_id=? AND phone=?` e usar o ID retornado. Defende contra dois webhooks simultâneos para o mesmo phone.
-
-Padrão helper compartilhado em `supabase/functions/_shared/phone.ts`:
-```ts
-export async function upsertContactByPhone(supabase, tenantId, phone, extra) {
-  const norm = normalizeBrazilPhone(phone);
-  const { data: existing } = await supabase.from('contacts').select('id').eq('tenant_id', tenantId).eq('phone', norm).maybeSingle();
-  if (existing) return existing;
-  const { data, error } = await supabase.from('contacts').insert({ tenant_id: tenantId, phone: norm, ...extra }).select('id').single();
-  if (error?.code === '23505') {
-    const { data: race } = await supabase.from('contacts').select('id').eq('tenant_id', tenantId).eq('phone', norm).single();
-    return race;
-  }
-  return data;
-}
-```
-
-Edge functions a editar:
-- `webhook-meta/index.ts` — normalizar `fromPhone`, usar fallback 23505 no insert (linhas 158–188).
-- `webhook-uazapi/index.ts` — normalizar `phone`, fallback 23505 (linhas 207–223).
-- `webhook-flow-trigger/index.ts` — normalizar `phone`, fallback 23505 (linhas 102–128).
-- `webhook-meta-leads/index.ts` e `webhook-form-intake/index.ts` — hoje só enfileiram job (não escrevem em contacts). Documentar no resumo que o worker (`worker/automation-handler.js`) é quem cria contato; auditar no worker e aplicar mesmo padrão race-safe.
-- `wa-meta-send/index.ts` — substituir `normalizePhone` local por `normalizeBrazilPhone`. **Ajuste 4**: antes do `messagePayload.to`, comparar com `body.to` original; se diferente, `console.log("[wa-meta-send] phone normalized", { original: body.to, normalized: norm })`. Sem bloqueio.
-
-Frontend:
-- `src/pages/ContactsPage.tsx` (linhas 91, 95) — normalizar `form.phone` antes do save.
-- `src/components/contacts/ImportContactsDialog.tsx` — substituir `normalizePhone` local (linha 57) por `normalizeBrazilPhone`; aplicar no lookup (linha 130) também.
-- Demais arquivos auditados (`InboxPage`, `CampaignsPage`, `CampaignDetailPage`) só leem/atualizam name — sem mudança.
-
-Tratamento de erro 23505 no frontend: `ContactsPage` e `ImportContactsDialog` capturam `error.code === '23505'` e mostram toast pt-BR: "Já existe um contato com este número."
-
-## 3. Migration 1 — função SQL + backfill (aplicar via tool)
-
-`<ts>_normalize_contacts_phone.sql`:
-- `CREATE OR REPLACE FUNCTION public.normalize_brazil_phone(text) RETURNS text LANGUAGE plpgsql IMMUTABLE` — lógica equivalente, sem SECURITY DEFINER.
-- `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS phone_raw_pre_normalization text;`
-- `UPDATE contacts SET phone_raw_pre_normalization = phone WHERE phone_raw_pre_normalization IS NULL;`
-- `UPDATE contacts SET phone = normalize_brazil_phone(phone) WHERE phone IS NOT NULL AND phone <> normalize_brazil_phone(phone);`
-- **Sem UNIQUE ainda, sem trigger ainda.**
-
-## 4. Migration 2 — dedup (gerar como arquivo, NÃO aplicar)
-
-`<ts+1>_dedup_contacts_phone.sql` salvo no repo mas não rodado. Antes de gerar, executar via `supabase--read_query` a query de pré-visualização e incluir resultado no resumo:
-```sql
-SELECT tenant_id, phone, count(*) AS dup_count, array_agg(id ORDER BY created_at)
-FROM contacts WHERE phone IS NOT NULL AND phone <> ''
-GROUP BY 1,2 HAVING count(*) > 1 ORDER BY 3 DESC;
-```
-
-SQL da migration (idempotente):
-1. CTE `canonical` por `(tenant_id, phone)`: vencedor = `MIN(created_at)`, desempate `source NOT LIKE 'whatsapp_%' OR source IS NULL` primeiro.
-2. CTE `dups` com mapping `dup_id → canonical_id`.
-3. `UPDATE` nas 5 FKs (`conversations`, `opportunities`, `activities`, `flow_executions`, `campaign_recipients`) reapontando `contact_id`.
-4. `UPDATE contacts c SET name = COALESCE(NULLIF(c.name, c.phone), d.name), utm_source = COALESCE(c.utm_source, d.utm_source), ad_id = COALESCE(c.ad_id, d.ad_id), email = COALESCE(c.email, d.email), notes = COALESCE(c.notes, d.notes)` etc., mesclando do dup para o canônico.
-5. `DELETE FROM contacts WHERE id IN (dup_ids)`.
-
-## 5. Migration 3 — unique + trigger (aplicar via tool depois de dedup)
-
-`<ts+2>_contacts_phone_unique.sql`:
-- **Ajuste 3**: `CREATE UNIQUE INDEX IF NOT EXISTS contacts_tenant_phone_unique ON contacts(tenant_id, phone) WHERE phone IS NOT NULL AND phone <> '';` — sem `CONCURRENTLY`, roda na transação Lovable normal.
-- Trigger `BEFORE INSERT OR UPDATE OF phone` em `contacts`: `NEW.phone := normalize_brazil_phone(NEW.phone);` — defesa em profundidade.
-
-> Entregue como arquivo pronto; só aplicar após o dedup ser revisado e rodado manualmente.
-
-## 6. Testes
-
-`src/lib/phone.test.ts` (vitest) cobrindo os 11 casos do pedido. Rodar `bunx vitest run src/lib/phone.test.ts`.
-
-## Entregáveis
-
-1. `src/lib/phone.ts`, `supabase/functions/_shared/phone.ts`, `src/lib/phone.test.ts`.
-2. Edits em 4 edge functions + 2 arquivos do frontend.
-3. Migration 1 aplicada via tool.
-4. Migrations 2 e 3 commitadas como arquivos `.sql` no repo, **não aplicadas**.
-5. Resumo final: arquivos modificados, FKs confirmadas (tabela acima), output da query de pré-visualização do dedup, próximos passos.
+1. Você revisa o diff do worker.
+2. Rebuild + redeploy do worker (process Node não recarrega sozinho).
+3. Aplica `supabase/migrations_pending/20260527004300_dedup_contacts_phone.sql`.
+4. Aplica `supabase/migrations_pending/20260527004400_contacts_phone_unique.sql`.
+5. Roda a query de verificação (`SELECT ... GROUP BY ... HAVING COUNT>1` → deve retornar 0).
 
 ## Fora de escopo
 
-Worker (será auditado em separado se confirmar criação de contact), refator UAZAPI, mudança de RLS, dedup automático, outras colunas com phone (`companies.phone`).
+- `companies.phone` (outra tabela, fora do bug).
+- Refator UAZAPI além do mínimo.
+- Aplicar as 2 migrations pending automaticamente.
+- Mexer em RLS.
