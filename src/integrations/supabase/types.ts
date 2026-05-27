@@ -655,6 +655,7 @@ export type Database = {
           name: string
           notes: string | null
           phone: string | null
+          phone_raw_pre_normalization: string | null
           source: string | null
           state: string | null
           status: Database["public"]["Enums"]["contact_status"]
@@ -685,6 +686,7 @@ export type Database = {
           name: string
           notes?: string | null
           phone?: string | null
+          phone_raw_pre_normalization?: string | null
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["contact_status"]
@@ -715,6 +717,7 @@ export type Database = {
           name?: string
           notes?: string | null
           phone?: string | null
+          phone_raw_pre_normalization?: string | null
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["contact_status"]
@@ -2434,6 +2437,7 @@ export type Database = {
       is_admin_or_manager: { Args: { _tenant_id: string }; Returns: boolean }
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       is_saas_admin: { Args: never; Returns: boolean }
+      normalize_brazil_phone: { Args: { input: string }; Returns: string }
       reap_stuck_sending: { Args: { _campaign_id: string }; Returns: undefined }
       recompute_campaign_counters: {
         Args: { _campaign_id: string }
