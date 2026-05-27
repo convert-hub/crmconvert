@@ -41,10 +41,10 @@ export function normalizeBrazilPhone(input: unknown): string {
     return d;
   }
 
-  // Caso 2: 11 dígitos com DDD válido (sem 55).
+  // Caso 2: 11 dígitos com DDD válido + celular (3º dígito = 9), sem 55.
   if (d.length === 11) {
     const ddd = d.slice(0, 2);
-    if (VALID_BR_DDDS.has(ddd)) return '55' + d;
+    if (VALID_BR_DDDS.has(ddd) && d[2] === '9') return '55' + d;
   }
 
   // Caso 3: 10 dígitos com DDD válido + local começando 6..9 (sem 9 e sem 55).

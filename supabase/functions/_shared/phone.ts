@@ -37,7 +37,7 @@ export function normalizeBrazilPhone(input: unknown): string {
 
   if (d.length === 11) {
     const ddd = d.slice(0, 2);
-    if (VALID_BR_DDDS.has(ddd)) return '55' + d;
+    if (VALID_BR_DDDS.has(ddd) && d[2] === '9') return '55' + d;
   }
 
   if (d.length === 10) {
