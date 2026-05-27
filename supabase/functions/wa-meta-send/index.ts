@@ -362,10 +362,15 @@ serve(async (req) => {
     const to = body.to || (await resolveContactPhone(supabaseAdmin, conversation?.contact_id));
     if (!to) return jsonResponse({ error: "to (phone) required" }, 400);
 
+    const normalizedTo = normalizePhone(to);
+    if (body.to && normalizedTo !== String(body.to).replace(/[^0-9]/g, "")) {
+      console.log("[wa-meta-send] phone normalized", { original: body.to, normalized: normalizedTo });
+    }
+
     const messagePayload: Record<string, unknown> = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
-      to: normalizePhone(to),
+      to: normalizedTo,
     };
 
     if (body.reply_to_message_id) {
@@ -489,6 +494,8 @@ async function resolveContactPhone(supabase: any, contactId?: string | null): Pr
   return data?.phone ?? null;
 }
 
+import { normalizeBrazilPhone } from "../_shared/phone.ts";
+
 function normalizePhone(p: string): string {
-  return p.replace(/[^0-9]/g, "");
+  return normalizeBrazilPhone(p);
 }
