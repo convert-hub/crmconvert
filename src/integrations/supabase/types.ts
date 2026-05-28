@@ -1042,6 +1042,62 @@ export type Database = {
           },
         ]
       }
+      flow_shares: {
+        Row: {
+          cloned_count: number
+          created_at: string
+          created_by: string | null
+          description: string | null
+          expires_at: string | null
+          flow_id: string
+          id: string
+          is_active: boolean
+          snapshot: Json
+          tenant_id: string
+          title: string | null
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          cloned_count?: number
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          expires_at?: string | null
+          flow_id: string
+          id?: string
+          is_active?: boolean
+          snapshot: Json
+          tenant_id: string
+          title?: string | null
+          token: string
+          updated_at?: string
+        }
+        Update: {
+          cloned_count?: number
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          expires_at?: string | null
+          flow_id?: string
+          id?: string
+          is_active?: boolean
+          snapshot?: Json
+          tenant_id?: string
+          title?: string | null
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flow_shares_flow_id_fkey"
+            columns: ["flow_id"]
+            isOneToOne: false
+            referencedRelation: "chatbot_flows"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       global_api_keys: {
         Row: {
           api_key_encrypted: string
@@ -2481,6 +2537,14 @@ export type Database = {
           _tenant_id: string
         }
         Returns: boolean
+      }
+      install_flow_share: {
+        Args: {
+          _target_folder_id?: string
+          _target_tenant_id: string
+          _token: string
+        }
+        Returns: string
       }
       is_admin_or_manager: { Args: { _tenant_id: string }; Returns: boolean }
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
