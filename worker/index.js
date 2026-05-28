@@ -507,6 +507,67 @@ const handlers = {
     return await response.json();
   },
 
+  async send_whatsapp_media(payload) {
+    const { tenant_id, phone, media_kind, media_url, caption, filename, conversation_id, whatsapp_instance_id } = payload;
+    if (!media_url || !media_kind) throw new Error('send_whatsapp_media requires media_url and media_kind');
+
+    let instance = null;
+    if (whatsapp_instance_id) {
+      const { data } = await supabase.from('whatsapp_instances').select('*').eq('id', whatsapp_instance_id).maybeSingle();
+      instance = data;
+    }
+    if (!instance && conversation_id) {
+      const { data: conv } = await supabase.from('conversations').select('whatsapp_instance_id').eq('id', conversation_id).maybeSingle();
+      if (conv?.whatsapp_instance_id) {
+        const { data } = await supabase.from('whatsapp_instances').select('*').eq('id', conv.whatsapp_instance_id).maybeSingle();
+        instance = data;
+      }
+    }
+    if (!instance) {
+      const { data } = await supabase.from('whatsapp_instances').select('*').eq('tenant_id', tenant_id).eq('is_active', true).limit(1).maybeSingle();
+      instance = data;
+    }
+    if (!instance) throw new Error('No active WhatsApp instance for tenant');
+
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+    if (!cleanPhone) throw new Error('No phone number provided');
+
+    const metaType = media_kind === 'file' ? 'document' : media_kind;
+
+    if (instance.provider === 'meta_cloud') {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send', type: metaType, media_url, caption: caption || undefined,
+          filename: filename || undefined, phone: cleanPhone,
+          conversation_id: conversation_id || null, whatsapp_instance_id: instance.id,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.ok === false) throw new Error(`Meta media send failed: ${data?.error || response.status}`);
+      return data;
+    }
+
+    // UAZAPI /send/media
+    const uazType = media_kind === 'file' ? 'document' : media_kind;
+    const response = await fetch(`${instance.api_url}/send/media`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'token': instance.api_token_encrypted || '' },
+      body: JSON.stringify({
+        number: cleanPhone, type: uazType, file: media_url,
+        text: caption || '', docName: filename || undefined, readchat: true,
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`UAZAPI media send failed: ${response.status} ${errText}`);
+    }
+    return await response.json();
+  },
+
+
+
   async send_whatsapp_template(payload) {
     const { tenant_id, whatsapp_instance_id, template_id, template_variables, phone, conversation_id, contact_id } = payload;
     if (!whatsapp_instance_id || !template_id) {
