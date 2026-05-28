@@ -43,6 +43,8 @@ import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
 import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
+import ConditionCriteriaEditor from '@/components/flow-builder/ConditionCriteriaEditor';
+import ActionsListEditor from '@/components/flow-builder/ActionsListEditor';
 
 const nodeTypes = {
   trigger: TriggerNode,
