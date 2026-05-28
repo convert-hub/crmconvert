@@ -876,165 +876,156 @@ const handlers = {
             // In production, you'd save queue state and resume later
           }
         } else if (node.type === 'condition') {
-          const field = node.data?.field || 'message';
-          const operator = node.data?.operator || 'contains';
-          const value = node.data?.value || '';
-          let testValue = ctx.variables[field] || ctx.variables.message || '';
+          const normalize = (s) => removeAccents(String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' '));
+          const evalOne = (field, operator, value) => {
+            const testValue = ctx.variables[field] ?? ctx.variables.message ?? '';
+            const normTest = normalize(testValue);
+            const normValue = normalize(value);
+            switch (operator) {
+              case 'contains':     return normTest.includes(normValue);
+              case 'not_contains': return !normTest.includes(normValue);
+              case 'equals':       return normTest === normValue;
+              case 'not_equals':   return normTest !== normValue;
+              case 'starts_with':  return normTest.startsWith(normValue);
+              case 'ends_with':    return normTest.endsWith(normValue);
+              case 'exists':       return String(testValue ?? '').trim().length > 0;
+              case 'not_exists':   return String(testValue ?? '').trim().length === 0;
+              default:             return false;
+            }
+          };
 
-          // Normalize both values: lowercase, remove accents, trim whitespace
-          const normalize = (s) => removeAccents(s.toLowerCase().trim().replace(/\s+/g, ' '));
-          const normTest = normalize(testValue);
-          const normValue = normalize(value);
+          const criteria = Array.isArray(node.data?.criteria) && node.data.criteria.length > 0
+            ? node.data.criteria
+            : [{ field: node.data?.field || 'message', operator: node.data?.operator || 'contains', value: node.data?.value || '' }];
+          const combinator = String(node.data?.combinator || 'AND').toUpperCase();
+          const results = criteria.map(c => evalOne(c.field, c.operator, c.value));
+          const result = combinator === 'OR' ? results.some(Boolean) : results.every(Boolean);
 
-          let result = false;
-          switch (operator) {
-            case 'contains': result = normTest.includes(normValue); break;
-            case 'equals': result = normTest === normValue; break;
-            case 'starts_with': result = normTest.startsWith(normValue); break;
-            case 'not_contains': result = !normTest.includes(normValue); break;
-          }
-
-          // Route to yes or no handle
           const yesTargets = adjacency[`${nodeId}:yes`] || adjacency[nodeId] || [];
           const noTargets = adjacency[`${nodeId}:no`] || [];
           if (result) yesTargets.forEach(n => queue.push(n));
           else noTargets.forEach(n => queue.push(n));
         } else if (node.type === 'action') {
-          const actionType = node.data?.actionType || '';
-          const config = node.data?.config || {};
-          switch (actionType) {
-            case 'add_tag':
-              if (ctx.contact_id && config.tag) {
-                const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
-                const tags = [...new Set([...(c?.tags || []), config.tag])];
-                await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
-              }
-              break;
-            case 'remove_tag':
-              if (ctx.contact_id && config.tag) {
-                const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
-                const tags = (c?.tags || []).filter(t => t !== config.tag);
-                await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
-              }
-              break;
-            case 'send_whatsapp':
-              if (ctx.contact_id && config.message) {
-                const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
-                if (contact?.phone) {
-                  let convInstId = null;
-                  if (ctx.conversation_id) {
-                    const { data: conv } = await supabase.from('conversations')
-                      .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
-                    convInstId = conv?.whatsapp_instance_id || null;
-                  }
-                  await supabase.rpc('enqueue_job', {
-                    _type: 'send_whatsapp',
-                    _payload: JSON.stringify({
-                      tenant_id, phone: contact.phone, message: config.message,
-                      conversation_id: ctx.conversation_id,
-                      whatsapp_instance_id: convInstId || flow.whatsapp_instance_id || null,
-                    }),
-                    _tenant_id: tenant_id,
-                  });
+          const runAction = async (actionType, config) => {
+            config = config || {};
+            switch (actionType) {
+              case 'add_tag':
+                if (ctx.contact_id && config.tag) {
+                  const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
+                  const tags = [...new Set([...(c?.tags || []), config.tag])];
+                  await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
                 }
-              }
-              break;
-            case 'create_opportunity': {
-              if (!ctx.contact_id) break;
-              const { data: existingOpp } = await supabase.from('opportunities')
-                .select('id')
-                .eq('tenant_id', tenant_id)
-                .eq('contact_id', ctx.contact_id)
-                .eq('status', 'open')
-                .limit(1);
-              if (existingOpp && existingOpp.length > 0) break;
-
-              // Resolve pipeline (config or default)
-              let pipelineId = config.pipeline_id || null;
-              if (!pipelineId) {
-                const { data: pipeline } = await supabase.from('pipelines')
-                  .select('id').eq('tenant_id', tenant_id).eq('is_default', true).maybeSingle();
-                pipelineId = pipeline?.id || null;
-              }
-              if (!pipelineId) break;
-
-              // Resolve stage (config or first of pipeline)
-              let stageId = config.stage_id || null;
-              if (!stageId) {
-                const { data: stage } = await supabase.from('stages')
-                  .select('id').eq('pipeline_id', pipelineId).order('position').limit(1).maybeSingle();
-                stageId = stage?.id || null;
-              }
-              if (!stageId) break;
-
-              const { data: contact } = await supabase.from('contacts')
-                .select('name').eq('id', ctx.contact_id).single();
-
-              await supabase.from('opportunities').insert({
-                tenant_id,
-                contact_id: ctx.contact_id,
-                pipeline_id: pipelineId,
-                stage_id: stageId,
-                title: `Lead: ${contact?.name || 'Contato'}`,
-                source: 'flow_builder',
-              });
-              break;
-            }
-            case 'move_stage': {
-              if (!ctx.contact_id || !config.stage_id) break;
-              // Find target opportunity: prefer one in the chosen pipeline; else any open
-              let targetOpp = null;
-              if (config.pipeline_id) {
-                const { data: opps } = await supabase.from('opportunities')
-                  .select('id, stage_id')
-                  .eq('tenant_id', tenant_id)
-                  .eq('contact_id', ctx.contact_id)
-                  .eq('pipeline_id', config.pipeline_id)
-                  .eq('status', 'open')
-                  .order('updated_at', { ascending: false })
-                  .limit(1);
-                targetOpp = opps?.[0] || null;
-              }
-              if (!targetOpp) {
-                const { data: opps } = await supabase.from('opportunities')
-                  .select('id, stage_id, pipeline_id')
-                  .eq('tenant_id', tenant_id)
-                  .eq('contact_id', ctx.contact_id)
-                  .eq('status', 'open')
-                  .order('updated_at', { ascending: false })
-                  .limit(1);
-                targetOpp = opps?.[0] || null;
-              }
-              if (!targetOpp) {
-                console.log(`[Worker] Flow ${flow_id}: move_stage — sem oportunidade aberta para contato ${ctx.contact_id}`);
+                break;
+              case 'remove_tag':
+                if (ctx.contact_id && config.tag) {
+                  const { data: c } = await supabase.from('contacts').select('tags').eq('id', ctx.contact_id).single();
+                  const tags = (c?.tags || []).filter(t => t !== config.tag);
+                  await supabase.from('contacts').update({ tags }).eq('id', ctx.contact_id);
+                }
+                break;
+              case 'send_whatsapp':
+                if (ctx.contact_id && config.message) {
+                  const { data: contact } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+                  if (contact?.phone) {
+                    let convInstId = null;
+                    if (ctx.conversation_id) {
+                      const { data: conv } = await supabase.from('conversations')
+                        .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+                      convInstId = conv?.whatsapp_instance_id || null;
+                    }
+                    await supabase.rpc('enqueue_job', {
+                      _type: 'send_whatsapp',
+                      _payload: JSON.stringify({
+                        tenant_id, phone: contact.phone, message: config.message,
+                        conversation_id: ctx.conversation_id,
+                        whatsapp_instance_id: convInstId || flow.whatsapp_instance_id || null,
+                      }),
+                      _tenant_id: tenant_id,
+                    });
+                  }
+                }
+                break;
+              case 'create_opportunity': {
+                if (!ctx.contact_id) break;
+                const { data: existingOpp } = await supabase.from('opportunities')
+                  .select('id').eq('tenant_id', tenant_id).eq('contact_id', ctx.contact_id).eq('status', 'open').limit(1);
+                if (existingOpp && existingOpp.length > 0) break;
+                let pipelineId = config.pipeline_id || null;
+                if (!pipelineId) {
+                  const { data: pipeline } = await supabase.from('pipelines')
+                    .select('id').eq('tenant_id', tenant_id).eq('is_default', true).maybeSingle();
+                  pipelineId = pipeline?.id || null;
+                }
+                if (!pipelineId) break;
+                let stageId = config.stage_id || null;
+                if (!stageId) {
+                  const { data: stage } = await supabase.from('stages')
+                    .select('id').eq('pipeline_id', pipelineId).order('position').limit(1).maybeSingle();
+                  stageId = stage?.id || null;
+                }
+                if (!stageId) break;
+                const { data: contact } = await supabase.from('contacts').select('name').eq('id', ctx.contact_id).single();
+                await supabase.from('opportunities').insert({
+                  tenant_id, contact_id: ctx.contact_id, pipeline_id: pipelineId, stage_id: stageId,
+                  title: `Lead: ${contact?.name || 'Contato'}`, source: 'flow_builder',
+                });
                 break;
               }
-              if (targetOpp.stage_id === config.stage_id) break;
-              const fromStage = targetOpp.stage_id;
-              await supabase.from('opportunities').update({ stage_id: config.stage_id }).eq('id', targetOpp.id);
-              await supabase.from('stage_moves').insert({
-                tenant_id, opportunity_id: targetOpp.id,
-                from_stage_id: fromStage, to_stage_id: config.stage_id,
-                is_ai_move: false,
-                ai_reason: 'Flow Builder action',
-              });
-              console.log(`[Worker] Flow ${flow_id}: moved opp ${targetOpp.id} to stage ${config.stage_id}`);
-              break;
-            }
-            case 'close_conversation':
-              if (ctx.conversation_id) {
-                await supabase.from('conversations').update({ status: 'closed' }).eq('id', ctx.conversation_id);
-              }
-              break;
-            case 'assign_agent':
-              if (ctx.conversation_id) {
-                const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenant_id });
-                if (workload && workload.length > 0) {
-                  await supabase.from('conversations').update({ assigned_to: workload[0].membership_id }).eq('id', ctx.conversation_id);
+              case 'move_stage': {
+                if (!ctx.contact_id || !config.stage_id) break;
+                let targetOpp = null;
+                if (config.pipeline_id) {
+                  const { data: opps } = await supabase.from('opportunities')
+                    .select('id, stage_id').eq('tenant_id', tenant_id).eq('contact_id', ctx.contact_id)
+                    .eq('pipeline_id', config.pipeline_id).eq('status', 'open')
+                    .order('updated_at', { ascending: false }).limit(1);
+                  targetOpp = opps?.[0] || null;
                 }
+                if (!targetOpp) {
+                  const { data: opps } = await supabase.from('opportunities')
+                    .select('id, stage_id, pipeline_id').eq('tenant_id', tenant_id).eq('contact_id', ctx.contact_id)
+                    .eq('status', 'open').order('updated_at', { ascending: false }).limit(1);
+                  targetOpp = opps?.[0] || null;
+                }
+                if (!targetOpp) {
+                  console.log(`[Worker] Flow ${flow_id}: move_stage — sem oportunidade aberta para contato ${ctx.contact_id}`);
+                  break;
+                }
+                if (targetOpp.stage_id === config.stage_id) break;
+                const fromStage = targetOpp.stage_id;
+                await supabase.from('opportunities').update({ stage_id: config.stage_id }).eq('id', targetOpp.id);
+                await supabase.from('stage_moves').insert({
+                  tenant_id, opportunity_id: targetOpp.id,
+                  from_stage_id: fromStage, to_stage_id: config.stage_id,
+                  is_ai_move: false, ai_reason: 'Flow Builder action',
+                });
+                console.log(`[Worker] Flow ${flow_id}: moved opp ${targetOpp.id} to stage ${config.stage_id}`);
+                break;
               }
-              break;
+              case 'close_conversation':
+                if (ctx.conversation_id) {
+                  await supabase.from('conversations').update({ status: 'closed' }).eq('id', ctx.conversation_id);
+                }
+                break;
+              case 'assign_agent':
+                if (ctx.conversation_id) {
+                  const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenant_id });
+                  if (workload && workload.length > 0) {
+                    await supabase.from('conversations').update({ assigned_to: workload[0].membership_id }).eq('id', ctx.conversation_id);
+                  }
+                }
+                break;
+            }
+          };
+
+          const actionsList = Array.isArray(node.data?.actions) && node.data.actions.length > 0
+            ? node.data.actions
+            : [{ type: node.data?.actionType || '', config: node.data?.config || {} }];
+          for (const a of actionsList) {
+            try { await runAction(a.type, a.config); }
+            catch (err) { console.error(`[Worker] Flow ${flow_id}: action ${a.type} error:`, err.message); }
           }
+
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
         } else if (node.type === 'question') {
