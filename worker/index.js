@@ -1282,10 +1282,102 @@ const handlers = {
       return { skipped: true, reason: `status is ${execution.status}` };
     }
 
-    // Save the answer to the configured contact field
+    const text = (answer || '').trim();
+
+    // --- MENU resume path -----------------------------------------------
+    const pendingMenu = execution.pending_menu;
+    if (pendingMenu && pendingMenu.node_id) {
+      const normalize = (s) => removeAccents(String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' '));
+      const normAnswer = normalize(text);
+      const options = Array.isArray(pendingMenu.options) ? pendingMenu.options : [];
+
+      // 1) try numeric "1", "2"...; 2) match label; 3) match value (comma list)
+      let matchedIndex = -1;
+      const asNum = parseInt(normAnswer, 10);
+      if (!isNaN(asNum) && asNum >= 1 && asNum <= options.length) {
+        matchedIndex = asNum - 1;
+      } else {
+        matchedIndex = options.findIndex(opt => {
+          if (normalize(opt.label) === normAnswer) return true;
+          const synonyms = String(opt.value || '').split(',').map(s => normalize(s)).filter(Boolean);
+          if (synonyms.includes(normAnswer)) return true;
+          // partial: answer contains label or vice-versa
+          const lbl = normalize(opt.label);
+          if (lbl && (normAnswer.includes(lbl) || synonyms.some(s => normAnswer.includes(s)))) return true;
+          return false;
+        });
+      }
+
+      if (matchedIndex >= 0) {
+        const matched = options[matchedIndex];
+        // Save chosen value as variable if requested
+        const extraVars = { message: text, last_answer: text, menu_choice: matched.label };
+        if (pendingMenu.save_variable) extraVars[pendingMenu.save_variable] = matched.label;
+
+        // Resume from option handle
+        const { data: flow } = await supabase.from('chatbot_flows').select('edges').eq('id', execution.flow_id).single();
+        const edges = flow?.edges || [];
+        const targets = edges
+          .filter(e => e.source === pendingMenu.node_id && e.sourceHandle === `option-${matched.id}`)
+          .map(e => e.target);
+
+        await supabase.from('flow_executions').update({ pending_menu: null }).eq('id', execution_id);
+        return await handlers.execute_flow({
+          flow_id: execution.flow_id,
+          tenant_id: execution.tenant_id,
+          _resume: { execution_id, queue: targets, extra_vars: extraVars },
+        });
+      }
+
+      // No match → increment retries
+      const newRetries = (pendingMenu.retries || 0) + 1;
+      if (newRetries >= pendingMenu.max_retries) {
+        // Follow "invalid" handle
+        const { data: flow } = await supabase.from('chatbot_flows').select('edges').eq('id', execution.flow_id).single();
+        const edges = flow?.edges || [];
+        const targets = edges
+          .filter(e => e.source === pendingMenu.node_id && e.sourceHandle === 'invalid')
+          .map(e => e.target);
+        await supabase.from('flow_executions').update({ pending_menu: null }).eq('id', execution_id);
+        console.log(`[Worker] Menu ${pendingMenu.node_id}: max retries exceeded, following invalid handle`);
+        return await handlers.execute_flow({
+          flow_id: execution.flow_id,
+          tenant_id: execution.tenant_id,
+          _resume: { execution_id, queue: targets, extra_vars: { message: text, last_answer: text } },
+        });
+      }
+
+      // Resend invalid message, keep paused
+      if (execution.conversation_id) {
+        const { data: contact } = await supabase.from('contacts').select('phone').eq('id', execution.contact_id).single();
+        const { data: conv } = await supabase.from('conversations').select('whatsapp_instance_id').eq('id', execution.conversation_id).maybeSingle();
+        await supabase.from('messages').insert({
+          tenant_id: execution.tenant_id, conversation_id: execution.conversation_id,
+          direction: 'outbound', content: pendingMenu.invalid_text, is_ai_generated: false,
+        });
+        if (contact?.phone) {
+          await supabase.rpc('enqueue_job', {
+            _type: 'send_whatsapp',
+            _payload: JSON.stringify({
+              tenant_id: execution.tenant_id, phone: contact.phone,
+              message: pendingMenu.invalid_text,
+              conversation_id: execution.conversation_id,
+              whatsapp_instance_id: conv?.whatsapp_instance_id || null,
+            }),
+            _tenant_id: execution.tenant_id,
+          });
+        }
+      }
+      await supabase.from('flow_executions').update({
+        pending_menu: { ...pendingMenu, retries: newRetries },
+      }).eq('id', execution_id);
+      console.log(`[Worker] Menu ${pendingMenu.node_id}: retry ${newRetries}/${pendingMenu.max_retries}`);
+      return { execution_id, menu_retry: newRetries };
+    }
+
+    // --- QUESTION resume path (existing behavior) -----------------------
     const saveField = execution.pending_save_field;
     const customKey = execution.pending_custom_field_key;
-    const text = (answer || '').trim();
 
     if (execution.contact_id && saveField && text) {
       if (saveField === 'custom' && customKey) {
