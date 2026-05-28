@@ -1,27 +1,56 @@
-## Objetivo
-Permitir, na aba "Pipeline" das Configurações: editar nome/cor das etapas, reordenar via drag-and-drop e (já existe) criar novas. Sem quebrar fluxos atuais (kanban, automações de inatividade, regras dependentes de `is_won`/`is_lost`).
+## Diagnóstico forense
 
-## Mudanças (apenas `src/pages/SettingsPage.tsx`)
+O envio do template funcionou, mas a resposta não chegou ao app porque a instância Meta usada no envio não está gerando eventos de webhook para o nosso endpoint.
 
-1. **Edição inline**
-   - Nome: célula vira `Input` (onBlur salva via `update({ name })`).
-   - Cor: o atual swatch vira um `<input type="color">` que dispara `update({ color })` no `onChange`.
-   - Disponível somente para `isAdmin`. Etapas `is_won`/`is_lost` continuam editáveis em nome/cor (não no tipo).
+Evidências encontradas:
 
-2. **Reordenação por drag-and-drop**
-   - Reaproveitar `@dnd-kit/core` + `@dnd-kit/sortable` (já no projeto, usado em `PipelinePage`).
-   - Coluna "Pos." vira handle com `GripVertical`.
-   - Ao soltar: aplicar `arrayMove`, atualizar estado local imediatamente (otimista) e persistir em lote chamando `supabase.from('stages').update({ position: i }).eq('id', s.id)` para cada etapa cuja posição mudou (Promise.all). Em caso de erro, recarregar via `loadAll()`.
+- O template foi salvo e enviado pela instância **PAIPE WABA**:
+  - `whatsapp_instance_id`: `bf86edc0-8f29-4974-a790-b865aaa5bd9b`
+  - `meta_phone_number_id`: `1083594648176809`
+  - conversa: `efae385a-6457-4b7d-b48d-6ea3ee4f5929`
+  - contato: Bruno Almeida
+- Essa conversa tem **1 outbound** e **0 inbound** depois do template.
+- Na tabela `webhook_events`, a instância **Comercial SOS** recebe eventos normalmente:
+  - `meta_phone_number_id`: `1115147951682906`
+  - 66 eventos nas últimas 24h
+- A instância **PAIPE WABA** não tem nenhum evento registrado:
+  - `meta_phone_number_id`: `1083594648176809`
+  - 0 eventos nas últimas 24h
+  - nenhum último evento encontrado
 
-3. **Sem mudanças** em: criação (já funciona), exclusão, campo de inatividade, schema do banco, RLS, types, ou no consumo do kanban (que já faz `.order('position')`).
+Conclusão: o problema não é a tela do Inbox nem o salvamento da mensagem. O app simplesmente não recebeu o POST da Meta para essa instância PAIPE. Isso normalmente acontece quando o webhook do App Meta/WABA não está configurado ou inscrito para esse número/WABA, ou quando está apontando para outro endpoint/app.
 
-## Detalhes técnicos
-- `stages` continua ordenado por `position` ao carregar.
-- A reordenação não altera `is_won`/`is_lost` nem `inactivity_minutes`.
-- Otimização: só envia update para etapas cujo índice mudou.
-- O kanban (`PipelinePage`) lê stages com `.order('position')`, portanto refletirá a nova ordem automaticamente.
+## Plano de correção
 
-## Riscos / Mitigações
-- **Concorrência**: dois admins reordenando simultaneamente — risco baixo; `loadAll()` no erro/sucesso reconcilia.
-- **Validação de nome vazio**: bloquear `update` se trimmed vazio (mantém valor anterior).
-- **Sem impacto** em automações: elas referenciam `stage_id`, não posição.
+1. **Adicionar diagnóstico visível na configuração Meta**
+   - Mostrar, por conexão Meta, a URL do webhook e o token de verificação já usados pelo app.
+   - Mostrar o último evento recebido para aquele `Phone Number ID`.
+   - Mostrar um alerta quando uma conexão Meta válida para envio nunca recebeu webhook.
+
+2. **Melhorar logs do `webhook-meta`**
+   - Registrar de forma explícita quando chega evento para um `phone_number_id` sem instância correspondente.
+   - Registrar quando o evento é recebido, mas não tem `messages`.
+   - Registrar falhas de insert em `messages`, `contacts` ou `conversations`, hoje algumas operações são best-effort/silenciosas.
+
+3. **Hardening do recebimento Meta**
+   - Tornar o insert da mensagem inbound idempotente por `provider_message_id`, para evitar duplicidade se a Meta reenviar eventos.
+   - Garantir que, ao receber resposta de um contato que já tem conversa antiga, a conversa correta vinculada à instância Meta seja atualizada.
+
+4. **Orientação operacional pós-ajuste**
+   - Revalidar no painel da Meta se o webhook está configurado para:
+     - URL: `https://zhywwrhzaqfcjcwywkwf.supabase.co/functions/v1/webhook-meta`
+     - Token de verificação da conexão PAIPE WABA
+     - Campo/evento `messages` inscrito
+   - Depois disso, enviar uma nova resposta do WhatsApp e confirmar se aparece em `webhook_events` e no Inbox.
+
+## Arquivos a alterar
+
+- `supabase/functions/webhook-meta/index.ts`
+- `src/components/settings/MetaCloudConnectionsCard.tsx`
+
+## Sem impacto esperado
+
+- Não muda o envio de templates.
+- Não muda UAZAPI.
+- Não altera a estrutura principal do CRM.
+- A correção é isolada ao diagnóstico e robustez do recebimento pela API oficial da Meta.
