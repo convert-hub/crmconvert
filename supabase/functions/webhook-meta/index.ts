@@ -84,9 +84,18 @@ serve(async (req) => {
       .maybeSingle();
 
     if (!instance) {
-      console.warn("webhook-meta: instance not found for phone_number_id", phoneNumberId);
-      return jsonOk({ ok: true, ignored: "instance not found" });
+      // Salva o evento órfão para diagnóstico (sem tenant_id válido não conseguimos — usamos o primeiro tenant com Meta ativo apenas para registrar)
+      console.warn("[webhook-meta] orphan_event phone_number_id=", phoneNumberId, "field=", change?.field);
+      return jsonOk({ ok: true, ignored: "instance_not_found", phone_number_id: phoneNumberId });
     }
+    console.log("[webhook-meta] event_received", {
+      instance_id: instance.id,
+      tenant_id: instance.tenant_id,
+      phone_number_id: phoneNumberId,
+      field: change?.field,
+      messages: (value?.messages || []).length,
+      statuses: (value?.statuses || []).length,
+    });
 
     // ── Validate HMAC signature ─────────────────────────────
     if (instance.meta_app_secret_encrypted) {
@@ -296,8 +305,20 @@ async function handleInboundMessage(
     }
   }
 
-  // 5) Insert inbound message
-  await supabase.from("messages").insert({
+  // 5) Insert inbound message (idempotente por provider_message_id)
+  const { data: existingMsg } = await supabase
+    .from("messages")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("provider_message_id", providerMessageId)
+    .maybeSingle();
+
+  if (existingMsg) {
+    console.log("[webhook-meta] duplicate_inbound_ignored", { provider_message_id: providerMessageId });
+    return;
+  }
+
+  const { error: insMsgErr } = await supabase.from("messages").insert({
     tenant_id: tenantId,
     conversation_id: conversation.id,
     direction: "inbound",
@@ -308,9 +329,13 @@ async function handleInboundMessage(
     provider_metadata: { provider: "meta_cloud", raw: msg, meta_media_id: mediaId },
     created_at: timestamp,
   });
+  if (insMsgErr) {
+    console.error("[webhook-meta] insert_message_failed", { provider_message_id: providerMessageId, error: insMsgErr.message });
+    return;
+  }
 
   // 6) Update conversation timestamps
-  await supabase
+  const { error: convUpdErr } = await supabase
     .from("conversations")
     .update({
       last_message_at: timestamp,
@@ -319,6 +344,9 @@ async function handleInboundMessage(
       unread_count: (await getUnread(supabase, conversation.id)) + 1,
     })
     .eq("id", conversation.id);
+  if (convUpdErr) {
+    console.error("[webhook-meta] update_conversation_failed", { conversation_id: conversation.id, error: convUpdErr.message });
+  }
 }
 
 async function getUnread(supabase: any, conversationId: string): Promise<number> {

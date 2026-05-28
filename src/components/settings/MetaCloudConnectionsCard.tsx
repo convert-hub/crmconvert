@@ -35,6 +35,7 @@ function generateVerifyToken(): string {
 export default function MetaCloudConnectionsCard() {
   const { tenant, role } = useAuth();
   const [instances, setInstances] = useState<MetaInstance[]>([]);
+  const [lastEvents, setLastEvents] = useState<Record<string, { last_at: string | null; count_24h: number }>>({});
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -99,7 +100,32 @@ export default function MetaCloudConnectionsCard() {
       .eq('provider', 'meta_cloud')
       .order('created_at', { ascending: false });
     if (error) toast.error(error.message);
-    setInstances((data ?? []) as MetaInstance[]);
+    const list = (data ?? []) as MetaInstance[];
+    setInstances(list);
+
+    // Diagnóstico: para cada instância, busca último webhook_event e contagem 24h
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const diag: Record<string, { last_at: string | null; count_24h: number }> = {};
+    await Promise.all(list.map(async inst => {
+      if (!inst.meta_phone_number_id) {
+        diag[inst.id] = { last_at: null, count_24h: 0 };
+        return;
+      }
+      const filter = `raw_payload->entry->0->changes->0->value->metadata->>phone_number_id.eq.${inst.meta_phone_number_id}`;
+      const [{ data: last }, { count }] = await Promise.all([
+        supabase.from('webhook_events').select('created_at')
+          .eq('tenant_id', tenant.id).eq('source', 'meta_cloud')
+          .filter('raw_payload->entry->0->changes->0->value->metadata->>phone_number_id', 'eq', inst.meta_phone_number_id)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('webhook_events').select('id', { count: 'exact', head: true })
+          .eq('tenant_id', tenant.id).eq('source', 'meta_cloud')
+          .filter('raw_payload->entry->0->changes->0->value->metadata->>phone_number_id', 'eq', inst.meta_phone_number_id)
+          .gte('created_at', since),
+      ]);
+      void filter;
+      diag[inst.id] = { last_at: (last as any)?.created_at ?? null, count_24h: count ?? 0 };
+    }));
+    setLastEvents(diag);
     setLoading(false);
   }, [tenant?.id]);
 
@@ -345,6 +371,28 @@ export default function MetaCloudConnectionsCard() {
                   </Button>
                 </div>
                 <code className="block break-all font-mono text-[11px]">{inst.meta_verify_token}</code>
+                {(() => {
+                  const d = lastEvents[inst.id];
+                  if (!d) return null;
+                  const never = !d.last_at;
+                  return (
+                    <div className={`mt-2 rounded-md border p-2 flex items-start gap-2 ${never ? 'border-amber-500/40 bg-amber-500/5 text-amber-700' : 'border-border bg-muted/40 text-muted-foreground'}`}>
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        {never ? (
+                          <>
+                            <div className="font-medium">Nenhum webhook recebido</div>
+                            <div className="opacity-90">A Meta nunca enviou eventos para este número. Verifique no painel Meta Business → WhatsApp → Configuration → Webhook se a URL e o Verify Token acima estão cadastrados e o campo <code>messages</code> está inscrito.</div>
+                          </>
+                        ) : (
+                          <div>
+                            Último webhook: {new Date(d.last_at!).toLocaleString('pt-BR')} · {d.count_24h} evento(s) nas últimas 24h
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           );})
