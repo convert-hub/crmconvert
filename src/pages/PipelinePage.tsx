@@ -340,6 +340,7 @@ export default function PipelinePage() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [members, setMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
+  const [lastContactInteractionByContact, setLastContactInteractionByContact] = useState<Record<string, string>>({});
   const [creatingPipeline, setCreatingPipeline] = useState(false);
   const [deleteOppId, setDeleteOppId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
