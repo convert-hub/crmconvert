@@ -266,6 +266,24 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+
+  const insertEmoji = (emoji: string) => {
+    const ta = textareaRef.current;
+    if (!ta) { setNewMsg(prev => prev + emoji); return; }
+    const start = ta.selectionStart ?? newMsg.length;
+    const end = ta.selectionEnd ?? newMsg.length;
+    const next = newMsg.slice(0, start) + emoji + newMsg.slice(end);
+    setNewMsg(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + emoji.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  };
+
+
 
   const statusColors: Record<string, string> = {
     open: 'bg-success/10 text-success border-success/20',
