@@ -474,9 +474,12 @@ serve(async (req) => {
     if (!sendR.ok) {
       const authErr = await handleGraphError(sendR.status, sendData);
       if (authErr) return jsonResponse(authErr);
+      const classified = classifyGraphError(sendData);
+      console.warn("[wa-meta-send] graph_send_failed", { code: classified.code, raw: sendData?.error });
       return jsonResponse({
         ok: false,
-        error: sendData?.error?.message ?? "Send failed",
+        code: classified.code,
+        error: classified.error,
         details: sendData,
       }, 200);
     }
