@@ -109,14 +109,24 @@ export default function InboxPage() {
         const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
         setConversations(convs);
         const urlConv = searchParams.get('conv');
-        if (urlConv && convs.some(c => c.id === urlConv)) {
+        if (urlConv && convs.some(c => c.id === urlConv) && selectedConv !== urlConv) {
           setSelectedConv(urlConv);
-          setSearchParams({}, { replace: true });
         }
       });
   };
 
   useEffect(() => { loadConversations(); }, [tenant, role, membership?.id]);
+
+  // Keep ?conv= in URL in sync with selectedConv so the open chat survives remounts/refreshes.
+  useEffect(() => {
+    const current = searchParams.get('conv');
+    if (selectedConv && current !== selectedConv) {
+      setSearchParams({ conv: selectedConv }, { replace: true });
+    } else if (!selectedConv && current) {
+      setSearchParams({}, { replace: true });
+    }
+  }, [selectedConv]);
+
 
   // Realtime: listen for new/updated conversations
   useEffect(() => {
