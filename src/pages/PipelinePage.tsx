@@ -865,6 +865,10 @@ export default function PipelinePage() {
               </SelectContent>
             </Select>
           )}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input className="pl-9 w-64 h-9 text-[13px] rounded-xl" placeholder="Buscar por nome, telefone ou título..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
           <FilterBar filters={filters} onChange={setFilters} members={members} allTags={allTags} />
         </div>
         <div className="text-sm text-muted-foreground">
