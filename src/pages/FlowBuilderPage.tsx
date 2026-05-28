@@ -656,44 +656,20 @@ export default function FlowBuilderPage() {
                 />
               )}
 
-              {editingNode.type === 'condition' && (
-                <>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Campo</Label>
-                      <Select value={(editingNode.data as any).field ?? 'message'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, field: v } })}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="message">Mensagem</SelectItem>
-                          <SelectItem value="contact_name">Nome</SelectItem>
-                          <SelectItem value="contact_tag">Tag</SelectItem>
-                          <SelectItem value="contact_status">Status</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Operador</Label>
-                      <Select value={(editingNode.data as any).operator ?? 'contains'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, operator: v } })}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="contains">Contém</SelectItem>
-                          <SelectItem value="equals">Igual</SelectItem>
-                          <SelectItem value="starts_with">Começa com</SelectItem>
-                          <SelectItem value="not_contains">Não contém</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Valor</Label>
-                      <Input
-                        value={(editingNode.data as any).value ?? ''}
-                        onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, value: e.target.value } })}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
+              {editingNode.type === 'condition' && (() => {
+                const d: any = editingNode.data;
+                const criteria = Array.isArray(d.criteria) && d.criteria.length > 0
+                  ? d.criteria
+                  : [{ id: `c-${Date.now()}`, field: d.field ?? 'message', operator: d.operator ?? 'contains', value: d.value ?? '' }];
+                const combinator = (d.combinator ?? 'AND') as 'AND' | 'OR';
+                return (
+                  <ConditionCriteriaEditor
+                    combinator={combinator}
+                    criteria={criteria}
+                    onChange={(crit, comb) => setEditingNode({ ...editingNode, data: { ...d, criteria: crit, combinator: comb } })}
+                  />
+                );
+              })()}
 
               {editingNode.type === 'delay' && (
                 <div className="space-y-1.5">
