@@ -828,7 +828,7 @@ export default function PipelinePage() {
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
   const canDeleteOpportunity = role !== 'readonly' && role !== null;
 
-  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
+  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '' || search.trim() !== '';
 
   // Empty state: no pipeline exists
   if (pipelines.length === 0 && !selectedPipeline) {
