@@ -24,7 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, HelpCircle, Shuffle, Maximize2, Minimize2, Folder, FolderPlus, FolderOpen, Check, Pencil, Loader2, List, GitMerge } from 'lucide-react';
+import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, HelpCircle, Shuffle, Maximize2, Minimize2, Folder, FolderPlus, FolderOpen, Check, Pencil, Loader2, List, GitMerge, Sparkles, PlayCircle, Share2 } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import PipelineStagePicker from '@/components/flow-builder/PipelineStagePicker';
@@ -49,6 +49,10 @@ import MenuNode from '@/components/flow-builder/MenuNode';
 import MenuNodeEditor from '@/components/flow-builder/MenuNodeEditor';
 import SubflowNode from '@/components/flow-builder/SubflowNode';
 import SubflowNodeEditor from '@/components/flow-builder/SubflowNodeEditor';
+import AIAssistantNode from '@/components/flow-builder/AIAssistantNode';
+import AIAssistantNodeEditor from '@/components/flow-builder/AIAssistantNodeEditor';
+import FlowSimulator from '@/components/flow-builder/FlowSimulator';
+import ShareFlowDialog from '@/components/flow-builder/ShareFlowDialog';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -60,6 +64,7 @@ const nodeTypes = {
   randomizer: RandomizerNode,
   menu: MenuNode,
   subflow: SubflowNode,
+  aiassistant: AIAssistantNode,
 };
 
 const edgeTypes = { deletable: DeletableEdge };
@@ -73,6 +78,7 @@ const NODE_PALETTE = [
   { type: 'action', label: 'Ação', icon: Zap, color: 'text-red-500' },
   { type: 'question', label: 'Pergunta', icon: HelpCircle, color: 'text-teal-500' },
   { type: 'randomizer', label: 'Randomizador', icon: Shuffle, color: 'text-cyan-500' },
+  { type: 'aiassistant', label: 'Assistente IA', icon: Sparkles, color: 'text-violet-500' },
   { type: 'subflow', label: 'Conectar fluxo', icon: GitMerge, color: 'text-fuchsia-500' },
 ];
 
@@ -120,6 +126,8 @@ export default function FlowBuilderPage() {
   const [editingNode, setEditingNode] = useState<Node | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [addPaletteOpen, setAddPaletteOpen] = useState(false);
+  const [simulatorOpen, setSimulatorOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const skipNextDirtyRef = useRef(true); // ignora o primeiro disparo após abrir/criar fluxo
 
@@ -283,6 +291,7 @@ export default function FlowBuilderPage() {
       { id: `o${Date.now().toString(36).slice(-5)}b`, label: 'Opção 2', value: '' },
     ], maxRetries: 3, invalidText: 'Desculpe, não entendi. Por favor, escolha uma das opções.' };
     if (type === 'subflow') data = { ...data, targetFlowId: '', targetFlowName: '', mode: 'call' };
+    if (type === 'aiassistant') data = { ...data, model: 'google/gemini-3-flash-preview', system: '', prompt: '{{message}}', useRag: false, ragCategory: '', debounceSeconds: 8 };
 
     const newNode: Node = { id, type, position, data };
     setNodes((nds) => [...nds, newNode]);
