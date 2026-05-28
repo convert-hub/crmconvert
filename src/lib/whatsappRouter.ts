@@ -49,6 +49,7 @@ export interface SendResult {
   provider_message_id?: string | null;
   meta_media_id?: string | null;
   error?: string;
+  code?: string;
 }
 
 export async function sendText(params: {
