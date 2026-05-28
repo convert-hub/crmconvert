@@ -469,7 +469,26 @@ export default function PipelinePage() {
     supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline)
       .order('position', { ascending: true })
       .order('updated_at', { ascending: false })
-      .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
+      .then(async ({ data }) => {
+        const opps = (data as unknown as (Opportunity & { contact?: Contact })[]) ?? [];
+        setOpportunities(opps);
+        const contactIds = [...new Set(opps.map(o => o.contact_id).filter(Boolean) as string[])];
+        if (contactIds.length === 0) { setLastContactInteractionByContact({}); return; }
+        const { data: convs } = await supabase.from('conversations')
+          .select('contact_id, last_customer_message_at')
+          .eq('tenant_id', tenant.id)
+          .in('contact_id', contactIds)
+          .not('last_customer_message_at', 'is', null);
+        const map: Record<string, string> = {};
+        for (const c of (convs ?? []) as { contact_id: string; last_customer_message_at: string }[]) {
+          if (!c.contact_id || !c.last_customer_message_at) continue;
+          const prev = map[c.contact_id];
+          if (!prev || new Date(c.last_customer_message_at) > new Date(prev)) {
+            map[c.contact_id] = c.last_customer_message_at;
+          }
+        }
+        setLastContactInteractionByContact(map);
+      });
   }, [selectedPipeline, tenant]);
 
   // Load message counts per contact for engagement score
