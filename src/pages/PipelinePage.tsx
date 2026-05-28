@@ -918,6 +918,7 @@ export default function PipelinePage() {
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
                       customFieldDefs={customFieldDefs}
                       canDelete={canDeleteOpportunity}
+                      lastContactInteractionAt={opp.contact_id ? lastContactInteractionByContact[opp.contact_id] : null}
                       engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
                   ))}
                 </SortableContext>
