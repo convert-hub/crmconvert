@@ -10,7 +10,10 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText, GitBranch, SlidersHorizontal, Users, BookOpen, Plug } from 'lucide-react';
+import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText, GitBranch, SlidersHorizontal, Users, BookOpen, Plug, GripVertical } from 'lucide-react';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import BrandingSettings from '@/components/settings/BrandingSettings';
@@ -248,6 +251,61 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   );
 }
 
+function SortableStageRow({ stage, index, isAdmin, onUpdate, onDelete, children }: {
+  stage: StageRow;
+  index: number;
+  isAdmin: boolean;
+  onUpdate: (patch: Partial<Pick<StageRow, 'name' | 'color'>>) => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: stage.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
+  return (
+    <TableRow ref={setNodeRef} style={style}>
+      <TableCell>
+        <div className="flex items-center gap-1.5">
+          {isAdmin ? (
+            <button {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground" title="Arrastar para reordenar">
+              <GripVertical className="h-4 w-4" />
+            </button>
+          ) : null}
+          <span className="text-sm tabular-nums">{index + 1}</span>
+        </div>
+      </TableCell>
+      <TableCell>
+        {isAdmin ? (
+          <input
+            type="color"
+            value={stage.color}
+            onChange={e => onUpdate({ color: e.target.value })}
+            className="h-6 w-6 rounded-full border border-border bg-transparent cursor-pointer p-0"
+            title="Alterar cor"
+          />
+        ) : (
+          <div className="h-4 w-4 rounded-full" style={{ backgroundColor: stage.color }} />
+        )}
+      </TableCell>
+      <TableCell className="font-medium text-foreground">
+        {isAdmin ? (
+          <Input
+            defaultValue={stage.name}
+            className="h-8 rounded-lg text-sm"
+            onBlur={e => {
+              const v = e.target.value.trim();
+              if (!v) { e.target.value = stage.name; return; }
+              if (v !== stage.name) onUpdate({ name: v });
+            }}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          />
+        ) : stage.name}
+      </TableCell>
+      {children}
+      <TableCell>{isAdmin && !stage.is_won && !stage.is_lost && <Button variant="ghost" size="icon" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+    </TableRow>
+  );
+}
+
 export default function SettingsPage() {
   const { tenant, role } = useAuth();
   const [tenantName, setTenantName] = useState(tenant?.name ?? '');
@@ -403,6 +461,29 @@ export default function SettingsPage() {
     setNewStageName(''); toast.success('Etapa adicionada'); loadAll();
   };
   const deleteStage = async (id: string) => { await supabase.from('stages').delete().eq('id', id); toast.success('Etapa removida'); loadAll(); };
+
+  const updateStageField = async (id: string, patch: Partial<Pick<StageRow, 'name' | 'color'>>) => {
+    const { error } = await supabase.from('stages').update(patch).eq('id', id);
+    if (error) { toast.error('Erro ao salvar: ' + error.message); loadAll(); return; }
+    setStages(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
+  };
+
+  const reorderSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleStagesDragEnd = async (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIdx = stages.findIndex(s => s.id === active.id);
+    const newIdx = stages.findIndex(s => s.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const reordered = arrayMove(stages, oldIdx, newIdx);
+    setStages(reordered);
+    const updates = reordered
+      .map((s, i) => ({ s, i }))
+      .filter(({ s, i }) => s.position !== i)
+      .map(({ s, i }) => supabase.from('stages').update({ position: i }).eq('id', s.id));
+    const results = await Promise.all(updates);
+    if (results.some(r => r.error)) { toast.error('Erro ao reordenar etapas'); loadAll(); }
+  };
 
   const saveAiConfig = async () => {
     if (!tenant) return;
@@ -619,59 +700,66 @@ export default function SettingsPage() {
           <Card className="glass-card rounded-2xl">
             <CardHeader><CardTitle>Etapas do Pipeline Padrão</CardTitle><CardDescription>Gerencie as etapas do funil principal</CardDescription></CardHeader>
             <CardContent className="space-y-4">
-              <Table>
-                <TableHeader><TableRow className="hover:bg-transparent">
-                  <TableHead>Pos.</TableHead><TableHead>Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (HH:MM)</TableHead><TableHead></TableHead>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {stages.map((s, i) => {
-                    const totalMin = s.inactivity_minutes ?? 0;
-                    const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
-                    const mm = String(totalMin % 60).padStart(2, '0');
-                    return (
-                      <TableRow key={s.id}>
-                        <TableCell>{i + 1}</TableCell>
-                        <TableCell><div className="h-4 w-4 rounded-full" style={{ backgroundColor: s.color }} /></TableCell>
-                        <TableCell className="font-medium text-foreground">{s.name}</TableCell>
-                        <TableCell>
-                          {s.is_won && <Badge className="rounded-full">Ganho</Badge>}
-                          {s.is_lost && <Badge variant="destructive" className="rounded-full">Perdido</Badge>}
-                          {!s.is_won && !s.is_lost && <Badge variant="secondary" className="rounded-full">Normal</Badge>}
-                        </TableCell>
-                        <TableCell>
-                          {isAdmin && !s.is_won && !s.is_lost ? (
-                            <Input
-                              type="text"
-                              className="w-24 rounded-xl font-mono text-center"
-                              placeholder="00:00"
-                              defaultValue={totalMin > 0 ? `${hh}:${mm}` : ''}
-                              onBlur={async (e) => {
-                                const raw = e.target.value.trim();
-                                if (!raw || raw === '00:00') {
-                                  const { error } = await supabase.from('stages').update({ inactivity_minutes: null } as any).eq('id', s.id);
-                                  if (error) toast.error(error.message);
-                                  else toast.success('Inatividade desativada');
-                                  return;
-                                }
-                                const match = raw.match(/^(\d{1,3}):(\d{2})$/);
-                                if (!match) { toast.error('Formato inválido. Use HH:MM (ex: 01:30)'); return; }
-                                const minutes = parseInt(match[1]) * 60 + parseInt(match[2]);
-                                if (minutes <= 0) { toast.error('Valor deve ser maior que 00:00'); return; }
-                                const { error } = await supabase.from('stages').update({ inactivity_minutes: minutes } as any).eq('id', s.id);
-                                if (error) toast.error(error.message);
-                                else toast.success('Inatividade atualizada');
-                              }}
-                            />
-                          ) : (
-                            <span className="text-muted-foreground text-sm">{totalMin > 0 ? `${hh}:${mm}` : '—'}</span>
-                          )}
-                        </TableCell>
-                        <TableCell>{isAdmin && !s.is_won && !s.is_lost && <Button variant="ghost" size="icon" onClick={() => deleteStage(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <DndContext sensors={reorderSensors} collisionDetection={closestCenter} onDragEnd={handleStagesDragEnd}>
+                <Table>
+                  <TableHeader><TableRow className="hover:bg-transparent">
+                    <TableHead className="w-20">Pos.</TableHead><TableHead className="w-12">Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (HH:MM)</TableHead><TableHead className="w-10"></TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    <SortableContext items={stages.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                      {stages.map((s, i) => {
+                        const totalMin = s.inactivity_minutes ?? 0;
+                        const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+                        const mm = String(totalMin % 60).padStart(2, '0');
+                        return (
+                          <SortableStageRow
+                            key={s.id}
+                            stage={s}
+                            index={i}
+                            isAdmin={isAdmin}
+                            onUpdate={(patch) => updateStageField(s.id, patch)}
+                            onDelete={() => deleteStage(s.id)}
+                          >
+                            <TableCell>
+                              {s.is_won && <Badge className="rounded-full">Ganho</Badge>}
+                              {s.is_lost && <Badge variant="destructive" className="rounded-full">Perdido</Badge>}
+                              {!s.is_won && !s.is_lost && <Badge variant="secondary" className="rounded-full">Normal</Badge>}
+                            </TableCell>
+                            <TableCell>
+                              {isAdmin && !s.is_won && !s.is_lost ? (
+                                <Input
+                                  type="text"
+                                  className="w-24 rounded-xl font-mono text-center"
+                                  placeholder="00:00"
+                                  defaultValue={totalMin > 0 ? `${hh}:${mm}` : ''}
+                                  onBlur={async (e) => {
+                                    const raw = e.target.value.trim();
+                                    if (!raw || raw === '00:00') {
+                                      const { error } = await supabase.from('stages').update({ inactivity_minutes: null } as any).eq('id', s.id);
+                                      if (error) toast.error(error.message);
+                                      else toast.success('Inatividade desativada');
+                                      return;
+                                    }
+                                    const match = raw.match(/^(\d{1,3}):(\d{2})$/);
+                                    if (!match) { toast.error('Formato inválido. Use HH:MM (ex: 01:30)'); return; }
+                                    const minutes = parseInt(match[1]) * 60 + parseInt(match[2]);
+                                    if (minutes <= 0) { toast.error('Valor deve ser maior que 00:00'); return; }
+                                    const { error } = await supabase.from('stages').update({ inactivity_minutes: minutes } as any).eq('id', s.id);
+                                    if (error) toast.error(error.message);
+                                    else toast.success('Inatividade atualizada');
+                                  }}
+                                />
+                              ) : (
+                                <span className="text-muted-foreground text-sm">{totalMin > 0 ? `${hh}:${mm}` : '—'}</span>
+                              )}
+                            </TableCell>
+                          </SortableStageRow>
+                        );
+                      })}
+                    </SortableContext>
+                  </TableBody>
+                </Table>
+              </DndContext>
               <p className="text-xs text-muted-foreground">💡 Defina o tempo de inatividade por etapa no formato HH:MM para criar lembretes automáticos de follow-up. Ex: 01:30 = 1h30min. Vazio ou 00:00 = desativado.</p>
               {isAdmin && (
                 <div className="flex gap-2 items-end">
