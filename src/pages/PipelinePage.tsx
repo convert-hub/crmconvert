@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban, CheckSquare, MessageSquare, Target } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban, CheckSquare, MessageSquare, Target, Search } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
@@ -338,6 +338,7 @@ export default function PipelinePage() {
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
   const [creatingPipeline, setCreatingPipeline] = useState(false);
   const [deleteOppId, setDeleteOppId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -359,6 +360,10 @@ export default function PipelinePage() {
 
   // Apply filters
   const filteredOpportunities = useMemo(() => {
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+    const termRaw = search.trim();
+    const term = norm(termRaw);
+    const termDigits = termRaw.replace(/\D/g, '');
     return opportunities.filter(o => {
       if (filters.assignee === 'unassigned' && o.assigned_to) return false;
       if (filters.assignee !== 'all' && filters.assignee !== 'unassigned' && o.assigned_to !== filters.assignee) return false;
@@ -366,9 +371,17 @@ export default function PipelinePage() {
       if (filters.tag && (!o.contact?.tags || !o.contact.tags.includes(filters.tag))) return false;
       if (filters.valueMin && Number(o.value || 0) < Number(filters.valueMin)) return false;
       if (filters.valueMax && Number(o.value || 0) > Number(filters.valueMax)) return false;
+      if (term) {
+        const title = norm(o.title || '');
+        const name = norm(o.contact?.name || '');
+        const phoneDigits = (o.contact?.phone || '').replace(/\D/g, '');
+        const matchText = title.includes(term) || name.includes(term);
+        const matchPhone = termDigits.length > 0 && phoneDigits.includes(termDigits);
+        if (!matchText && !matchPhone) return false;
+      }
       return true;
     });
-  }, [opportunities, filters]);
+  }, [opportunities, filters, search]);
 
   const resetUnreadForContact = useCallback(async (contactId: string | null) => {
     if (!tenant || !contactId) return;
@@ -815,7 +828,7 @@ export default function PipelinePage() {
   const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
   const canDeleteOpportunity = role !== 'readonly' && role !== null;
 
-  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
+  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '' || search.trim() !== '';
 
   // Empty state: no pipeline exists
   if (pipelines.length === 0 && !selectedPipeline) {
@@ -852,6 +865,10 @@ export default function PipelinePage() {
               </SelectContent>
             </Select>
           )}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input className="pl-9 w-64 h-9 text-[13px] rounded-xl" placeholder="Buscar por nome, telefone ou título..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
           <FilterBar filters={filters} onChange={setFilters} members={members} allTags={allTags} />
         </div>
         <div className="text-sm text-muted-foreground">
