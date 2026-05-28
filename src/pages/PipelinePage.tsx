@@ -360,6 +360,10 @@ export default function PipelinePage() {
 
   // Apply filters
   const filteredOpportunities = useMemo(() => {
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+    const termRaw = search.trim();
+    const term = norm(termRaw);
+    const termDigits = termRaw.replace(/\D/g, '');
     return opportunities.filter(o => {
       if (filters.assignee === 'unassigned' && o.assigned_to) return false;
       if (filters.assignee !== 'all' && filters.assignee !== 'unassigned' && o.assigned_to !== filters.assignee) return false;
@@ -367,9 +371,17 @@ export default function PipelinePage() {
       if (filters.tag && (!o.contact?.tags || !o.contact.tags.includes(filters.tag))) return false;
       if (filters.valueMin && Number(o.value || 0) < Number(filters.valueMin)) return false;
       if (filters.valueMax && Number(o.value || 0) > Number(filters.valueMax)) return false;
+      if (term) {
+        const title = norm(o.title || '');
+        const name = norm(o.contact?.name || '');
+        const phoneDigits = (o.contact?.phone || '').replace(/\D/g, '');
+        const matchText = title.includes(term) || name.includes(term);
+        const matchPhone = termDigits.length > 0 && phoneDigits.includes(termDigits);
+        if (!matchText && !matchPhone) return false;
+      }
       return true;
     });
-  }, [opportunities, filters]);
+  }, [opportunities, filters, search]);
 
   const resetUnreadForContact = useCallback(async (contactId: string | null) => {
     if (!tenant || !contactId) return;
