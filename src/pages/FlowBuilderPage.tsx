@@ -537,6 +537,14 @@ export default function FlowBuilderPage() {
             <Label className="text-xs text-muted-foreground">Ativo</Label>
             <Switch checked={flowActive} onCheckedChange={setFlowActive} />
           </div>
+          <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setSimulatorOpen(true)}>
+            <PlayCircle className="h-3.5 w-3.5 mr-1.5" />Simular
+          </Button>
+          {selectedFlow && (
+            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setShareOpen(true)}>
+              <Share2 className="h-3.5 w-3.5 mr-1.5" />Compartilhar
+            </Button>
+          )}
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleFullscreen} aria-label="Tela cheia">
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
@@ -906,7 +914,12 @@ export default function FlowBuilderPage() {
                 />
               )}
 
-
+              {editingNode.type === 'aiassistant' && (
+                <AIAssistantNodeEditor
+                  data={editingNode.data as any}
+                  onChange={(d) => setEditingNode({ ...editingNode, data: d as any })}
+                />
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" size="sm" onClick={() => setNodeEditOpen(false)}>Cancelar</Button>
@@ -916,6 +929,29 @@ export default function FlowBuilderPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      <FlowSimulator
+        open={simulatorOpen}
+        onOpenChange={setSimulatorOpen}
+        nodes={nodes}
+        edges={edges}
+        triggerType={triggerType}
+      />
+
+      {selectedFlow && tenant && (
+        <ShareFlowDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          tenantId={tenant.id}
+          flowId={selectedFlow.id}
+          flowName={flowName}
+          flowDescription={flowDescription}
+          triggerType={triggerType}
+          triggerConfig={triggerConfig}
+          nodes={nodes}
+          edges={edges}
+        />
+      )}
 
     </div>
   );
