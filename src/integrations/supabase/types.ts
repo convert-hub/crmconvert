@@ -935,6 +935,7 @@ export type Database = {
           flow_id: string
           id: string
           pending_custom_field_key: string | null
+          pending_menu: Json | null
           pending_queue: Json | null
           pending_save_field: string | null
           started_at: string
@@ -951,6 +952,7 @@ export type Database = {
           flow_id: string
           id?: string
           pending_custom_field_key?: string | null
+          pending_menu?: Json | null
           pending_queue?: Json | null
           pending_save_field?: string | null
           started_at?: string
@@ -967,6 +969,7 @@ export type Database = {
           flow_id?: string
           id?: string
           pending_custom_field_key?: string | null
+          pending_menu?: Json | null
           pending_queue?: Json | null
           pending_save_field?: string | null
           started_at?: string
