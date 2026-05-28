@@ -375,7 +375,18 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             providerInfo: providerInfo ?? undefined,
           });
           if (!res.ok) {
-            toast.warning('Falha ao enviar via WhatsApp: ' + (res.error ?? 'erro desconhecido'));
+            // Remove a mensagem persistida e otimista — não foi entregue
+            if (savedMsg?.id) await supabase.from('messages').delete().eq('id', savedMsg.id);
+            setMessages(prev => prev.filter(m => m.id !== optimisticId && m.id !== savedMsg?.id));
+            setNewMsg(msgContent);
+            if (res.code === 'outside_24h_window') {
+              toast.error(res.error ?? 'Cliente fora da janela de 24h.', {
+                duration: 8000,
+                action: { label: 'Enviar template', onClick: () => setShowTemplate(true) },
+              });
+            } else {
+              toast.error(res.error ?? 'Falha ao enviar via WhatsApp');
+            }
           } else if (savedMsg?.id && res.provider_message_id) {
             await supabase.from('messages').update({ provider_message_id: res.provider_message_id }).eq('id', savedMsg.id);
           }
