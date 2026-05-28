@@ -526,6 +526,7 @@ export type Database = {
           created_by: string | null
           description: string | null
           edges: Json
+          folder_id: string | null
           id: string
           is_active: boolean
           name: string
@@ -541,6 +542,7 @@ export type Database = {
           created_by?: string | null
           description?: string | null
           edges?: Json
+          folder_id?: string | null
           id?: string
           is_active?: boolean
           name: string
@@ -556,6 +558,7 @@ export type Database = {
           created_by?: string | null
           description?: string | null
           edges?: Json
+          folder_id?: string | null
           id?: string
           is_active?: boolean
           name?: string
@@ -572,6 +575,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "tenant_memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chatbot_flows_folder_id_fkey"
+            columns: ["folder_id"]
+            isOneToOne: false
+            referencedRelation: "flow_folders"
             referencedColumns: ["id"]
           },
           {
@@ -987,6 +997,41 @@ export type Database = {
           },
           {
             foreignKeyName: "flow_executions_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      flow_folders: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          position: number
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          position?: number
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          position?: number
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flow_folders_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
