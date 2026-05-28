@@ -35,6 +35,7 @@ function generateVerifyToken(): string {
 export default function MetaCloudConnectionsCard() {
   const { tenant, role } = useAuth();
   const [instances, setInstances] = useState<MetaInstance[]>([]);
+  const [lastEvents, setLastEvents] = useState<Record<string, { last_at: string | null; count_24h: number }>>({});
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -99,7 +100,32 @@ export default function MetaCloudConnectionsCard() {
       .eq('provider', 'meta_cloud')
       .order('created_at', { ascending: false });
     if (error) toast.error(error.message);
-    setInstances((data ?? []) as MetaInstance[]);
+    const list = (data ?? []) as MetaInstance[];
+    setInstances(list);
+
+    // Diagnóstico: para cada instância, busca último webhook_event e contagem 24h
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const diag: Record<string, { last_at: string | null; count_24h: number }> = {};
+    await Promise.all(list.map(async inst => {
+      if (!inst.meta_phone_number_id) {
+        diag[inst.id] = { last_at: null, count_24h: 0 };
+        return;
+      }
+      const filter = `raw_payload->entry->0->changes->0->value->metadata->>phone_number_id.eq.${inst.meta_phone_number_id}`;
+      const [{ data: last }, { count }] = await Promise.all([
+        supabase.from('webhook_events').select('created_at')
+          .eq('tenant_id', tenant.id).eq('source', 'meta_cloud')
+          .filter('raw_payload->entry->0->changes->0->value->metadata->>phone_number_id', 'eq', inst.meta_phone_number_id)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('webhook_events').select('id', { count: 'exact', head: true })
+          .eq('tenant_id', tenant.id).eq('source', 'meta_cloud')
+          .filter('raw_payload->entry->0->changes->0->value->metadata->>phone_number_id', 'eq', inst.meta_phone_number_id)
+          .gte('created_at', since),
+      ]);
+      void filter;
+      diag[inst.id] = { last_at: (last as any)?.created_at ?? null, count_24h: count ?? 0 };
+    }));
+    setLastEvents(diag);
     setLoading(false);
   }, [tenant?.id]);
 
