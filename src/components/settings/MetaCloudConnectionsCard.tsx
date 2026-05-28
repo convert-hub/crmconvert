@@ -371,6 +371,28 @@ export default function MetaCloudConnectionsCard() {
                   </Button>
                 </div>
                 <code className="block break-all font-mono text-[11px]">{inst.meta_verify_token}</code>
+                {(() => {
+                  const d = lastEvents[inst.id];
+                  if (!d) return null;
+                  const never = !d.last_at;
+                  return (
+                    <div className={`mt-2 rounded-md border p-2 flex items-start gap-2 ${never ? 'border-amber-500/40 bg-amber-500/5 text-amber-700' : 'border-border bg-muted/40 text-muted-foreground'}`}>
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        {never ? (
+                          <>
+                            <div className="font-medium">Nenhum webhook recebido</div>
+                            <div className="opacity-90">A Meta nunca enviou eventos para este número. Verifique no painel Meta Business → WhatsApp → Configuration → Webhook se a URL e o Verify Token acima estão cadastrados e o campo <code>messages</code> está inscrito.</div>
+                          </>
+                        ) : (
+                          <div>
+                            Último webhook: {new Date(d.last_at!).toLocaleString('pt-BR')} · {d.count_24h} evento(s) nas últimas 24h
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           );})
