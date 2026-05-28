@@ -754,7 +754,70 @@ const handlers = {
             contactPhone = c?.phone || null;
           }
 
-          if (mode === 'template' && isMetaConv && node.data?.templateId && contactPhone) {
+          const interpolate = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+          const sendInstanceId = convInstance?.id || flow.whatsapp_instance_id || null;
+
+          if (mode === 'items' && Array.isArray(node.data?.items)) {
+            // Multi-item content: process in order
+            for (const item of node.data.items) {
+              if (!item || !item.kind) continue;
+              if (item.kind === 'text') {
+                const content = interpolate(item.content || '');
+                if (content && ctx.conversation_id) {
+                  await supabase.from('messages').insert({
+                    tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                    content, is_ai_generated: false,
+                  });
+                  if (contactPhone) {
+                    await supabase.rpc('enqueue_job', {
+                      _type: 'send_whatsapp',
+                      _payload: JSON.stringify({
+                        tenant_id, phone: contactPhone, message: content,
+                        conversation_id: ctx.conversation_id,
+                        whatsapp_instance_id: sendInstanceId,
+                      }),
+                      _tenant_id: tenant_id,
+                    });
+                  }
+                }
+              } else if (item.kind === 'image' || item.kind === 'video' || item.kind === 'audio' || item.kind === 'file') {
+                const mediaUrl = interpolate(item.url || '');
+                const caption = interpolate(item.caption || '');
+                if (mediaUrl && contactPhone) {
+                  // Persist message stub
+                  if (ctx.conversation_id) {
+                    await supabase.from('messages').insert({
+                      tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                      content: caption || null, media_url: mediaUrl, media_type: item.kind,
+                      is_ai_generated: false,
+                    });
+                  }
+                  await supabase.rpc('enqueue_job', {
+                    _type: 'send_whatsapp_media',
+                    _payload: JSON.stringify({
+                      tenant_id, phone: contactPhone,
+                      media_kind: item.kind, media_url: mediaUrl,
+                      caption: caption || null, filename: item.filename || null,
+                      conversation_id: ctx.conversation_id,
+                      whatsapp_instance_id: sendInstanceId,
+                    }),
+                    _tenant_id: tenant_id,
+                  });
+                }
+              } else if (item.kind === 'delay') {
+                const secs = Math.max(1, Math.min(60, Number(item.seconds) || 5));
+                await new Promise(r => setTimeout(r, secs * 1000));
+              } else if (item.kind === 'autooff') {
+                if (ctx.conversation_id) {
+                  const { data: conv } = await supabase.from('conversations')
+                    .select('metadata').eq('id', ctx.conversation_id).maybeSingle();
+                  const metadata = { ...(conv?.metadata || {}), ai_activated: false, ai_deactivated_at: new Date().toISOString(), ai_deactivated_reason: 'flow_autooff' };
+                  await supabase.from('conversations').update({ metadata }).eq('id', ctx.conversation_id);
+                  console.log(`[Worker] Flow ${flow_id}: autooff aplicado em conv ${ctx.conversation_id}`);
+                }
+              }
+            }
+          } else if (mode === 'template' && isMetaConv && node.data?.templateId && contactPhone) {
             // Send Meta template via dedicated handler
             await supabase.rpc('enqueue_job', {
               _type: 'send_whatsapp_template',
@@ -772,13 +835,7 @@ const handlers = {
             console.log(`[Worker] Flow ${flow_id}: enqueued Meta template "${node.data.templateName || node.data.templateId}"`);
           } else {
             // Text mode (or template fallback for UAZAPI / sem instância Meta)
-            const rawText = mode === 'template' ? (node.data?.content || '') : (node.data?.content || '');
-            const content = rawText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => {
-              if (key === 'contact.name' || key === 'contact.phone' || key === 'contact.email') {
-                return ctx.variables[key] || '';
-              }
-              return ctx.variables[key] || '';
-            });
+            const content = interpolate(node.data?.content || '');
             if (content && ctx.conversation_id) {
               await supabase.from('messages').insert({
                 tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
@@ -790,7 +847,7 @@ const handlers = {
                   _payload: JSON.stringify({
                     tenant_id, phone: contactPhone, message: content,
                     conversation_id: ctx.conversation_id,
-                    whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                    whatsapp_instance_id: sendInstanceId,
                   }),
                   _tenant_id: tenant_id,
                 });
