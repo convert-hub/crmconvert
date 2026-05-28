@@ -251,6 +251,61 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   );
 }
 
+function SortableStageRow({ stage, index, isAdmin, onUpdate, onDelete, children }: {
+  stage: StageRow;
+  index: number;
+  isAdmin: boolean;
+  onUpdate: (patch: Partial<Pick<StageRow, 'name' | 'color'>>) => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: stage.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
+  return (
+    <TableRow ref={setNodeRef} style={style}>
+      <TableCell>
+        <div className="flex items-center gap-1.5">
+          {isAdmin ? (
+            <button {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground" title="Arrastar para reordenar">
+              <GripVertical className="h-4 w-4" />
+            </button>
+          ) : null}
+          <span className="text-sm tabular-nums">{index + 1}</span>
+        </div>
+      </TableCell>
+      <TableCell>
+        {isAdmin ? (
+          <input
+            type="color"
+            value={stage.color}
+            onChange={e => onUpdate({ color: e.target.value })}
+            className="h-6 w-6 rounded-full border border-border bg-transparent cursor-pointer p-0"
+            title="Alterar cor"
+          />
+        ) : (
+          <div className="h-4 w-4 rounded-full" style={{ backgroundColor: stage.color }} />
+        )}
+      </TableCell>
+      <TableCell className="font-medium text-foreground">
+        {isAdmin ? (
+          <Input
+            defaultValue={stage.name}
+            className="h-8 rounded-lg text-sm"
+            onBlur={e => {
+              const v = e.target.value.trim();
+              if (!v) { e.target.value = stage.name; return; }
+              if (v !== stage.name) onUpdate({ name: v });
+            }}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          />
+        ) : stage.name}
+      </TableCell>
+      {children}
+      <TableCell>{isAdmin && !stage.is_won && !stage.is_lost && <Button variant="ghost" size="icon" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+    </TableRow>
+  );
+}
+
 export default function SettingsPage() {
   const { tenant, role } = useAuth();
   const [tenantName, setTenantName] = useState(tenant?.name ?? '');
