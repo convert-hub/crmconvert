@@ -214,7 +214,11 @@ export default function InboxPage() {
                   )}
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-xs text-muted-foreground">{channelLabels[conv.channel] ?? conv.channel}</span>
-                    {conv.last_message_at && <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(conv.last_message_at), { locale: ptBR, addSuffix: true })}</span>}
+                    {(conv.last_customer_message_at || conv.last_message_at) && (
+                      <span className="text-[10px] text-muted-foreground" title={conv.last_customer_message_at ? 'Última msg do contato' : 'Última atividade'}>
+                        {conv.last_customer_message_at ? '↩ ' : ''}{formatDistanceToNow(new Date(conv.last_customer_message_at || conv.last_message_at!), { locale: ptBR, addSuffix: true })}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 mt-1.5">
                     <Badge variant="outline" className={`text-[10px] rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
