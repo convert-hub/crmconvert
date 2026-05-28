@@ -1,25 +1,27 @@
 ## Objetivo
-Inserir um campo de busca no cabeçalho da página de Pipelines que filtre os cards por nome do contato, título da oportunidade e telefone do contato.
+Permitir, na aba "Pipeline" das Configurações: editar nome/cor das etapas, reordenar via drag-and-drop e (já existe) criar novas. Sem quebrar fluxos atuais (kanban, automações de inatividade, regras dependentes de `is_won`/`is_lost`).
 
-## Mudanças
+## Mudanças (apenas `src/pages/SettingsPage.tsx`)
 
-Arquivo único: `src/pages/PipelinePage.tsx`
+1. **Edição inline**
+   - Nome: célula vira `Input` (onBlur salva via `update({ name })`).
+   - Cor: o atual swatch vira um `<input type="color">` que dispara `update({ color })` no `onChange`.
+   - Disponível somente para `isAdmin`. Etapas `is_won`/`is_lost` continuam editáveis em nome/cor (não no tipo).
 
-1. **Estado novo**: `const [search, setSearch] = useState('')` ao lado dos outros estados (~linha 336).
+2. **Reordenação por drag-and-drop**
+   - Reaproveitar `@dnd-kit/core` + `@dnd-kit/sortable` (já no projeto, usado em `PipelinePage`).
+   - Coluna "Pos." vira handle com `GripVertical`.
+   - Ao soltar: aplicar `arrayMove`, atualizar estado local imediatamente (otimista) e persistir em lote chamando `supabase.from('stages').update({ position: i }).eq('id', s.id)` para cada etapa cuja posição mudou (Promise.all). Em caso de erro, recarregar via `loadAll()`.
 
-2. **Filtro client-side**: estender o `useMemo` `filteredOpportunities` (linha 361) para também aplicar o termo de busca normalizado (lowercase, sem acentos, trim) contra:
-   - `o.title`
-   - `o.contact?.name`
-   - `o.contact?.phone` (comparar apenas dígitos, para casar com qualquer formatação digitada)
-
-3. **UI no header** (linha 844): adicionar um `Input` com ícone `Search` (lucide) antes do `FilterBar`, estilo consistente com o usado em `ContactsPage` (`pl-9 w-56 h-9 text-[13px]`, placeholder "Buscar por nome ou telefone..."). Sem labels extras — densidade alta conforme padrão do projeto.
+3. **Sem mudanças** em: criação (já funciona), exclusão, campo de inatividade, schema do banco, RLS, types, ou no consumo do kanban (que já faz `.order('position')`).
 
 ## Detalhes técnicos
-- Busca puramente client-side sobre `opportunities` já carregadas; sem alterar queries Supabase nem realtime.
-- Normalização reaproveita o padrão já em uso no projeto (lowercase + remove acentos via `normalize('NFD').replace(/\p{Diacritic}/gu,'')`).
-- Para telefone, comparar `phone.replace(/\D/g,'').includes(term.replace(/\D/g,''))` quando o termo contiver dígitos.
-- Nenhuma alteração em backend, RLS, tipos ou outros componentes.
+- `stages` continua ordenado por `position` ao carregar.
+- A reordenação não altera `is_won`/`is_lost` nem `inactivity_minutes`.
+- Otimização: só envia update para etapas cujo índice mudou.
+- O kanban (`PipelinePage`) lê stages com `.order('position')`, portanto refletirá a nova ordem automaticamente.
 
-## Impacto
-- Risco zero para fluxos existentes (drag-and-drop, criação, exclusão, chat) — filtro apenas reduz array exibido.
-- Não afeta contadores de stage? Atualmente `count` e `total` por coluna usam `filteredOpportunities`; com a busca aplicada, contadores refletirão o resultado filtrado, que é o comportamento esperado.
+## Riscos / Mitigações
+- **Concorrência**: dois admins reordenando simultaneamente — risco baixo; `loadAll()` no erro/sucesso reconcilia.
+- **Validação de nome vazio**: bloquear `update` se trimmed vazio (mantém valor anterior).
+- **Sem impacto** em automações: elas referenciam `stage_id`, não posição.
