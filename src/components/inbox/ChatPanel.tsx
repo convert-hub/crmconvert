@@ -473,7 +473,16 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       });
 
       if (!res.ok) {
-        toast.warning('Falha ao enviar mídia: ' + (res.error ?? 'erro desconhecido'));
+        if (savedMsg?.id) await supabase.from('messages').delete().eq('id', savedMsg.id);
+        setMessages(prev => prev.filter(m => m.id !== savedMsg?.id));
+        if (res.code === 'outside_24h_window') {
+          toast.error(res.error ?? 'Cliente fora da janela de 24h.', {
+            duration: 8000,
+            action: { label: 'Enviar template', onClick: () => setShowTemplate(true) },
+          });
+        } else {
+          toast.error(res.error ?? 'Falha ao enviar mídia');
+        }
       } else if (savedMsg?.id) {
         const update: { provider_message_id?: string; provider_metadata?: any } = {};
         if (res.provider_message_id) update.provider_message_id = res.provider_message_id;
