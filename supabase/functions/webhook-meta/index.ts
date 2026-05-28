@@ -305,8 +305,20 @@ async function handleInboundMessage(
     }
   }
 
-  // 5) Insert inbound message
-  await supabase.from("messages").insert({
+  // 5) Insert inbound message (idempotente por provider_message_id)
+  const { data: existingMsg } = await supabase
+    .from("messages")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("provider_message_id", providerMessageId)
+    .maybeSingle();
+
+  if (existingMsg) {
+    console.log("[webhook-meta] duplicate_inbound_ignored", { provider_message_id: providerMessageId });
+    return;
+  }
+
+  const { error: insMsgErr } = await supabase.from("messages").insert({
     tenant_id: tenantId,
     conversation_id: conversation.id,
     direction: "inbound",
@@ -317,9 +329,13 @@ async function handleInboundMessage(
     provider_metadata: { provider: "meta_cloud", raw: msg, meta_media_id: mediaId },
     created_at: timestamp,
   });
+  if (insMsgErr) {
+    console.error("[webhook-meta] insert_message_failed", { provider_message_id: providerMessageId, error: insMsgErr.message });
+    return;
+  }
 
   // 6) Update conversation timestamps
-  await supabase
+  const { error: convUpdErr } = await supabase
     .from("conversations")
     .update({
       last_message_at: timestamp,
@@ -328,6 +344,9 @@ async function handleInboundMessage(
       unread_count: (await getUnread(supabase, conversation.id)) + 1,
     })
     .eq("id", conversation.id);
+  if (convUpdErr) {
+    console.error("[webhook-meta] update_conversation_failed", { conversation_id: conversation.id, error: convUpdErr.message });
+  }
 }
 
 async function getUnread(supabase: any, conversationId: string): Promise<number> {
