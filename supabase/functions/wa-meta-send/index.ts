@@ -335,6 +335,24 @@ serve(async (req) => {
       if (!body.media_base64 || !body.type || !body.media_mime) {
         return jsonResponse({ error: "media_base64, type, media_mime required" }, 400);
       }
+      // Meta Cloud API só aceita um conjunto restrito de MIME por tipo.
+      // Áudio: audio/aac, audio/mp4, audio/mpeg, audio/amr, audio/ogg (Opus em container ogg).
+      // Bloqueamos audio/webm (formato nativo do MediaRecorder em browsers) que a Meta rejeita
+      // silenciosamente — assim devolvemos erro claro ao caller em vez de falhar no Graph.
+      if (body.type === "audio") {
+        const allowedAudio = ["audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg"];
+        const mimeBase = String(body.media_mime).split(";")[0].trim().toLowerCase();
+        if (!allowedAudio.includes(mimeBase)) {
+          console.warn("[wa-meta-send] audio mime rejeitado", { received: body.media_mime, allowed: allowedAudio });
+          return jsonResponse({
+            ok: false,
+            code: "audio_mime_unsupported",
+            error: `Formato de áudio "${body.media_mime}" não é aceito pela WhatsApp Cloud API. Use audio/ogg (Opus), audio/aac, audio/mp4, audio/mpeg ou audio/amr.`,
+            received_mime: body.media_mime,
+            allowed: allowedAudio,
+          });
+        }
+      }
       // decode base64 → blob
       const binStr = atob(body.media_base64);
       const buf = new Uint8Array(binStr.length);
