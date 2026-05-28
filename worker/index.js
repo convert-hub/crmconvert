@@ -1076,6 +1076,123 @@ const handlers = {
                   }
                 }
                 break;
+              case 'webhook': {
+                const interp = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, k) => ctx.variables[k] || '');
+                const url = interp(config.url || '');
+                if (!url) break;
+                const method = (config.method || 'POST').toUpperCase();
+                let headers = { 'Content-Type': 'application/json' };
+                try { if (config.headers) headers = { ...headers, ...JSON.parse(config.headers) }; } catch {}
+                let body;
+                if (method !== 'GET' && method !== 'DELETE') {
+                  const raw = interp(config.body || '');
+                  body = raw || JSON.stringify({ contact_id: ctx.contact_id, conversation_id: ctx.conversation_id, variables: ctx.variables });
+                }
+                try {
+                  const resp = await fetch(url, { method, headers, body });
+                  const text = await resp.text();
+                  console.log(`[Worker] Flow ${flow_id}: webhook ${method} ${url} → ${resp.status}`);
+                  if (config.save_to) {
+                    let parsed = text;
+                    try { parsed = JSON.parse(text); } catch {}
+                    ctx.variables[config.save_to] = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+                  }
+                } catch (err) {
+                  console.error(`[Worker] Flow ${flow_id}: webhook error:`, err.message);
+                }
+                break;
+              }
+              case 'google_sheets_append': {
+                const interp = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, k) => ctx.variables[k] || '');
+                const lovableKey = process.env.LOVABLE_API_KEY;
+                const sheetsKey = process.env.GOOGLE_SHEETS_API_KEY;
+                if (!lovableKey || !sheetsKey) {
+                  console.error(`[Worker] Flow ${flow_id}: google_sheets_append — credenciais ausentes (LOVABLE_API_KEY/GOOGLE_SHEETS_API_KEY)`);
+                  break;
+                }
+                const spreadsheetId = config.spreadsheet_id;
+                const range = config.range || 'Sheet1!A:Z';
+                if (!spreadsheetId) break;
+                const values = [(config.values || []).map((v) => interp(v))];
+                const url = `https://connector-gateway.lovable.dev/google_sheets/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED`;
+                try {
+                  const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${lovableKey}`,
+                      'X-Connection-Api-Key': sheetsKey,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ values }),
+                  });
+                  if (!resp.ok) {
+                    const t = await resp.text();
+                    console.error(`[Worker] Flow ${flow_id}: sheets append ${resp.status}: ${t}`);
+                  } else {
+                    console.log(`[Worker] Flow ${flow_id}: sheets append ok (${values[0].length} cols)`);
+                  }
+                } catch (err) {
+                  console.error(`[Worker] Flow ${flow_id}: sheets error:`, err.message);
+                }
+                break;
+              }
+              case 'ai_assistant': {
+                const interp = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, k) => ctx.variables[k] || '');
+                const lovableKey = process.env.LOVABLE_API_KEY;
+                if (!lovableKey) {
+                  console.error(`[Worker] Flow ${flow_id}: ai_assistant — LOVABLE_API_KEY ausente`);
+                  break;
+                }
+                const model = config.model || 'google/gemini-3-flash-preview';
+                const messages = [];
+                if (config.system) messages.push({ role: 'system', content: interp(config.system) });
+                messages.push({ role: 'user', content: interp(config.prompt || '') });
+                try {
+                  const resp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${lovableKey}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ model, messages }),
+                  });
+                  const data = await resp.json();
+                  if (!resp.ok) {
+                    console.error(`[Worker] Flow ${flow_id}: ai_assistant ${resp.status}:`, JSON.stringify(data));
+                    break;
+                  }
+                  const out = data?.choices?.[0]?.message?.content || '';
+                  if (!out) break;
+                  if (config.output === 'save_variable' && config.save_to) {
+                    ctx.variables[config.save_to] = out;
+                  } else {
+                    // send via WhatsApp
+                    if (ctx.contact_id && ctx.conversation_id) {
+                      const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+                      if (c?.phone) {
+                        const { data: conv } = await supabase.from('conversations')
+                          .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+                        await supabase.from('messages').insert({
+                          tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                          content: out, is_ai_generated: true,
+                        });
+                        await supabase.rpc('enqueue_job', {
+                          _type: 'send_whatsapp',
+                          _payload: JSON.stringify({
+                            tenant_id, phone: c.phone, message: out,
+                            conversation_id: ctx.conversation_id,
+                            whatsapp_instance_id: conv?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                          }),
+                          _tenant_id: tenant_id,
+                        });
+                      }
+                    }
+                  }
+                } catch (err) {
+                  console.error(`[Worker] Flow ${flow_id}: ai_assistant error:`, err.message);
+                }
+                break;
+              }
             }
           };
 
