@@ -338,6 +338,7 @@ export default function PipelinePage() {
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
   const [creatingPipeline, setCreatingPipeline] = useState(false);
   const [deleteOppId, setDeleteOppId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
