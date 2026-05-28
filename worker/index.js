@@ -1369,12 +1369,113 @@ const handlers = {
             console.log(`[Worker] Flow ${flow_id}: subflow ${mode} → ${targetFlowId}`);
           }
           if (mode === 'transfer') {
-            // Stop current flow
             queue = [];
           } else {
             const next = adjacency[nodeId] || [];
             next.forEach(n => queue.push(n));
           }
+        } else if (node.type === 'aiassistant') {
+          const data = node.data || {};
+          const interp = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, k) => ctx.variables[k] || '');
+          const lovableKey = process.env.LOVABLE_API_KEY;
+          let branch = 'success';
+
+          if (!lovableKey) {
+            console.error(`[Worker] Flow ${flow_id}: aiassistant — LOVABLE_API_KEY ausente`);
+          } else {
+            try {
+              // Optional RAG retrieval
+              let ragContext = '';
+              if (data.useRag && ctx.variables.message) {
+                try {
+                  const embResp = await fetch('https://ai.gateway.lovable.dev/v1/embeddings', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${lovableKey}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: 'google/gemini-embedding-001', input: ctx.variables.message }),
+                  });
+                  const embData = await embResp.json();
+                  const emb = embData?.data?.[0]?.embedding;
+                  if (emb) {
+                    const { data: chunks } = await supabase.rpc('search_knowledge', {
+                      _tenant_id: tenant_id,
+                      _query_embedding: emb,
+                      _match_count: 4,
+                      _match_threshold: 0.65,
+                      _category: data.ragCategory || null,
+                    });
+                    if (chunks && chunks.length) {
+                      ragContext = '\n\nContexto (base de conhecimento):\n' + chunks.map((c, i) => `[${i+1}] ${c.content}`).join('\n---\n');
+                    }
+                  }
+                } catch (ragErr) {
+                  console.warn(`[Worker] Flow ${flow_id}: aiassistant RAG falhou:`, ragErr.message);
+                }
+              }
+
+              const systemPrompt = interp(data.system || 'Você é um atendente atencioso.') + ragContext;
+              const userPrompt = interp(data.prompt || '{{message}}');
+              const model = data.model || 'google/gemini-3-flash-preview';
+
+              const resp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${lovableKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model,
+                  messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                  ],
+                }),
+              });
+              const json = await resp.json();
+              if (!resp.ok) {
+                console.error(`[Worker] Flow ${flow_id}: aiassistant ${resp.status}:`, JSON.stringify(json));
+              } else {
+                let out = json?.choices?.[0]?.message?.content || '';
+                const hasHandoff = /\[\[HANDOFF\]\]/i.test(out);
+                if (hasHandoff) {
+                  branch = 'handoff';
+                  out = out.replace(/\[\[HANDOFF\]\]/gi, '').trim();
+                  // Deactivate AI on conversation
+                  if (ctx.conversation_id) {
+                    const { data: conv } = await supabase.from('conversations')
+                      .select('metadata').eq('id', ctx.conversation_id).maybeSingle();
+                    const metadata = { ...(conv?.metadata || {}), ai_activated: false, ai_deactivated_at: new Date().toISOString(), ai_deactivated_reason: 'flow_aiassistant_handoff' };
+                    await supabase.from('conversations').update({ metadata, status: 'waiting_agent' }).eq('id', ctx.conversation_id);
+                  }
+                }
+
+                if (out && ctx.conversation_id) {
+                  const { data: conv } = await supabase.from('conversations')
+                    .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+                  await supabase.from('messages').insert({
+                    tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+                    content: out, is_ai_generated: true,
+                  });
+                  if (ctx.contact_id) {
+                    const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+                    if (c?.phone) {
+                      await supabase.rpc('enqueue_job', {
+                        _type: 'send_whatsapp',
+                        _payload: JSON.stringify({
+                          tenant_id, phone: c.phone, message: out,
+                          conversation_id: ctx.conversation_id,
+                          whatsapp_instance_id: conv?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                        }),
+                        _tenant_id: tenant_id,
+                      });
+                    }
+                  }
+                }
+                console.log(`[Worker] Flow ${flow_id}: aiassistant branch=${branch}`);
+              }
+            } catch (err) {
+              console.error(`[Worker] Flow ${flow_id}: aiassistant error:`, err.message);
+            }
+          }
+
+          const next = adjacency[`${nodeId}:${branch}`] || adjacency[nodeId] || [];
+          next.forEach(n => queue.push(n));
         }
 
       }
