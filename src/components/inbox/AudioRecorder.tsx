@@ -72,7 +72,8 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
       streamPages: false,
     });
     rec.ondataavailable = (typedArray: Uint8Array) => {
-      opusBlobRef.current = new Blob([typedArray], { type: 'audio/ogg' });
+      const ab = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
+      opusBlobRef.current = new Blob([ab], { type: 'audio/ogg' });
     };
     await rec.start();
     opusRecorderRef.current = rec;
