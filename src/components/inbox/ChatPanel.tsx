@@ -7,7 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock, FileCheck2 } from 'lucide-react';
+import { Send, Loader2, Check, CheckCheck, Image, Mic, Paperclip, Play, FileText, Download, Pencil, Lock, StickyNote, Zap, Sparkles, Clock, FileCheck2, Smile } from 'lucide-react';
+import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels } from '@/lib/labels';
 import { format } from 'date-fns';
@@ -264,6 +266,24 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+
+  const insertEmoji = (emoji: string) => {
+    const ta = textareaRef.current;
+    if (!ta) { setNewMsg(prev => prev + emoji); return; }
+    const start = ta.selectionStart ?? newMsg.length;
+    const end = ta.selectionEnd ?? newMsg.length;
+    const next = newMsg.slice(0, start) + emoji + newMsg.slice(end);
+    setNewMsg(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + emoji.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  };
+
+
 
   const statusColors: Record<string, string> = {
     open: 'bg-success/10 text-success border-success/20',
@@ -646,8 +666,26 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
               <FileCheck2 className="h-4 w-4" />
             </Button>
           )}
+          <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
+            <PopoverTrigger asChild>
+              <Button size="icon" variant="ghost" disabled={sending} className="rounded-xl h-10 w-10 shrink-0" title="Emojis">
+                <Smile className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" className="p-0 border-0 bg-transparent shadow-none w-auto">
+              <EmojiPicker
+                onEmojiClick={(e) => { insertEmoji(e.emoji); setEmojiOpen(false); }}
+                theme={Theme.AUTO}
+                emojiStyle={EmojiStyle.NATIVE}
+                lazyLoadEmojis
+                searchPlaceHolder="Buscar emoji..."
+                width={320}
+                height={400}
+              />
+            </PopoverContent>
+          </Popover>
           <div className="relative flex-1">
-            <Textarea value={newMsg} onChange={e => {
+            <Textarea ref={textareaRef} value={newMsg} onChange={e => {
               const val = e.target.value;
               setNewMsg(val);
               if (val.startsWith('/') && val.length > 1) {
