@@ -374,6 +374,7 @@ serve(async (req) => {
 
       // injeta media_id no body para reuso do fluxo de envio abaixo
       body.media_id = upData.id;
+      (body as any)._uploaded_media_id = upData.id;
       // segue para o fluxo "Send message" abaixo
     }
 
