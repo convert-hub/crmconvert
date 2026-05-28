@@ -126,6 +126,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
     let dataLoaded = false;
     let isLoadingData = false;
+    let currentUserId: string | null = null;
 
     const handleSession = async (event: string, sess: Session | null) => {
       if (!mounted) return;
@@ -133,9 +134,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(sess?.user ?? null);
 
       if (sess?.user) {
-        if ((!dataLoaded || event === 'SIGNED_IN') && !isLoadingData) {
+        const userChanged = currentUserId !== null && currentUserId !== sess.user.id;
+        const needsLoad = !dataLoaded || userChanged;
+        if (needsLoad && !isLoadingData) {
           dataLoaded = true;
           isLoadingData = true;
+          currentUserId = sess.user.id;
           setLoading(true);
           try {
             await loadUserData(sess.user.id);
@@ -146,10 +150,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (mounted) setLoading(false);
           }
         }
-        // Don't set loading=false here if data is still loading
+        // TOKEN_REFRESHED / repeat SIGNED_IN on tab focus: keep silent, do not flip loading.
       } else {
         dataLoaded = false;
         isLoadingData = false;
+        currentUserId = null;
         setProfile(null);
         setMembership(null);
         setAllMemberships([]);
@@ -174,6 +179,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         handleSession('INITIAL_SESSION', initialSession);
       }
     });
+
 
     return () => {
       mounted = false;
