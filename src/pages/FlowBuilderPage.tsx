@@ -114,7 +114,7 @@ export default function FlowBuilderPage() {
   const skipNextDirtyRef = useRef(true); // ignora o primeiro disparo após abrir/criar fluxo
 
 
-  // Load flows
+  // Load flows + folders
   useEffect(() => {
     if (!tenant) return;
     supabase
@@ -123,7 +123,85 @@ export default function FlowBuilderPage() {
       .eq('tenant_id', tenant.id)
       .order('created_at', { ascending: false })
       .then(({ data }) => setFlows((data as unknown as FlowRecord[]) ?? []));
+    supabase
+      .from('flow_folders')
+      .select('id, name, position')
+      .eq('tenant_id', tenant.id)
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: true })
+      .then(({ data }) => setFolders((data as unknown as FlowFolder[]) ?? []));
   }, [tenant]);
+
+  // Folder CRUD
+  const createFolder = async () => {
+    if (!tenant) return;
+    const name = window.prompt('Nome da pasta:')?.trim();
+    if (!name) return;
+    const { data, error } = await supabase
+      .from('flow_folders')
+      .insert({ tenant_id: tenant.id, name, position: folders.length })
+      .select('id, name, position')
+      .single();
+    if (error) { toast.error(error.message); return; }
+    setFolders(prev => [...prev, data as FlowFolder]);
+  };
+  const commitFolderRename = async (id: string) => {
+    const name = editingFolderName.trim();
+    setEditingFolderId(null);
+    if (!name) return;
+    const prevName = folders.find(f => f.id === id)?.name;
+    if (name === prevName) return;
+    setFolders(prev => prev.map(f => f.id === id ? { ...f, name } : f));
+    const { error } = await supabase.from('flow_folders').update({ name }).eq('id', id);
+    if (error) toast.error(error.message);
+  };
+  const deleteFolder = async (id: string) => {
+    if (!window.confirm('Excluir esta pasta? Os fluxos voltam para "Sem pasta".')) return;
+    const { error } = await supabase.from('flow_folders').delete().eq('id', id);
+    if (error) { toast.error(error.message); return; }
+    setFolders(prev => prev.filter(f => f.id !== id));
+    setFlows(prev => prev.map(f => f.folder_id === id ? { ...f, folder_id: null } : f));
+    if (activeFolderId === id) setActiveFolderId('all');
+  };
+  const moveFlowToFolder = async (flowId: string, folderId: string | null) => {
+    setFlows(prev => prev.map(f => f.id === flowId ? { ...f, folder_id: folderId } : f));
+    const { error } = await supabase.from('chatbot_flows').update({ folder_id: folderId }).eq('id', flowId);
+    if (error) toast.error(error.message);
+  };
+
+  // Marca dirty quando o usuário altera algo no editor
+  useEffect(() => {
+    if (listView) return;
+    if (skipNextDirtyRef.current) { skipNextDirtyRef.current = false; return; }
+    setDirty(true);
+  }, [nodes, edges, flowName, flowDescription, flowActive, triggerType, triggerConfig, whatsappInstanceId, currentFolderId, listView]);
+
+  // Auto-save com debounce (apenas para fluxo já criado)
+  useEffect(() => {
+    if (listView) return;
+    if (!dirty) return;
+    if (!selectedFlow) return; // fluxo novo precisa do botão "Salvar agora"
+    const t = setTimeout(() => { handleSave(true); }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, nodes, edges, flowName, flowDescription, flowActive, triggerType, triggerConfig, whatsappInstanceId, currentFolderId]);
+
+  // Fullscreen sync
+  const toggleFullscreen = useCallback(async () => {
+    const el = editorContainerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen?.();
+    } else {
+      await document.exitFullscreen?.();
+    }
+  }, []);
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
 
   const onConnect = useCallback(
     (params: Connection) =>
@@ -134,6 +212,7 @@ export default function FlowBuilderPage() {
   );
 
   const openFlow = (flow: FlowRecord) => {
+    skipNextDirtyRef.current = true;
     setSelectedFlow(flow);
     setFlowName(flow.name);
     setFlowDescription(flow.description ?? '');
@@ -141,12 +220,17 @@ export default function FlowBuilderPage() {
     setTriggerType(flow.trigger_type);
     setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
     setWhatsappInstanceId(((flow as any).whatsapp_instance_id as string | null) ?? null);
+    setCurrentFolderId(flow.folder_id ?? null);
     setNodes((flow.nodes as Node[]) || []);
     setEdges((flow.edges as Edge[]) || []);
+    setSavedAt(null);
+    setDirty(false);
     setListView(false);
   };
 
+
   const createNewFlow = () => {
+    skipNextDirtyRef.current = true;
     setSelectedFlow(null);
     setFlowName('Novo Fluxo');
     setFlowDescription('');
@@ -154,6 +238,9 @@ export default function FlowBuilderPage() {
     setTriggerType('message_received');
     setTriggerConfig({});
     setWhatsappInstanceId(null);
+    setCurrentFolderId(activeFolderId && activeFolderId !== 'all' ? activeFolderId : null);
+    setSavedAt(null);
+    setDirty(false);
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
@@ -164,6 +251,7 @@ export default function FlowBuilderPage() {
     setEdges([]);
     setListView(false);
   };
+
 
   const addNode = (type: string) => {
     const id = `${type}-${Date.now()}`;
@@ -185,7 +273,7 @@ export default function FlowBuilderPage() {
     setNodes((nds) => [...nds, newNode]);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (silent = false) => {
     if (!tenant || !flowName.trim()) return;
     setSaving(true);
     const payload = {
@@ -197,26 +285,32 @@ export default function FlowBuilderPage() {
       edges: edges as any,
       is_active: flowActive,
       whatsapp_instance_id: whatsappInstanceId,
+      folder_id: currentFolderId,
     } as any;
 
     try {
       if (selectedFlow) {
         const { error } = await supabase.from('chatbot_flows').update(payload).eq('id', selectedFlow.id);
         if (error) throw error;
-        toast.success('Fluxo salvo');
+        if (!silent) toast.success('Fluxo salvo');
         setFlows(prev => prev.map(f => f.id === selectedFlow.id ? { ...f, ...payload } : f));
+        setSavedAt(Date.now());
+        setDirty(false);
       } else {
         const { data, error } = await supabase.from('chatbot_flows').insert({ tenant_id: tenant.id, ...payload }).select().single();
         if (error) throw error;
-        toast.success('Fluxo criado');
+        if (!silent) toast.success('Fluxo criado');
         setSelectedFlow(data as unknown as FlowRecord);
         setFlows(prev => [data as unknown as FlowRecord, ...prev]);
+        setSavedAt(Date.now());
+        setDirty(false);
       }
     } catch (e: any) {
       toast.error(e.message);
     }
     setSaving(false);
   };
+
 
   const handleDelete = async (id: string) => {
     await supabase.from('chatbot_flows').delete().eq('id', id);
@@ -247,62 +341,153 @@ export default function FlowBuilderPage() {
 
   // ---- LIST VIEW ----
   if (listView) {
-    return (
-      <div className="p-6 max-w-4xl space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-foreground">Flow Builder</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Crie fluxos visuais de chatbot e automação</p>
-          </div>
-          <Button size="sm" onClick={createNewFlow} className="h-9 text-xs">
-            <Plus className="h-3.5 w-3.5 mr-1.5" />Novo Fluxo
-          </Button>
-        </div>
+    const visibleFlows = activeFolderId === 'all'
+      ? flows
+      : flows.filter(f => (f.folder_id ?? null) === (activeFolderId ?? null));
 
-        {flows.length === 0 ? (
-          <div className="text-center py-16 text-muted-foreground">
-            <GitBranch className="h-10 w-10 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Nenhum fluxo criado ainda</p>
-            <p className="text-xs mt-1">Crie seu primeiro chatbot ou automação visual</p>
+    const countIn = (id: string | null | 'all') =>
+      id === 'all' ? flows.length : flows.filter(f => (f.folder_id ?? null) === (id ?? null)).length;
+
+    return (
+      <div className="flex h-[calc(100vh-3.5rem)]">
+        {/* Folders sidebar */}
+        <aside className="w-56 border-r border-border bg-card flex flex-col shrink-0">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Pastas</p>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={createFolder} title="Nova pasta">
+              <FolderPlus className="h-3.5 w-3.5" />
+            </Button>
           </div>
-        ) : (
-          <div className="grid gap-3">
-            {flows.map(flow => (
-              <div
-                key={flow.id}
-                className="flex items-center justify-between rounded-lg border border-border bg-card p-4 hover:border-primary/30 transition-colors cursor-pointer"
-                onClick={() => openFlow(flow)}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <GitBranch className="h-4 w-4 text-primary shrink-0" />
-                    <h3 className="text-sm font-medium truncate">{flow.name}</h3>
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${flow.is_active ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'}`}>
-                      {flow.is_active ? 'Ativo' : 'Inativo'}
-                    </span>
-                  </div>
-                  {flow.description && <p className="text-xs text-muted-foreground mt-1 truncate">{flow.description}</p>}
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    {(flow.nodes as any[])?.length ?? 0} nós · Trigger: {flow.trigger_type}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost" size="icon" className="h-8 w-8 shrink-0"
-                  onClick={(e) => { e.stopPropagation(); handleDelete(flow.id); }}
+          <div className="flex-1 overflow-y-auto py-1">
+            {([
+              { id: 'all' as const, name: 'Todos os fluxos', icon: GitBranch },
+              { id: null, name: 'Sem pasta', icon: Folder },
+            ] as Array<{ id: string | null | 'all'; name: string; icon: any }>).concat(
+              folders.map(f => ({ id: f.id, name: f.name, icon: FolderOpen }))
+            ).map(item => {
+              const Icon = item.icon;
+              const isActive = activeFolderId === item.id;
+              const isEditing = typeof item.id === 'string' && editingFolderId === item.id;
+              return (
+                <div
+                  key={String(item.id)}
+                  className={cn(
+                    'group flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors',
+                    isActive ? 'bg-accent text-foreground' : 'text-foreground/70 hover:bg-accent/50'
+                  )}
+                  onClick={() => !isEditing && setActiveFolderId(item.id)}
                 >
-                  <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                </Button>
-              </div>
-            ))}
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {isEditing ? (
+                    <Input
+                      autoFocus
+                      value={editingFolderName}
+                      onChange={e => setEditingFolderName(e.target.value)}
+                      onBlur={() => commitFolderRename(item.id as string)}
+                      onKeyDown={e => { if (e.key === 'Enter') commitFolderRename(item.id as string); if (e.key === 'Escape') setEditingFolderId(null); }}
+                      className="h-6 text-xs flex-1"
+                    />
+                  ) : (
+                    <span className="flex-1 truncate">{item.name}</span>
+                  )}
+                  <span className="text-[10px] text-muted-foreground tabular-nums">{countIn(item.id)}</span>
+                  {typeof item.id === 'string' && !isEditing && (
+                    <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditingFolderId(item.id as string); setEditingFolderName(item.name); }}
+                        className="p-0.5 rounded hover:bg-background"
+                        title="Renomear"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteFolder(item.id as string); }}
+                        className="p-0.5 rounded hover:bg-background"
+                        title="Excluir pasta"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
+        </aside>
+
+        {/* Flows list */}
+        <div className="flex-1 overflow-y-auto p-6 max-w-4xl">
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h1 className="text-lg font-semibold text-foreground">Flow Builder</h1>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {activeFolderId === 'all' ? 'Todos os fluxos' : activeFolderId === null ? 'Fluxos sem pasta' : folders.find(f => f.id === activeFolderId)?.name}
+              </p>
+            </div>
+            <Button size="sm" onClick={createNewFlow} className="h-9 text-xs">
+              <Plus className="h-3.5 w-3.5 mr-1.5" />Novo fluxo
+            </Button>
+          </div>
+
+          {visibleFlows.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <GitBranch className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Nenhum fluxo nesta pasta</p>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {visibleFlows.map(flow => (
+                <div
+                  key={flow.id}
+                  className="flex items-center justify-between rounded-lg border border-border bg-card p-4 hover:border-primary/30 transition-colors cursor-pointer"
+                  onClick={() => openFlow(flow)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <GitBranch className="h-4 w-4 text-primary shrink-0" />
+                      <h3 className="text-sm font-medium truncate">{flow.name}</h3>
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${flow.is_active ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'}`}>
+                        {flow.is_active ? 'Ativo' : 'Inativo'}
+                      </span>
+                    </div>
+                    {flow.description && <p className="text-xs text-muted-foreground mt-1 truncate">{flow.description}</p>}
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      {(flow.nodes as any[])?.length ?? 0} nós · Trigger: {flow.trigger_type}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <Select
+                      value={flow.folder_id ?? '__none__'}
+                      onValueChange={(v) => moveFlowToFolder(flow.id, v === '__none__' ? null : v)}
+                    >
+                      <SelectTrigger className="h-8 w-36 text-[11px]">
+                        <SelectValue placeholder="Pasta" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Sem pasta</SelectItem>
+                        {folders.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="ghost" size="icon" className="h-8 w-8"
+                      onClick={() => handleDelete(flow.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
+
   // ---- EDITOR VIEW ----
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+    <div ref={editorContainerRef} className={cn('flex flex-col bg-background', isFullscreen ? 'h-screen' : 'h-[calc(100vh-3.5rem)]')}>
       {/* Top bar */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-2 bg-card shrink-0">
         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setListView(true)}>
@@ -313,16 +498,30 @@ export default function FlowBuilderPage() {
           onChange={e => setFlowName(e.target.value)}
           className="h-8 text-sm font-medium w-60 border-none bg-transparent focus-visible:ring-1"
         />
-        <div className="flex items-center gap-2 ml-auto">
+        {/* Auto-save indicator */}
+        <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 min-w-[120px]">
+          {saving ? (
+            <><Loader2 className="h-3 w-3 animate-spin" /> Salvando…</>
+          ) : dirty ? (
+            <span className="text-amber-600">Alterações pendentes</span>
+          ) : savedAt ? (
+            <><Check className="h-3 w-3 text-green-600" /> Salvo automaticamente</>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-3 ml-auto">
           <div className="flex items-center gap-2">
             <Label className="text-xs text-muted-foreground">Ativo</Label>
             <Switch checked={flowActive} onCheckedChange={setFlowActive} />
           </div>
-          <Button size="sm" onClick={handleSave} disabled={saving} className="h-8 text-xs">
-            <Save className="h-3.5 w-3.5 mr-1.5" />{saving ? 'Salvando...' : 'Salvar'}
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleFullscreen} aria-label="Tela cheia">
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => handleSave(false)} disabled={saving} className="h-8 text-xs">
+            <Save className="h-3.5 w-3.5 mr-1.5" />Salvar agora
           </Button>
         </div>
       </div>
+
 
       <div className="flex flex-1 overflow-hidden">
         {/* Side palette */}
@@ -381,7 +580,7 @@ export default function FlowBuilderPage() {
         </div>
 
         {/* Canvas */}
-        <div className="flex-1">
+        <div className="flex-1 relative">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -400,13 +599,44 @@ export default function FlowBuilderPage() {
             <Controls className="!bg-card !border-border !shadow-sm" />
             <MiniMap className="!bg-card !border-border" nodeStrokeWidth={2} pannable zoomable />
           </ReactFlow>
+
+          {/* Floating add-node button */}
+          <Popover open={addPaletteOpen} onOpenChange={setAddPaletteOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                size="icon"
+                className="absolute bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-10"
+                aria-label="Adicionar nó"
+              >
+                <Plus className="h-5 w-5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" className="w-56 p-1.5">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-2 pb-1 pt-1">Adicionar nó</p>
+              {NODE_PALETTE.filter(n => n.type !== 'trigger').map(item => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.type}
+                    onClick={() => { addNode(item.type); setAddPaletteOpen(false); }}
+                    className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium text-foreground/80 hover:bg-accent transition-colors"
+                  >
+                    <Icon className={`h-4 w-4 ${item.color}`} strokeWidth={1.75} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
-      {/* Node edit dialog */}
-      <Dialog open={nodeEditOpen} onOpenChange={setNodeEditOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle className="text-sm">Editar Nó</DialogTitle></DialogHeader>
+
+      {/* Node edit side panel */}
+      <Sheet open={nodeEditOpen} onOpenChange={setNodeEditOpen}>
+        <SheetContent side="right" className="w-[420px] sm:max-w-[420px] overflow-y-auto">
+          <SheetHeader className="mb-2"><SheetTitle className="text-sm">Editar nó</SheetTitle></SheetHeader>
+
           {editingNode && (
             <div className="space-y-4 pt-2">
               <div className="space-y-1.5">
@@ -721,8 +951,9 @@ export default function FlowBuilderPage() {
               </div>
             </div>
           )}
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
+
     </div>
   );
 }
