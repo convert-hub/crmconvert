@@ -2,6 +2,9 @@ import { Handle, Position } from '@xyflow/react';
 import { GitBranch } from 'lucide-react';
 
 export default function ConditionNode({ data }: { data: Record<string, unknown> }) {
+  const criteria = (data.criteria as any[]) || [];
+  const combinator = ((data.combinator as string) || 'AND').toUpperCase();
+  const hasList = criteria.length > 0;
   const field = (data.field as string) || 'message';
   const operator = (data.operator as string) || 'contains';
   const value = (data.value as string) || '';
@@ -14,13 +17,14 @@ export default function ConditionNode({ data }: { data: Record<string, unknown> 
         </div>
         <p className="text-[10px] uppercase tracking-wider text-amber-600 font-semibold">Condição</p>
       </div>
-      <p className="text-xs text-foreground font-medium">{(data.label as string) || 'Condição'}</p>
-      {value && (
+      <p className="text-xs text-foreground font-medium truncate">{(data.label as string) || 'Condição'}</p>
+      {hasList ? (
         <p className="text-[11px] text-muted-foreground mt-1">
-          {field} {operator} "{value}"
+          {criteria.length} {criteria.length === 1 ? 'critério' : 'critérios'} · {combinator === 'OR' ? 'OU' : 'E'}
         </p>
-      )}
-      {/* Two outputs: yes / no */}
+      ) : value ? (
+        <p className="text-[11px] text-muted-foreground mt-1">{field} {operator} "{value}"</p>
+      ) : null}
       <div className="flex justify-between mt-2 px-2">
         <span className="text-[10px] text-green-600 font-medium">Sim</span>
         <span className="text-[10px] text-red-500 font-medium">Não</span>

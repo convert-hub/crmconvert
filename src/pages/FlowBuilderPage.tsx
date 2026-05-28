@@ -43,6 +43,8 @@ import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
 import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
+import ConditionCriteriaEditor from '@/components/flow-builder/ConditionCriteriaEditor';
+import ActionsListEditor from '@/components/flow-builder/ActionsListEditor';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -656,44 +658,20 @@ export default function FlowBuilderPage() {
                 />
               )}
 
-              {editingNode.type === 'condition' && (
-                <>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Campo</Label>
-                      <Select value={(editingNode.data as any).field ?? 'message'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, field: v } })}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="message">Mensagem</SelectItem>
-                          <SelectItem value="contact_name">Nome</SelectItem>
-                          <SelectItem value="contact_tag">Tag</SelectItem>
-                          <SelectItem value="contact_status">Status</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Operador</Label>
-                      <Select value={(editingNode.data as any).operator ?? 'contains'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, operator: v } })}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="contains">Contém</SelectItem>
-                          <SelectItem value="equals">Igual</SelectItem>
-                          <SelectItem value="starts_with">Começa com</SelectItem>
-                          <SelectItem value="not_contains">Não contém</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[11px]">Valor</Label>
-                      <Input
-                        value={(editingNode.data as any).value ?? ''}
-                        onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, value: e.target.value } })}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
+              {editingNode.type === 'condition' && (() => {
+                const d: any = editingNode.data;
+                const criteria = Array.isArray(d.criteria) && d.criteria.length > 0
+                  ? d.criteria
+                  : [{ id: `c-${Date.now()}`, field: d.field ?? 'message', operator: d.operator ?? 'contains', value: d.value ?? '' }];
+                const combinator = (d.combinator ?? 'AND') as 'AND' | 'OR';
+                return (
+                  <ConditionCriteriaEditor
+                    combinator={combinator}
+                    criteria={criteria}
+                    onChange={(crit, comb) => setEditingNode({ ...editingNode, data: { ...d, criteria: crit, combinator: comb } })}
+                  />
+                );
+              })()}
 
               {editingNode.type === 'delay' && (
                 <div className="space-y-1.5">
@@ -876,74 +854,19 @@ export default function FlowBuilderPage() {
                 );
               })()}
 
-              {editingNode.type === 'action' && (
-                <>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Tipo de ação</Label>
-                    <Select value={(editingNode.data as any).actionType ?? 'add_tag'} onValueChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, actionType: v, config: {} } })}>
-                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="add_tag">Adicionar tag</SelectItem>
-                        <SelectItem value="remove_tag">Remover tag</SelectItem>
-                        <SelectItem value="assign_agent">Atribuir atendente</SelectItem>
-                        <SelectItem value="move_stage">Mover etapa</SelectItem>
-                        <SelectItem value="send_whatsapp">Enviar WhatsApp</SelectItem>
-                        <SelectItem value="close_conversation">Encerrar conversa</SelectItem>
-                        <SelectItem value="create_opportunity">Criar oportunidade</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                   {((editingNode.data as any).actionType === 'add_tag' || (editingNode.data as any).actionType === 'remove_tag') && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Tag</Label>
-                      <TagPickerSelect
-                        value={(editingNode.data as any).config?.tag ?? ''}
-                        onChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), tag: v } } })}
-                      />
-                    </div>
-                  )}
-
-                  {(editingNode.data as any).actionType === 'send_whatsapp' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Mensagem</Label>
-                      <Textarea
-                        value={(editingNode.data as any).config?.message ?? ''}
-                        onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), message: e.target.value } } })}
-                        rows={3} className="text-sm"
-                        placeholder="Texto da mensagem..."
-                      />
-                    </div>
-                  )}
-
-                  {(editingNode.data as any).actionType === 'move_stage' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Mover oportunidade para</Label>
-                      <PipelineStagePicker
-                        tenantId={tenant?.id ?? null}
-                        pipelineId={(editingNode.data as any).config?.pipeline_id}
-                        stageId={(editingNode.data as any).config?.stage_id}
-                        onChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), ...v } } })}
-                        requireBoth
-                      />
-                      <p className="text-[11px] text-muted-foreground">Move a oportunidade aberta do contato para esta etapa. Se o pipeline for informado, busca apenas oportunidades dele.</p>
-                    </div>
-                  )}
-
-                  {(editingNode.data as any).actionType === 'create_opportunity' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Pipeline e etapa inicial</Label>
-                      <PipelineStagePicker
-                        tenantId={tenant?.id ?? null}
-                        pipelineId={(editingNode.data as any).config?.pipeline_id}
-                        stageId={(editingNode.data as any).config?.stage_id}
-                        onChange={v => setEditingNode({ ...editingNode, data: { ...editingNode.data, config: { ...((editingNode.data as any).config || {}), ...v } } })}
-                      />
-                      <p className="text-[11px] text-muted-foreground">Se vazio, usa o pipeline padrão e a primeira etapa. Não cria se já houver oportunidade aberta para o contato.</p>
-                    </div>
-                  )}
-                </>
-              )}
+              {editingNode.type === 'action' && (() => {
+                const d: any = editingNode.data;
+                const actions = Array.isArray(d.actions) && d.actions.length > 0
+                  ? d.actions
+                  : [{ id: `a-${Date.now()}`, type: d.actionType ?? 'add_tag', config: d.config ?? {} }];
+                return (
+                  <ActionsListEditor
+                    tenantId={tenant?.id ?? null}
+                    actions={actions}
+                    onChange={(next) => setEditingNode({ ...editingNode, data: { ...d, actions: next } })}
+                  />
+                );
+              })()}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" size="sm" onClick={() => setNodeEditOpen(false)}>Cancelar</Button>
