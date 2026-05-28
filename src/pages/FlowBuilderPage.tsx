@@ -76,11 +76,22 @@ interface FlowRecord {
   edges: any[];
   is_active: boolean;
   created_at: string;
+  folder_id: string | null;
+}
+
+interface FlowFolder {
+  id: string;
+  name: string;
+  position: number;
 }
 
 export default function FlowBuilderPage() {
   const { tenant } = useAuth();
   const [flows, setFlows] = useState<FlowRecord[]>([]);
+  const [folders, setFolders] = useState<FlowFolder[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<string | null | 'all'>('all'); // 'all' | null (sem pasta) | id
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState('');
   const [selectedFlow, setSelectedFlow] = useState<FlowRecord | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -90,11 +101,18 @@ export default function FlowBuilderPage() {
   const [triggerType, setTriggerType] = useState('message_received');
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig>({});
   const [whatsappInstanceId, setWhatsappInstanceId] = useState<string | null>(null);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [listView, setListView] = useState(true);
   const [nodeEditOpen, setNodeEditOpen] = useState(false);
   const [editingNode, setEditingNode] = useState<Node | null>(null);
-  // Tags are now handled by TagPickerSelect component
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [addPaletteOpen, setAddPaletteOpen] = useState(false);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const skipNextDirtyRef = useRef(true); // ignora o primeiro disparo após abrir/criar fluxo
+
 
   // Load flows
   useEffect(() => {
