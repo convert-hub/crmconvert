@@ -1180,7 +1180,86 @@ const handlers = {
             const next = adjacency[handleKey] || [];
             next.forEach(n => queue.push(n));
           }
+        } else if (node.type === 'menu') {
+          // Send menu question and pause waiting for reply
+          const options = Array.isArray(node.data?.options) ? node.data.options : [];
+          const questionText = node.data?.question || '';
+          const maxRetries = Math.max(1, Number(node.data?.maxRetries) || 3);
+
+          let convInstance = null;
+          if (ctx.conversation_id) {
+            const { data: conv } = await supabase.from('conversations')
+              .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
+            convInstance = conv;
+          }
+          let contactPhone = null;
+          if (ctx.contact_id) {
+            const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
+            contactPhone = c?.phone || null;
+          }
+
+          if (questionText && ctx.conversation_id) {
+            const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+            await supabase.from('messages').insert({
+              tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
+              content: interpolated, is_ai_generated: false,
+            });
+            if (contactPhone) {
+              await supabase.rpc('enqueue_job', {
+                _type: 'send_whatsapp',
+                _payload: JSON.stringify({
+                  tenant_id, phone: contactPhone, message: interpolated,
+                  conversation_id: ctx.conversation_id,
+                  whatsapp_instance_id: convInstance?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                }),
+                _tenant_id: tenant_id,
+              });
+            }
+          }
+
+          await supabase.from('flow_executions').update({
+            status: 'awaiting_input',
+            current_node_id: nodeId,
+            pending_queue: [],
+            pending_menu: {
+              node_id: nodeId,
+              options,
+              max_retries: maxRetries,
+              retries: 0,
+              invalid_text: node.data?.invalidText || 'Desculpe, não entendi. Por favor, escolha uma das opções.',
+              save_variable: node.data?.saveVariable || null,
+            },
+            context: { ...ctx },
+          }).eq('id', execution.id);
+          console.log(`[Worker] Flow ${flow_id}: menu node ${nodeId} sent — awaiting choice`);
+          paused = true;
+          break;
+        } else if (node.type === 'subflow') {
+          const targetFlowId = node.data?.targetFlowId;
+          const mode = node.data?.mode || 'call';
+          if (targetFlowId) {
+            await supabase.rpc('enqueue_job', {
+              _type: 'execute_flow',
+              _payload: JSON.stringify({
+                flow_id: targetFlowId,
+                tenant_id,
+                contact_id: ctx.contact_id || null,
+                conversation_id: ctx.conversation_id || null,
+                trigger_data: { ...(ctx.variables || {}), _parent_flow: flow_id },
+              }),
+              _tenant_id: tenant_id,
+            });
+            console.log(`[Worker] Flow ${flow_id}: subflow ${mode} → ${targetFlowId}`);
+          }
+          if (mode === 'transfer') {
+            // Stop current flow
+            queue = [];
+          } else {
+            const next = adjacency[nodeId] || [];
+            next.forEach(n => queue.push(n));
+          }
         }
+
       }
 
       if (!paused) {
