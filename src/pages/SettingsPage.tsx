@@ -407,6 +407,29 @@ export default function SettingsPage() {
   };
   const deleteStage = async (id: string) => { await supabase.from('stages').delete().eq('id', id); toast.success('Etapa removida'); loadAll(); };
 
+  const updateStageField = async (id: string, patch: Partial<Pick<StageRow, 'name' | 'color'>>) => {
+    const { error } = await supabase.from('stages').update(patch).eq('id', id);
+    if (error) { toast.error('Erro ao salvar: ' + error.message); loadAll(); return; }
+    setStages(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
+  };
+
+  const reorderSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleStagesDragEnd = async (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIdx = stages.findIndex(s => s.id === active.id);
+    const newIdx = stages.findIndex(s => s.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const reordered = arrayMove(stages, oldIdx, newIdx);
+    setStages(reordered);
+    const updates = reordered
+      .map((s, i) => ({ s, i }))
+      .filter(({ s, i }) => s.position !== i)
+      .map(({ s, i }) => supabase.from('stages').update({ position: i }).eq('id', s.id));
+    const results = await Promise.all(updates);
+    if (results.some(r => r.error)) { toast.error('Erro ao reordenar etapas'); loadAll(); }
+  };
+
   const saveAiConfig = async () => {
     if (!tenant) return;
     const existing = aiConfigs.find(c => c.task_type === aiTaskType);
