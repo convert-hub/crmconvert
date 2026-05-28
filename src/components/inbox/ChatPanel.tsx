@@ -573,7 +573,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending || isInternal} className="rounded-xl h-10 w-10 shrink-0" title="Anexar arquivo">
             <Paperclip className="h-4 w-4" />
           </Button>
-          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} />}
+          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} provider={providerInfo?.provider ?? null} />}
           <Button size="icon" variant={isInternal ? 'default' : 'ghost'} onClick={() => setIsInternal(!isInternal)}
             className={cn("rounded-xl h-10 w-10 shrink-0", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')} title="Nota interna">
             <StickyNote className="h-4 w-4" />

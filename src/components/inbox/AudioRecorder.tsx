@@ -6,14 +6,25 @@ import { cn } from '@/lib/utils';
 interface AudioRecorderProps {
   onRecorded: (file: File) => void;
   disabled?: boolean;
+  /**
+   * Quando 'meta_cloud', tenta gravar em audio/ogg (Opus) via opus-recorder,
+   * que é o formato exigido pela WhatsApp Cloud API.
+   * Para 'uazapi' (ou indefinido) usa MediaRecorder nativo (audio/webm).
+   */
+  provider?: 'meta_cloud' | 'uazapi' | null;
 }
 
-export default function AudioRecorder({ onRecorded, disabled }: AudioRecorderProps) {
+export default function AudioRecorder({ onRecorded, disabled, provider }: AudioRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
+  // Native MediaRecorder path (uazapi)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // opus-recorder path (meta_cloud)
+  const opusRecorderRef = useRef<any>(null);
+  const opusBlobRef = useRef<Blob | null>(null);
+  const usingOpusRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const cleanup = useCallback(() => {
@@ -24,36 +35,89 @@ export default function AudioRecorder({ onRecorded, disabled }: AudioRecorderPro
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     mediaRecorderRef.current = null;
+    try { opusRecorderRef.current?.close?.(); } catch { /* noop */ }
+    opusRecorderRef.current = null;
+    opusBlobRef.current = null;
+    usingOpusRef.current = false;
   }, []);
 
   useEffect(() => cleanup, [cleanup]);
 
+  const startNative = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm',
+    });
+    mediaRecorderRef.current = mediaRecorder;
+    chunksRef.current = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    mediaRecorder.start();
+    usingOpusRef.current = false;
+  }, []);
+
+  const startOpus = useCallback(async () => {
+    // dynamic import keeps bundle lean and lets us fall back on failure
+    const mod: any = await import('opus-recorder');
+    const Recorder = mod.default ?? mod;
+    const rec = new Recorder({
+      encoderPath: '/encoderWorker.min.js',
+      encoderApplication: 2048, // VOIP
+      encoderSampleRate: 48000,
+      numberOfChannels: 1,
+      streamPages: false,
+    });
+    rec.ondataavailable = (typedArray: Uint8Array) => {
+      const ab = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
+      opusBlobRef.current = new Blob([ab], { type: 'audio/ogg' });
+    };
+    await rec.start();
+    opusRecorderRef.current = rec;
+    usingOpusRef.current = true;
+  }, []);
+
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm',
-      });
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.start();
+      if (provider === 'meta_cloud') {
+        try {
+          await startOpus();
+        } catch (e) {
+          console.warn('[AudioRecorder] opus-recorder falhou, usando webm fallback', e);
+          await startNative();
+        }
+      } else {
+        await startNative();
+      }
       setRecording(true);
       setDuration(0);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
     } catch {
-      // permission denied
+      cleanup();
     }
-  }, []);
+  }, [provider, startOpus, startNative, cleanup]);
 
-  const stopAndSend = useCallback(() => {
+  const stopAndSend = useCallback(async () => {
+    if (usingOpusRef.current && opusRecorderRef.current) {
+      const rec = opusRecorderRef.current;
+      try {
+        await rec.stop();
+        const blob = opusBlobRef.current;
+        if (blob && blob.size > 0) {
+          const file = new File([blob], `audio_${Date.now()}.ogg`, { type: 'audio/ogg' });
+          onRecorded(file);
+        }
+      } catch (e) {
+        console.warn('[AudioRecorder] stop opus failed', e);
+      }
+      setRecording(false);
+      setDuration(0);
+      cleanup();
+      return;
+    }
     if (!mediaRecorderRef.current) return;
     mediaRecorderRef.current.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
@@ -67,7 +131,11 @@ export default function AudioRecorder({ onRecorded, disabled }: AudioRecorderPro
   }, [onRecorded, cleanup]);
 
   const cancelRecording = useCallback(() => {
-    mediaRecorderRef.current?.stop();
+    if (usingOpusRef.current && opusRecorderRef.current) {
+      try { opusRecorderRef.current.stop(); } catch { /* noop */ }
+    } else {
+      try { mediaRecorderRef.current?.stop(); } catch { /* noop */ }
+    }
     setRecording(false);
     setDuration(0);
     cleanup();
