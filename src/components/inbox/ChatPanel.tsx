@@ -524,16 +524,28 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">
         {messages.map(msg => {
-          const msgStatus = (msg as any).provider_metadata?.status;
+          const pmeta = (msg as any).provider_metadata ?? {};
+          const msgStatus = pmeta.status ?? pmeta.last_status;
+          const isFailed = msgStatus === 'failed';
+          const failedErr = isFailed && Array.isArray(pmeta.statuses)
+            ? pmeta.statuses.slice().reverse().find((s: any) => s?.status === 'failed')?.raw?.errors?.[0]
+            : null;
+          const failedCode = failedErr?.code;
+          const isOutsideWindow = failedCode === 131047;
+          const failedMsg = isOutsideWindow
+            ? 'Cliente fora da janela de 24h. Envie um template para reativar a conversa.'
+            : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || 'Falha no envio pela Meta.');
           const isMedia = hasMedia(msg);
           const msgIsInternal = (msg as any).is_internal === true;
           const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
           return (
-            <div key={msg.id} className={cn("flex", msg.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
+            <div key={msg.id} className={cn("flex flex-col", msg.direction === 'outbound' ? 'items-end' : 'items-start')}>
               <div className={cn("max-w-[75%] rounded-2xl px-4 py-2.5 text-sm",
                 msgIsInternal
                   ? 'bg-warning/10 border border-warning/30 text-foreground'
-                  : msg.direction === 'outbound' ? 'gradient-primary text-white' : 'bg-card border border-border/50 text-foreground')}>
+                  : msg.direction === 'outbound'
+                    ? isFailed ? 'bg-destructive/10 border border-destructive/30 text-foreground' : 'gradient-primary text-white'
+                    : 'bg-card border border-border/50 text-foreground')}>
                 {msgIsInternal && (
                   <div className="flex items-center gap-1 text-[10px] text-warning font-medium mb-1">
                     <Lock className="h-3 w-3" /> Nota interna
@@ -541,23 +553,35 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                 )}
                 {isTemplate && (
                   <div className={cn("text-[10px] font-medium mb-1 uppercase tracking-wide",
-                    msg.direction === 'outbound' ? 'text-white/80' : 'text-muted-foreground')}>
+                    msg.direction === 'outbound' && !isFailed ? 'text-white/80' : 'text-muted-foreground')}>
                     Template
                   </div>
                 )}
                 {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} conversationId={conversationId} providerInfo={providerInfo} />}
                 {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span className="whitespace-pre-wrap">{msg.content}</span>}
-                <div className={cn("text-[10px] mt-1 flex items-center gap-1",
-                  msgIsInternal ? 'text-warning/70 justify-end' :
-                  msg.direction === 'outbound' ? 'text-white/70 justify-end' : 'text-muted-foreground')}>
+                <div className={cn("text-[10px] mt-1 flex items-center gap-1 justify-end",
+                  msgIsInternal ? 'text-warning/70' :
+                  isFailed ? 'text-destructive' :
+                  msg.direction === 'outbound' ? 'text-white/70' : 'text-muted-foreground')}>
                   {format(new Date(msg.created_at), "HH:mm")}
                   {msg.direction === 'outbound' && !msgIsInternal && (
+                    isFailed ? <span title={failedMsg} className="font-semibold">!</span> :
                     msgStatus === 'read' ? <CheckCheck className="h-3 w-3 text-blue-300" /> :
                     msgStatus === 'delivered' ? <CheckCheck className="h-3 w-3" /> :
                     <Check className="h-3 w-3" />
                   )}
                 </div>
               </div>
+              {isFailed && msg.direction === 'outbound' && !msgIsInternal && (
+                <div className="mt-1 max-w-[75%] flex items-center gap-2 text-[11px] text-destructive">
+                  <span>{failedMsg}</span>
+                  {isOutsideWindow && providerInfo?.provider === 'meta_cloud' && (
+                    <button onClick={() => setShowTemplate(true)} className="underline hover:no-underline font-medium">
+                      Enviar template
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
