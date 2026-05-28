@@ -28,6 +28,7 @@ import AdminTenants from "@/pages/admin/AdminTenants";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminApis from "@/pages/admin/AdminApis";
 import NotFound from "@/pages/NotFound";
+import FlowInstallPage from "@/pages/FlowInstallPage";
 
 const queryClient = new QueryClient();
 
@@ -39,6 +40,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={session ? <Navigate to={isSaasAdmin && !membership ? "/admin" : "/pipeline"} /> : <Login />} />
+      <Route path="/flow/install/:token" element={<FlowInstallPage />} />
       <Route path="/waiting" element={
         <ProtectedRoute><WaitingApproval /></ProtectedRoute>
       } />
