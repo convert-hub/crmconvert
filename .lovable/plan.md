@@ -1,51 +1,25 @@
-## Diagnóstico forense
+## Objetivo
+Inserir um campo de busca no cabeçalho da página de Pipelines que filtre os cards por nome do contato, título da oportunidade e telefone do contato.
 
-A mensagem foi enviada com sucesso (chegou ao contato), mas não pode ser reproduzida porque a UI mostra "Áudio expirado ou indisponível no WhatsApp".
+## Mudanças
 
-**Causa-raiz (não é expiração real):**
+Arquivo único: `src/pages/PipelinePage.tsx`
 
-1. `MediaBubble` em `src/components/inbox/ChatPanel.tsx` (linhas 90-141) chama `downloadMedia(...)` para tocar áudios outbound. Para `provider = meta_cloud`, `whatsappRouter.downloadMedia` exige `metaMediaId`. Se vier `null`, devolve `{ ok: false }` imediatamente e o bubble cai no estado `expired` (linha 162 do router).
+1. **Estado novo**: `const [search, setSearch] = useState('')` ao lado dos outros estados (~linha 336).
 
-2. No envio outbound de mídia via Meta:
-   - `ChatPanel.handleSendMedia` pré-insere a row em `messages` (linhas 437-442) sem `provider_metadata`.
-   - Chama `sendMedia` → `wa-meta-send` com `skip_persist: true`.
-   - `wa-meta-send` faz upload → recebe `media_id` da Meta → envia a mensagem → retorna **apenas** `provider_message_id`. O `media_id` é descartado.
-   - O `ChatPanel` então só faz `update({ provider_message_id })` (linha 467). **Nunca grava `provider_metadata.meta_media_id`.**
+2. **Filtro client-side**: estender o `useMemo` `filteredOpportunities` (linha 361) para também aplicar o termo de busca normalizado (lowercase, sem acentos, trim) contra:
+   - `o.title`
+   - `o.contact?.name`
+   - `o.contact?.phone` (comparar apenas dígitos, para casar com qualquer formatação digitada)
 
-3. Resultado: ao tentar reabrir, `metaMediaId` é `null` → "expirado". O mesmo bug afeta imagem, vídeo e documento outbound via Meta (não só áudio).
+3. **UI no header** (linha 844): adicionar um `Input` com ícone `Search` (lucide) antes do `FilterBar`, estilo consistente com o usado em `ContactsPage` (`pl-9 w-56 h-9 text-[13px]`, placeholder "Buscar por nome ou telefone..."). Sem labels extras — densidade alta conforme padrão do projeto.
 
-UAZAPI não é afetado: `downloadMedia` no UAZAPI usa `provider_message_id` (não exige media_id próprio).
+## Detalhes técnicos
+- Busca puramente client-side sobre `opportunities` já carregadas; sem alterar queries Supabase nem realtime.
+- Normalização reaproveita o padrão já em uso no projeto (lowercase + remove acentos via `normalize('NFD').replace(/\p{Diacritic}/gu,'')`).
+- Para telefone, comparar `phone.replace(/\D/g,'').includes(term.replace(/\D/g,''))` quando o termo contiver dígitos.
+- Nenhuma alteração em backend, RLS, tipos ou outros componentes.
 
-## Correção
-
-Mínima, restrita à camada de envio Meta. Sem mexer em UAZAPI, recepção, transcrição, player ou worker.
-
-### 1. `supabase/functions/wa-meta-send/index.ts`
-No branch `send_media_base64`, depois do upload bem-sucedido, propagar o `media_id` da Meta na resposta final:
-- Guardar `uploadedMediaId = upData.id` antes de cair no fluxo de envio.
-- Incluir `meta_media_id: uploadedMediaId` no JSON de retorno (junto com `provider_message_id`).
-- Também incluí-lo no `provider_metadata` quando `skip_persist` for `false` (persistência server-side), para paridade.
-
-### 2. `src/lib/whatsappRouter.ts`
-Expor `meta_media_id` no `SendResult`:
-- Adicionar campo opcional `meta_media_id?: string | null` em `SendResult`.
-- Em `sendMedia` (branch `meta_cloud`), repassar `data?.meta_media_id ?? null`.
-
-### 3. `src/components/inbox/ChatPanel.tsx`
-Em `handleSendMedia`, após `res.ok` e antes/junto do update de `provider_message_id`:
-- Atualizar a row de `messages` com `provider_metadata: { provider: 'meta_cloud', meta_media_id: res.meta_media_id }` quando vier preenchido.
-- Manter `media_type` minúsculo (`'audio'`/`'image'`/...) **não** é necessário mudar — o `MediaBubble` já normaliza com `toLowerCase()` e usa `includes('audio')`, então `'AudioMessage'` continua funcionando.
-
-## Impacto e riscos
-
-- Áudios/imagens/vídeos/documentos **novos** enviados via Meta passam a reabrir e tocar normalmente.
-- Mensagens **antigas** outbound (já no banco sem `meta_media_id`) continuam mostrando "expirado" — não é possível recuperar o `media_id` retroativamente. Sem backfill.
-- Nenhuma mudança em recepção (inbound), UAZAPI, player, worker ou esquema do banco.
-- A Meta mantém o `media_id` baixável por ~30 dias usando o mesmo token.
-
-## Validação
-
-1. Enviar áudio no tenant SOS via API oficial.
-2. Confirmar que após o envio a bolha mostra o player (não "expirado").
-3. Recarregar a conversa → o áudio continua tocando (re-download via `download_media` usa o `meta_media_id` salvo).
-4. Repetir com imagem e documento para confirmar paridade.
+## Impacto
+- Risco zero para fluxos existentes (drag-and-drop, criação, exclusão, chat) — filtro apenas reduz array exibido.
+- Não afeta contadores de stage? Atualmente `count` e `total` por coluna usam `filteredOpportunities`; com a busca aplicada, contadores refletirão o resultado filtrado, que é o comportamento esperado.
