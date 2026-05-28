@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -9,7 +9,6 @@ import {
   useEdgesState,
   Connection,
   MarkerType,
-  Panel,
   type Node,
   type Edge,
 } from '@xyflow/react';
@@ -20,14 +19,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, UserPlus, Tag, HelpCircle, Shuffle } from 'lucide-react';
+import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, HelpCircle, Shuffle, Maximize2, Minimize2, Folder, FolderPlus, FolderOpen, Check, Pencil, Loader2 } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import PipelineStagePicker from '@/components/flow-builder/PipelineStagePicker';
+import { cn } from '@/lib/utils';
+
 
 // ---- Custom Node Component ----
 import MessageNode from '@/components/flow-builder/MessageNode';
