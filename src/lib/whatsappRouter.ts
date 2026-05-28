@@ -49,6 +49,7 @@ export interface SendResult {
   provider_message_id?: string | null;
   meta_media_id?: string | null;
   error?: string;
+  code?: string;
 }
 
 export async function sendText(params: {
@@ -72,7 +73,7 @@ export async function sendText(params: {
       },
     });
     if (error || data?.error || data?.ok === false) {
-      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta' };
+      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta', code: data?.code };
     }
     return { ok: true, provider_message_id: data?.provider_message_id ?? null };
   }
@@ -121,7 +122,7 @@ export async function sendMedia(params: {
       },
     });
     if (error || data?.error || data?.ok === false) {
-      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta' };
+      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta', code: data?.code };
     }
     return { ok: true, provider_message_id: data?.provider_message_id ?? null, meta_media_id: data?.meta_media_id ?? null };
   }

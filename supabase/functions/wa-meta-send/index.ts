@@ -258,6 +258,37 @@ serve(async (req) => {
       return null;
     }
 
+    // Classifica erros do Graph para mensagens claras em pt-BR
+    function classifyGraphError(data: any): { code: string; error: string } {
+      const errCode = data?.error?.code;
+      const original = data?.error?.message ?? "Falha no envio";
+      if (errCode === 131047) {
+        return {
+          code: "outside_24h_window",
+          error: "Cliente fora da janela de 24h. Envie um template para reativar a conversa.",
+        };
+      }
+      if (errCode === 131026) {
+        return {
+          code: "message_undeliverable",
+          error: "Mensagem não pôde ser entregue. Verifique se o número possui WhatsApp ativo.",
+        };
+      }
+      if (errCode === 131051) {
+        return {
+          code: "unsupported_message_type",
+          error: "Tipo de mensagem não suportado pela Meta.",
+        };
+      }
+      if (errCode === 131056) {
+        return {
+          code: "pair_rate_limit",
+          error: "Limite de envios para este contato atingido. Aguarde alguns minutos.",
+        };
+      }
+      return { code: "meta_send_failed", error: original };
+    }
+
     async function markTokenValid() {
       await supabaseAdmin
         .from("whatsapp_instances")
@@ -443,9 +474,12 @@ serve(async (req) => {
     if (!sendR.ok) {
       const authErr = await handleGraphError(sendR.status, sendData);
       if (authErr) return jsonResponse(authErr);
+      const classified = classifyGraphError(sendData);
+      console.warn("[wa-meta-send] graph_send_failed", { code: classified.code, raw: sendData?.error });
       return jsonResponse({
         ok: false,
-        error: sendData?.error?.message ?? "Send failed",
+        code: classified.code,
+        error: classified.error,
         details: sendData,
       }, 200);
     }

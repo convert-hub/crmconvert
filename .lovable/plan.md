@@ -1,54 +1,47 @@
 ## Objetivo
 
-Adicionar um badge discreto que mostra há quanto tempo o **contato** (apenas mensagens `direction = inbound`) enviou a última mensagem. Deve aparecer em:
+Quando a Meta recusar uma mensagem **fora da janela de 24h** (cliente não interagiu nas últimas 24h e não é template), exibir mensagem clara em pt-BR: "Cliente fora da janela de 24h. Envie um template." Com ação rápida para abrir o diálogo de templates. Vale para `ChatPanel` (usado tanto no Inbox quanto no chat lateral do CRM/Pipeline — mesmo componente).
 
-1. Cada item da lista de conversas no Inbox (`src/pages/InboxPage.tsx`).
-2. Cada card de oportunidade no Pipeline (`src/pages/PipelinePage.tsx`).
+## Diagnóstico forense
 
-## Fonte de dados (sem migração)
-
-A coluna `conversations.last_customer_message_at` já existe e é mantida pelo backend a cada mensagem inbound (webhook-meta / webhook-uazapi). Usaremos ela como verdade — sem novas queries em `messages`, sem migração de schema.
-
-- **Inbox**: a query atual de `conversations` já retorna o campo. Basta consumir.
-- **Pipeline**: hoje carrega `opportunities` + `contact`, mas não puxa `last_customer_message_at`. Vamos adicionar um único `select` agregado em `conversations` (filtrado por `tenant_id` e `contact_id IN (...)`) e montar um mapa `contactId → maxLastCustomerAt` para enriquecer cada card.
+- `wa-meta-send` (linha 443-451): qualquer falha do Graph hoje devolve `{ ok: false, error: sendData.error.message }` cru, sem classificação.
+- Meta retorna **`error.code = 131047`** para "Re-engagement message" (janela de 24h expirada) — mensagem oficial: *"Message failed to send because more than 24 hours have passed since the customer last replied to this number."* Outros códigos correlatos:
+  - `131026` "Message Undeliverable"
+  - `131051` "Unsupported message type"
+  - `131056` (pair rate limit)
+- `ChatPanel.handleSend` (linha 377-381) e `handleSendMedia` (linha 464-465) só mostram `toast.warning('Falha ao enviar via WhatsApp: ' + res.error)`. Mensagem chega ao usuário em inglês e sem contexto.
+- A mensagem persistida (linha 356-359 e 437-442) **não é removida** quando o envio falha — isso cria a ilusão visual de que o cliente recebeu. Vamos corrigir junto, pois é a causa-raiz da percepção do usuário ("não retornou nenhuma mensagem dizendo que não enviou").
 
 ## Mudanças
 
-### 1. `src/pages/InboxPage.tsx`
-- No item da lista (dentro do `flex` que já tem o status badge), renderizar um `Badge` outline pequeno com ícone `Clock` e texto `formatDistanceToNow(last_customer_message_at, { locale: ptBR, addSuffix: true })`.
-- Se `last_customer_message_at` for nulo, não renderizar.
-- Reutilizar tokens semânticos (`bg-muted/40 text-muted-foreground border-border/50`), tamanho `text-[10px] rounded-full`, alinhado aos demais badges.
+### 1. `supabase/functions/wa-meta-send/index.ts`
+- Adicionar helper `classifyGraphError(data)` que mapeia `error.code` para `{ code, error }` em pt-BR:
+  - `131047` → `outside_24h_window`, "Cliente fora da janela de 24h. Envie um template para reativar a conversa."
+  - `131026` → `message_undeliverable`, "Mensagem não pôde ser entregue (número inválido ou sem WhatsApp)."
+  - `131051` → `unsupported_message_type`, "Tipo de mensagem não suportado pela Meta."
+  - Fallback: `meta_send_failed` com a mensagem original.
+- Aplicar nos dois pontos onde o Graph retorna erro de envio: `sendR.ok === false` em `text/template/media` (linha 443) e em `send_media_base64` (linha 373).
+- Manter `200 OK` no transporte HTTP (padrão do projeto para não derrubar o SDK).
 
-### 2. `src/pages/PipelinePage.tsx`
-- Em `loadOpps()` (linha ~464), após carregar `opportunities`, fazer uma segunda query:
-  ```ts
-  supabase.from('conversations')
-    .select('contact_id, last_customer_message_at')
-    .eq('tenant_id', tenant.id)
-    .in('contact_id', contactIds)
-    .not('last_customer_message_at', 'is', null)
-  ```
-  Reduzir para `Record<contactId, ISOString>` mantendo o maior valor.
-- Guardar em novo state `lastContactInteractionByContact`.
-- Propagar via prop `lastContactInteractionAt?: string | null` para `SortableOppCard`.
-- No card, abaixo do bloco de contato (linha ~192-197), adicionar uma linha discreta:
-  ```
-  <Clock className="h-3 w-3" /> <span>{formatDistanceToNow(...)}</span>
-  ```
-  Padrão `text-[11px] text-muted-foreground pl-5`, só renderiza quando há valor.
-- O realtime já existente em `conversations` (linha 638) dispara `loadOpps()`, então o badge atualiza automaticamente quando chega mensagem nova.
+### 2. `src/components/inbox/ChatPanel.tsx`
+- Em `handleSend`, ao receber `res.ok === false`:
+  - Se `res.code === 'outside_24h_window'`: `toast.error(res.error, { action: { label: 'Enviar template', onClick: () => setShowTemplate(true) }, duration: 8000 })`.
+  - Outros códigos: `toast.error(res.error ?? 'Falha ao enviar')`.
+  - Em qualquer falha: deletar a row persistida (`supabase.from('messages').delete().eq('id', savedMsg.id)`) e remover do `setMessages` local — assim o usuário vê claramente que não foi entregue.
+  - Restaurar o conteúdo no input (`setNewMsg(msgContent)`) para o usuário poder reaproveitar.
+- Mesma lógica em `handleSendMedia` (sem restaurar input, óbvio).
+- Não alterar o caminho de sucesso nem o de notas internas.
 
-### 3. Sem alterações em
-- Backend, webhooks, RLS, schema.
-- Lógica de inatividade (`alertStatus`), drag-and-drop, filtros, contadores, busca por nome/telefone.
-- `ChatPanel`, `OpportunityDetail`.
+### 3. Sem alterações
+- `OpportunityDetail`/CRM: reusa `ChatPanel`, então herda automaticamente.
+- `uazapi-proxy`: instância UAZAPI não tem janela de 24h da Meta — não tocar.
+- Banco, RLS, schema: nada.
 
 ## Garantias de não-regressão
-- Apenas leitura adicional + render condicional.
-- A query extra usa `.in('contact_id', contactIds)` com array possivelmente vazio — tratar com early-return para evitar request inútil.
-- Nenhuma prop existente alterada; novas props são opcionais.
-- Tokens semânticos preservados (sem cores hardcoded).
-- Sem mudanças no fluxo de envio/recebimento de mensagens.
+- Códigos novos são opcionais; consumidores existentes ignoram `res.code`.
+- Sucesso e fluxo de templates continuam idênticos.
+- Apenas mensagens com falha confirmada são removidas; sucesso e otimismo permanecem.
+- Toasts pt-BR alinhados ao restante do sistema (`src/lib/labels.ts` style).
 
-## Texto exibido (pt-BR)
-Usa `date-fns` com `ptBR` já importado nesses dois arquivos: ex. "há 3 minutos", "há 2 horas", "há 1 dia". Tooltip (`title`) com data/hora completa para precisão.
+## Texto final exibido
+> "Cliente fora da janela de 24h. Envie um template para reativar a conversa." [Enviar template]
