@@ -881,6 +881,24 @@ export default function FlowBuilderPage() {
                 );
               })()}
 
+              {editingNode.type === 'menu' && (
+                <MenuNodeEditor
+                  data={editingNode.data as any}
+                  onChange={(d) => setEditingNode({ ...editingNode, data: d as any })}
+                />
+              )}
+
+              {editingNode.type === 'subflow' && (
+                <SubflowNodeEditor
+                  tenantId={tenant?.id ?? null}
+                  currentFlowId={selectedFlow?.id ?? null}
+                  data={editingNode.data as any}
+                  onChange={(d) => setEditingNode({ ...editingNode, data: d as any })}
+                />
+              )}
+
+
+
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" size="sm" onClick={() => setNodeEditOpen(false)}>Cancelar</Button>
                 <Button size="sm" onClick={saveNodeEdit}>Salvar</Button>
