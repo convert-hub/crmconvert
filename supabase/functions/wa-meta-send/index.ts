@@ -374,6 +374,7 @@ serve(async (req) => {
 
       // injeta media_id no body para reuso do fluxo de envio abaixo
       body.media_id = upData.id;
+      (body as any)._uploaded_media_id = upData.id;
       // segue para o fluxo "Send message" abaixo
     }
 
@@ -451,6 +452,7 @@ serve(async (req) => {
     await markTokenValid();
 
     const providerMessageId = sendData?.messages?.[0]?.id ?? null;
+    const uploadedMediaId = (body as any)._uploaded_media_id ?? null;
 
     // Persist outbound message + reset inactivity (best-effort)
     // skip_persist=true quando o caller (ex: ChatPanel) já criou a row de messages localmente
@@ -458,6 +460,7 @@ serve(async (req) => {
       let persistContent: string | null = t === "text" ? (body.text ?? "") : (body.caption ?? null);
       let persistMediaType: string | null = t === "text" || t === "reaction" || t === "template" ? null : t;
       const persistMeta: Record<string, unknown> = { provider: "meta_cloud", raw: sendData };
+      if (uploadedMediaId) persistMeta.meta_media_id = uploadedMediaId;
 
       if (t === "template" && body.template) {
         persistMediaType = "TemplateMessage";
@@ -499,7 +502,7 @@ serve(async (req) => {
         .eq("id", conversation.id);
     }
 
-    return jsonResponse({ ok: true, provider_message_id: providerMessageId, raw: sendData });
+    return jsonResponse({ ok: true, provider_message_id: providerMessageId, meta_media_id: uploadedMediaId, raw: sendData });
   } catch (err: any) {
     console.error("wa-meta-send error:", err);
     return jsonResponse({ error: err.message || "Internal error" }, 500);
