@@ -6,11 +6,13 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { extractTemplateSlots, renderPreview } from '@/lib/metaTemplateVars';
 import { VariableInput, VariableTextarea } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+import MessageItemsEditor, { type ContentItem } from './MessageItemsEditor';
 
 interface MessageNodeData {
   label?: string;
-  mode?: 'text' | 'template';
+  mode?: 'text' | 'template' | 'items';
   content?: string;
+  items?: ContentItem[];
   templateInstanceId?: string;
   templateId?: string;
   templateName?: string;
