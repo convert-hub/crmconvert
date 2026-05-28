@@ -68,24 +68,38 @@ export default function MessageNodeEditor({ tenantId, data, onChange }: Props) {
         <Label className="text-xs">Tipo de mensagem</Label>
         <RadioGroup
           value={mode}
-          onValueChange={v => onChange({ ...data, mode: v as 'text' | 'template' })}
-          className="flex gap-4"
+          onValueChange={v => onChange({ ...data, mode: v as 'text' | 'template' | 'items' })}
+          className="flex flex-wrap gap-3"
         >
           <div className="flex items-center gap-1.5">
             <RadioGroupItem value="text" id="msg-mode-text" />
-            <Label htmlFor="msg-mode-text" className="text-xs font-normal cursor-pointer">Texto livre (24h)</Label>
+            <Label htmlFor="msg-mode-text" className="text-xs font-normal cursor-pointer">Texto livre</Label>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <RadioGroupItem value="items" id="msg-mode-items" />
+            <Label htmlFor="msg-mode-items" className="text-xs font-normal cursor-pointer">Conteúdo (vários itens)</Label>
           </div>
           <div className="flex items-center gap-1.5">
             <RadioGroupItem value="template" id="msg-mode-template" />
-            <Label htmlFor="msg-mode-template" className="text-xs font-normal cursor-pointer">Template aprovado (Meta)</Label>
+            <Label htmlFor="msg-mode-template" className="text-xs font-normal cursor-pointer">Template Meta</Label>
           </div>
         </RadioGroup>
         <p className="text-[11px] text-muted-foreground">
           {mode === 'text'
-            ? 'Mensagem livre — só envia se a janela 24h estiver aberta. Em conversas Meta fora da janela, o nó é ignorado.'
-            : 'Template aprovado pela Meta — funciona a qualquer momento em conversas de instâncias Meta. Em conversas UAZAPI, faz fallback para o texto livre.'}
+            ? 'Mensagem livre — só envia se a janela 24h estiver aberta.'
+            : mode === 'items'
+            ? 'Empilhe texto, mídia, atrasos e ações inline (ex.: desligar IA). Itens são processados na ordem.'
+            : 'Template aprovado pela Meta — funciona a qualquer momento em conversas Meta. Em UAZAPI, faz fallback para o texto livre.'}
         </p>
       </div>
+
+      {mode === 'items' && (
+        <MessageItemsEditor
+          tenantId={tenantId}
+          items={data.items ?? []}
+          onChange={(items) => onChange({ ...data, items })}
+        />
+      )}
 
       {mode === 'text' && (
         <div className="space-y-1.5">
