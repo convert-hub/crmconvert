@@ -464,7 +464,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       if (!res.ok) {
         toast.warning('Falha ao enviar mídia: ' + (res.error ?? 'erro desconhecido'));
       } else if (savedMsg?.id) {
-        const update: Record<string, any> = {};
+        const update: { provider_message_id?: string; provider_metadata?: any } = {};
         if (res.provider_message_id) update.provider_message_id = res.provider_message_id;
         if (res.meta_media_id) update.provider_metadata = { provider: 'meta_cloud', meta_media_id: res.meta_media_id };
         if (Object.keys(update).length) {
