@@ -24,7 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, HelpCircle, Shuffle, Maximize2, Minimize2, Folder, FolderPlus, FolderOpen, Check, Pencil, Loader2 } from 'lucide-react';
+import { Save, Plus, ArrowLeft, Trash2, MessageSquare, Clock, GitBranch, Zap, Play, HelpCircle, Shuffle, Maximize2, Minimize2, Folder, FolderPlus, FolderOpen, Check, Pencil, Loader2, List, GitMerge } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import PipelineStagePicker from '@/components/flow-builder/PipelineStagePicker';
@@ -45,6 +45,10 @@ import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builde
 import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 import ConditionCriteriaEditor from '@/components/flow-builder/ConditionCriteriaEditor';
 import ActionsListEditor from '@/components/flow-builder/ActionsListEditor';
+import MenuNode from '@/components/flow-builder/MenuNode';
+import MenuNodeEditor from '@/components/flow-builder/MenuNodeEditor';
+import SubflowNode from '@/components/flow-builder/SubflowNode';
+import SubflowNodeEditor from '@/components/flow-builder/SubflowNodeEditor';
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -54,6 +58,8 @@ const nodeTypes = {
   action: ActionNode,
   question: QuestionNode,
   randomizer: RandomizerNode,
+  menu: MenuNode,
+  subflow: SubflowNode,
 };
 
 const edgeTypes = { deletable: DeletableEdge };
@@ -61,11 +67,13 @@ const edgeTypes = { deletable: DeletableEdge };
 const NODE_PALETTE = [
   { type: 'trigger', label: 'Gatilho', icon: Play, color: 'text-green-500' },
   { type: 'message', label: 'Mensagem', icon: MessageSquare, color: 'text-blue-500' },
+  { type: 'menu', label: 'Menu', icon: List, color: 'text-indigo-500' },
   { type: 'condition', label: 'Condição', icon: GitBranch, color: 'text-amber-500' },
   { type: 'delay', label: 'Atraso', icon: Clock, color: 'text-purple-500' },
   { type: 'action', label: 'Ação', icon: Zap, color: 'text-red-500' },
   { type: 'question', label: 'Pergunta', icon: HelpCircle, color: 'text-teal-500' },
   { type: 'randomizer', label: 'Randomizador', icon: Shuffle, color: 'text-cyan-500' },
+  { type: 'subflow', label: 'Conectar fluxo', icon: GitMerge, color: 'text-fuchsia-500' },
 ];
 
 interface FlowRecord {
@@ -270,6 +278,11 @@ export default function FlowBuilderPage() {
     if (type === 'action') data = { ...data, actionType: 'add_tag', config: {} };
     if (type === 'question') data = { ...data, question: '', saveField: 'name', customFieldKey: '', customFieldLabel: '', validationType: 'none' };
     if (type === 'randomizer') data = { ...data, mode: 'random', options: [{ label: 'Opção A', weight: 50 }, { label: 'Opção B', weight: 50 }] };
+    if (type === 'menu') data = { ...data, question: '', options: [
+      { id: `o${Date.now().toString(36).slice(-5)}a`, label: 'Opção 1', value: '' },
+      { id: `o${Date.now().toString(36).slice(-5)}b`, label: 'Opção 2', value: '' },
+    ], maxRetries: 3, invalidText: 'Desculpe, não entendi. Por favor, escolha uma das opções.' };
+    if (type === 'subflow') data = { ...data, targetFlowId: '', targetFlowName: '', mode: 'call' };
 
     const newNode: Node = { id, type, position, data };
     setNodes((nds) => [...nds, newNode]);
