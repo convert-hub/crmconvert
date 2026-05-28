@@ -47,6 +47,7 @@ export function clearProviderCache(conversationId?: string) {
 export interface SendResult {
   ok: boolean;
   provider_message_id?: string | null;
+  meta_media_id?: string | null;
   error?: string;
 }
 
