@@ -119,7 +119,7 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
 }
 
 // ─── Sortable Opp Card ───
-function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore, canDelete }: {
+function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unreadCount, customFieldDefs, engagementScore, canDelete, lastContactInteractionAt }: {
   opp: Opportunity & { contact?: Contact };
   onClick: () => void;
   onWhatsApp: (e: React.MouseEvent) => void;
@@ -129,6 +129,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
   customFieldDefs: CustomFieldDef[];
   engagementScore: number;
   canDelete: boolean;
+  lastContactInteractionAt?: string | null;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: opp.id });
   const style = {
@@ -209,9 +210,12 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
             </div>
           )}
           <EngagementBadge score={engagementScore} />
-          <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+          <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}
+            title={lastContactInteractionAt ? `Última msg do contato: ${format(new Date(lastContactInteractionAt), "dd/MM/yyyy HH:mm")}` : `Atualizado: ${format(new Date(opp.updated_at), "dd/MM/yyyy HH:mm")}`}>
             <Clock className="h-3 w-3" />
-            {formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
+            {lastContactInteractionAt
+              ? formatDistanceToNow(new Date(lastContactInteractionAt), { locale: ptBR, addSuffix: true })
+              : formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
           </div>
         </div>
         {opp.contact?.tags && opp.contact.tags.length > 0 && (
@@ -336,6 +340,7 @@ export default function PipelinePage() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [members, setMembers] = useState<(TenantMembership & { profile?: Profile })[]>([]);
   const [msgCountsByContact, setMsgCountsByContact] = useState<Record<string, number>>({});
+  const [lastContactInteractionByContact, setLastContactInteractionByContact] = useState<Record<string, string>>({});
   const [creatingPipeline, setCreatingPipeline] = useState(false);
   const [deleteOppId, setDeleteOppId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -464,7 +469,26 @@ export default function PipelinePage() {
     supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline)
       .order('position', { ascending: true })
       .order('updated_at', { ascending: false })
-      .then(({ data }) => setOpportunities((data as unknown as (Opportunity & { contact?: Contact })[]) ?? []));
+      .then(async ({ data }) => {
+        const opps = (data as unknown as (Opportunity & { contact?: Contact })[]) ?? [];
+        setOpportunities(opps);
+        const contactIds = [...new Set(opps.map(o => o.contact_id).filter(Boolean) as string[])];
+        if (contactIds.length === 0) { setLastContactInteractionByContact({}); return; }
+        const { data: convs } = await supabase.from('conversations')
+          .select('contact_id, last_customer_message_at')
+          .eq('tenant_id', tenant.id)
+          .in('contact_id', contactIds)
+          .not('last_customer_message_at', 'is', null);
+        const map: Record<string, string> = {};
+        for (const c of (convs ?? []) as { contact_id: string; last_customer_message_at: string }[]) {
+          if (!c.contact_id || !c.last_customer_message_at) continue;
+          const prev = map[c.contact_id];
+          if (!prev || new Date(c.last_customer_message_at) > new Date(prev)) {
+            map[c.contact_id] = c.last_customer_message_at;
+          }
+        }
+        setLastContactInteractionByContact(map);
+      });
   }, [selectedPipeline, tenant]);
 
   // Load message counts per contact for engagement score
@@ -894,6 +918,7 @@ export default function PipelinePage() {
                       unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
                       customFieldDefs={customFieldDefs}
                       canDelete={canDeleteOpportunity}
+                      lastContactInteractionAt={opp.contact_id ? lastContactInteractionByContact[opp.contact_id] : null}
                       engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
                   ))}
                 </SortableContext>

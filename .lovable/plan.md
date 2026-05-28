@@ -1,56 +1,54 @@
-## Diagnóstico forense
+## Objetivo
 
-O envio do template funcionou, mas a resposta não chegou ao app porque a instância Meta usada no envio não está gerando eventos de webhook para o nosso endpoint.
+Adicionar um badge discreto que mostra há quanto tempo o **contato** (apenas mensagens `direction = inbound`) enviou a última mensagem. Deve aparecer em:
 
-Evidências encontradas:
+1. Cada item da lista de conversas no Inbox (`src/pages/InboxPage.tsx`).
+2. Cada card de oportunidade no Pipeline (`src/pages/PipelinePage.tsx`).
 
-- O template foi salvo e enviado pela instância **PAIPE WABA**:
-  - `whatsapp_instance_id`: `bf86edc0-8f29-4974-a790-b865aaa5bd9b`
-  - `meta_phone_number_id`: `1083594648176809`
-  - conversa: `efae385a-6457-4b7d-b48d-6ea3ee4f5929`
-  - contato: Bruno Almeida
-- Essa conversa tem **1 outbound** e **0 inbound** depois do template.
-- Na tabela `webhook_events`, a instância **Comercial SOS** recebe eventos normalmente:
-  - `meta_phone_number_id`: `1115147951682906`
-  - 66 eventos nas últimas 24h
-- A instância **PAIPE WABA** não tem nenhum evento registrado:
-  - `meta_phone_number_id`: `1083594648176809`
-  - 0 eventos nas últimas 24h
-  - nenhum último evento encontrado
+## Fonte de dados (sem migração)
 
-Conclusão: o problema não é a tela do Inbox nem o salvamento da mensagem. O app simplesmente não recebeu o POST da Meta para essa instância PAIPE. Isso normalmente acontece quando o webhook do App Meta/WABA não está configurado ou inscrito para esse número/WABA, ou quando está apontando para outro endpoint/app.
+A coluna `conversations.last_customer_message_at` já existe e é mantida pelo backend a cada mensagem inbound (webhook-meta / webhook-uazapi). Usaremos ela como verdade — sem novas queries em `messages`, sem migração de schema.
 
-## Plano de correção
+- **Inbox**: a query atual de `conversations` já retorna o campo. Basta consumir.
+- **Pipeline**: hoje carrega `opportunities` + `contact`, mas não puxa `last_customer_message_at`. Vamos adicionar um único `select` agregado em `conversations` (filtrado por `tenant_id` e `contact_id IN (...)`) e montar um mapa `contactId → maxLastCustomerAt` para enriquecer cada card.
 
-1. **Adicionar diagnóstico visível na configuração Meta**
-   - Mostrar, por conexão Meta, a URL do webhook e o token de verificação já usados pelo app.
-   - Mostrar o último evento recebido para aquele `Phone Number ID`.
-   - Mostrar um alerta quando uma conexão Meta válida para envio nunca recebeu webhook.
+## Mudanças
 
-2. **Melhorar logs do `webhook-meta`**
-   - Registrar de forma explícita quando chega evento para um `phone_number_id` sem instância correspondente.
-   - Registrar quando o evento é recebido, mas não tem `messages`.
-   - Registrar falhas de insert em `messages`, `contacts` ou `conversations`, hoje algumas operações são best-effort/silenciosas.
+### 1. `src/pages/InboxPage.tsx`
+- No item da lista (dentro do `flex` que já tem o status badge), renderizar um `Badge` outline pequeno com ícone `Clock` e texto `formatDistanceToNow(last_customer_message_at, { locale: ptBR, addSuffix: true })`.
+- Se `last_customer_message_at` for nulo, não renderizar.
+- Reutilizar tokens semânticos (`bg-muted/40 text-muted-foreground border-border/50`), tamanho `text-[10px] rounded-full`, alinhado aos demais badges.
 
-3. **Hardening do recebimento Meta**
-   - Tornar o insert da mensagem inbound idempotente por `provider_message_id`, para evitar duplicidade se a Meta reenviar eventos.
-   - Garantir que, ao receber resposta de um contato que já tem conversa antiga, a conversa correta vinculada à instância Meta seja atualizada.
+### 2. `src/pages/PipelinePage.tsx`
+- Em `loadOpps()` (linha ~464), após carregar `opportunities`, fazer uma segunda query:
+  ```ts
+  supabase.from('conversations')
+    .select('contact_id, last_customer_message_at')
+    .eq('tenant_id', tenant.id)
+    .in('contact_id', contactIds)
+    .not('last_customer_message_at', 'is', null)
+  ```
+  Reduzir para `Record<contactId, ISOString>` mantendo o maior valor.
+- Guardar em novo state `lastContactInteractionByContact`.
+- Propagar via prop `lastContactInteractionAt?: string | null` para `SortableOppCard`.
+- No card, abaixo do bloco de contato (linha ~192-197), adicionar uma linha discreta:
+  ```
+  <Clock className="h-3 w-3" /> <span>{formatDistanceToNow(...)}</span>
+  ```
+  Padrão `text-[11px] text-muted-foreground pl-5`, só renderiza quando há valor.
+- O realtime já existente em `conversations` (linha 638) dispara `loadOpps()`, então o badge atualiza automaticamente quando chega mensagem nova.
 
-4. **Orientação operacional pós-ajuste**
-   - Revalidar no painel da Meta se o webhook está configurado para:
-     - URL: `https://zhywwrhzaqfcjcwywkwf.supabase.co/functions/v1/webhook-meta`
-     - Token de verificação da conexão PAIPE WABA
-     - Campo/evento `messages` inscrito
-   - Depois disso, enviar uma nova resposta do WhatsApp e confirmar se aparece em `webhook_events` e no Inbox.
+### 3. Sem alterações em
+- Backend, webhooks, RLS, schema.
+- Lógica de inatividade (`alertStatus`), drag-and-drop, filtros, contadores, busca por nome/telefone.
+- `ChatPanel`, `OpportunityDetail`.
 
-## Arquivos a alterar
+## Garantias de não-regressão
+- Apenas leitura adicional + render condicional.
+- A query extra usa `.in('contact_id', contactIds)` com array possivelmente vazio — tratar com early-return para evitar request inútil.
+- Nenhuma prop existente alterada; novas props são opcionais.
+- Tokens semânticos preservados (sem cores hardcoded).
+- Sem mudanças no fluxo de envio/recebimento de mensagens.
 
-- `supabase/functions/webhook-meta/index.ts`
-- `src/components/settings/MetaCloudConnectionsCard.tsx`
-
-## Sem impacto esperado
-
-- Não muda o envio de templates.
-- Não muda UAZAPI.
-- Não altera a estrutura principal do CRM.
-- A correção é isolada ao diagnóstico e robustez do recebimento pela API oficial da Meta.
+## Texto exibido (pt-BR)
+Usa `date-fns` com `ptBR` já importado nesses dois arquivos: ex. "há 3 minutos", "há 2 horas", "há 1 dia". Tooltip (`title`) com data/hora completa para precisão.
