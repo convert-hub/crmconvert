@@ -84,9 +84,18 @@ serve(async (req) => {
       .maybeSingle();
 
     if (!instance) {
-      console.warn("webhook-meta: instance not found for phone_number_id", phoneNumberId);
-      return jsonOk({ ok: true, ignored: "instance not found" });
+      // Salva o evento órfão para diagnóstico (sem tenant_id válido não conseguimos — usamos o primeiro tenant com Meta ativo apenas para registrar)
+      console.warn("[webhook-meta] orphan_event phone_number_id=", phoneNumberId, "field=", change?.field);
+      return jsonOk({ ok: true, ignored: "instance_not_found", phone_number_id: phoneNumberId });
     }
+    console.log("[webhook-meta] event_received", {
+      instance_id: instance.id,
+      tenant_id: instance.tenant_id,
+      phone_number_id: phoneNumberId,
+      field: change?.field,
+      messages: (value?.messages || []).length,
+      statuses: (value?.statuses || []).length,
+    });
 
     // ── Validate HMAC signature ─────────────────────────────
     if (instance.meta_app_secret_encrypted) {
