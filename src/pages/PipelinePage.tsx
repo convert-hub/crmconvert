@@ -210,9 +210,12 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
             </div>
           )}
           <EngagementBadge score={engagementScore} />
-          <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+          <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}
+            title={lastContactInteractionAt ? `Última msg do contato: ${format(new Date(lastContactInteractionAt), "dd/MM/yyyy HH:mm")}` : `Atualizado: ${format(new Date(opp.updated_at), "dd/MM/yyyy HH:mm")}`}>
             <Clock className="h-3 w-3" />
-            {formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
+            {lastContactInteractionAt
+              ? formatDistanceToNow(new Date(lastContactInteractionAt), { locale: ptBR, addSuffix: true })
+              : formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
           </div>
         </div>
         {opp.contact?.tags && opp.contact.tags.length > 0 && (
