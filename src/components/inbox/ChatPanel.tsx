@@ -507,6 +507,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       else if (file.type.startsWith('video/')) mediaType = 'video';
       else if (file.type.includes('pdf') || file.type.includes('document')) mediaType = 'document';
 
+      const extFromName = file.name.split('.').pop()?.toLowerCase();
+      const audioExt = extFromName && ['ogg', 'mp3', 'm4a', 'wav', 'webm', 'flac'].includes(extFromName)
+        ? extFromName
+        : file.type.includes('mpeg') ? 'mp3' : file.type.includes('mp4') ? 'm4a' : file.type.includes('wav') ? 'wav' : file.type.includes('webm') ? 'webm' : 'ogg';
+
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: conversationId, direction: 'outbound',
         content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`,
@@ -514,11 +519,26 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         media_type: file.type.startsWith('audio/') ? 'AudioMessage' : file.type.startsWith('image/') ? 'ImageMessage' : file.type.startsWith('video/') ? 'VideoMessage' : 'DocumentMessage',
       }).select('id').single();
 
+      let storagePath: string | null = null;
+      if (mediaType === 'audio' && savedMsg?.id) {
+        const path = `${tenant.id}/${savedMsg.id}.${audioExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from('whatsapp-media')
+          .upload(path, file, { contentType: file.type || 'audio/ogg', upsert: true });
+        if (!uploadError) {
+          storagePath = path;
+          await supabase.from('messages').update({ storage_path: path }).eq('id', savedMsg.id);
+        } else {
+          console.warn('Outbound audio persist failed:', uploadError.message);
+        }
+      }
+
       const optimisticMsg: Message = {
         id: savedMsg?.id || crypto.randomUUID(), tenant_id: tenant.id, conversation_id: conversationId,
         direction: 'outbound', content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : 'Mídia'}]`,
         sender_membership_id: membership.id, created_at: new Date().toISOString(), is_ai_generated: false,
         media_type: file.type.startsWith('audio/') ? 'AudioMessage' : 'ImageMessage', media_url: null,
+        storage_path: storagePath,
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
