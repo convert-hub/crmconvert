@@ -76,6 +76,21 @@ export default function ActionConfigFields({ tenantId, type, config, onChange }:
         <TagPickerSelect value={config?.tag ?? ''} onChange={(v) => patch({ tag: v })} />
       )}
 
+      {type === 'assign_agent' && (
+        <div className="space-y-2">
+          <Select value={config?.mode || 'auto'} onValueChange={(v) => patch({ mode: v, membership_id: v === 'auto' ? undefined : config?.membership_id })}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Automático (menor carga)</SelectItem>
+              <SelectItem value="specific">Atendente específico</SelectItem>
+            </SelectContent>
+          </Select>
+          {config?.mode === 'specific' && (
+            <AgentPicker tenantId={tenantId} value={config?.membership_id} onChange={(v) => patch({ membership_id: v })} />
+          )}
+        </div>
+      )}
+
       {type === 'send_whatsapp' && (
         <Textarea
           value={config?.message ?? ''}
