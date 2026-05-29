@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getTenantBranding } from '@/hooks/useTenantBranding';
-import defaultLogo from '@/assets/logo.png';
+const defaultLogo = 'https://zhywwrhzaqfcjcwywkwf.supabase.co/storage/v1/object/public/tenant-logos/logo-crm.png';
 import { supabase } from '@/integrations/supabase/client';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
