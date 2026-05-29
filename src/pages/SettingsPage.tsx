@@ -421,6 +421,12 @@ export default function SettingsPage() {
 
   const updateMemberRole = async (memberId: string, newRole: string) => { await supabase.from('tenant_memberships').update({ role: newRole as any }).eq('id', memberId); toast.success('Papel atualizado'); loadAll(); };
   const removeMember = async (memberId: string) => { await supabase.from('tenant_memberships').update({ is_active: false }).eq('id', memberId); toast.success('Membro desativado'); loadAll(); };
+  const updateMemberViewAll = async (memberId: string, value: boolean) => {
+    const { error } = await supabase.from('tenant_memberships').update({ can_view_all: value } as any).eq('id', memberId);
+    if (error) { toast.error(error.message); return; }
+    setMembers(prev => prev.map(m => m.id === memberId ? { ...m, can_view_all: value } as any : m));
+    toast.success(value ? 'Vê todas as conversas' : 'Vê apenas as próprias');
+  };
 
   const handleInviteMember = async () => {
     if (!inviteEmail.trim() || !inviteName.trim() || !tenant) return;
