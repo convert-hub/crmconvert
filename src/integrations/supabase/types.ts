@@ -1411,6 +1411,7 @@ export type Database = {
           provider_message_id: string | null
           provider_metadata: Json | null
           sender_membership_id: string | null
+          storage_path: string | null
           tenant_id: string
         }
         Insert: {
@@ -1426,6 +1427,7 @@ export type Database = {
           provider_message_id?: string | null
           provider_metadata?: Json | null
           sender_membership_id?: string | null
+          storage_path?: string | null
           tenant_id: string
         }
         Update: {
@@ -1441,6 +1443,7 @@ export type Database = {
           provider_message_id?: string | null
           provider_metadata?: Json | null
           sender_membership_id?: string | null
+          storage_path?: string | null
           tenant_id?: string
         }
         Relationships: [

@@ -205,8 +205,29 @@ serve(async (req) => {
 
     console.log("transcribe-audio: transcription result:", transcription.substring(0, 100));
 
-    // 6. Save transcription in provider_metadata
-    if (message_id && transcription) {
+    // 6. Persist audio to Storage so it survives provider TTL (cross-device availability)
+    let storagePath: string | null = null;
+    if (message_id && audioBlob && audioBlob.size > 0) {
+      try {
+        const path = `${tenant_id}/${message_id}.${fileExt}`;
+        const { error: upErr } = await supabase.storage
+          .from("whatsapp-media")
+          .upload(path, audioBlob, {
+            contentType: baseMime || `audio/${fileExt}`,
+            upsert: true,
+          });
+        if (upErr) {
+          console.warn("transcribe-audio: storage upload failed:", upErr.message);
+        } else {
+          storagePath = path;
+        }
+      } catch (e) {
+        console.warn("transcribe-audio: storage upload error:", (e as Error).message);
+      }
+    }
+
+    // 7. Persist transcription + storage_path
+    if (message_id) {
       const { data: msgRow } = await supabase
         .from("messages")
         .select("provider_metadata")
@@ -214,12 +235,17 @@ serve(async (req) => {
         .single();
 
       const currentMetadata = (msgRow?.provider_metadata as Record<string, unknown>) || {};
-      await supabase.from("messages").update({
-        provider_metadata: { ...currentMetadata, audio_transcription: transcription },
-      }).eq("id", message_id);
+      const update: Record<string, unknown> = {};
+      if (transcription) {
+        update.provider_metadata = { ...currentMetadata, audio_transcription: transcription };
+      }
+      if (storagePath) (update as { storage_path?: string }).storage_path = storagePath;
+      if (Object.keys(update).length > 0) {
+        await supabase.from("messages").update(update).eq("id", message_id);
+      }
     }
 
-    return new Response(JSON.stringify({ transcription }), {
+    return new Response(JSON.stringify({ transcription, storage_path: storagePath }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 

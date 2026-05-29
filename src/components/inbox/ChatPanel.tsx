@@ -90,8 +90,9 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   };
 
   const loadMedia = async () => {
-    if (!providerMsgId || loading) return;
-    const cached = mediaCache.get(providerMsgId);
+    if (loading) return;
+    const cacheKey = providerMsgId || (msg as any).id;
+    const cached = mediaCache.get(cacheKey);
     if (cached) {
       setMediaData(cached);
       if (isDocument && cached !== 'expired') downloadDocument(cached);
@@ -100,6 +101,28 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
 
     setLoading(true);
     try {
+      const storagePath = (msg as any).storage_path as string | null;
+
+      // 1. Prefer persisted Storage (works forever, any device)
+      if (storagePath) {
+        const { data: signed } = await supabase.storage
+          .from('whatsapp-media')
+          .createSignedUrl(storagePath, 60 * 60 * 6); // 6h
+        if (signed?.signedUrl) {
+          mediaCache.set(cacheKey, signed.signedUrl);
+          setMediaData(signed.signedUrl);
+          if (isDocument) downloadDocument(signed.signedUrl);
+          return;
+        }
+      }
+
+      if (!providerMsgId) {
+        mediaCache.set(cacheKey, 'expired');
+        setMediaData('expired');
+        return;
+      }
+
+      // 2. Fallback: provider (UAZAPI/Meta) — may already be expired
       const res = await downloadMedia({
         conversationId,
         tenantId,
@@ -109,7 +132,7 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       });
 
       if (!res.ok) {
-        mediaCache.set(providerMsgId, 'expired');
+        mediaCache.set(cacheKey, 'expired');
         setMediaData('expired');
         return;
       }
@@ -118,27 +141,47 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       if (res.base64) {
         const mime = res.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
         result = `data:${mime};base64,${res.base64}`;
+
+        // 3. Self-healing: persist audio so the next device/load doesn't need provider
+        if (isAudio && (msg as any).id && !storagePath) {
+          try {
+            const ext = mime.includes('mpeg') ? 'mp3' : mime.includes('mp4') ? 'm4a' : mime.includes('wav') ? 'wav' : 'ogg';
+            const path = `${tenantId}/${(msg as any).id}.${ext}`;
+            const bin = atob(res.base64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const { error: upErr } = await supabase.storage
+              .from('whatsapp-media')
+              .upload(path, new Blob([bytes], { type: mime }), { contentType: mime, upsert: true });
+            if (!upErr) {
+              await supabase.from('messages').update({ storage_path: path }).eq('id', (msg as any).id);
+            }
+          } catch (e) {
+            console.warn('Opportunistic audio persist failed:', (e as Error).message);
+          }
+        }
       } else if (res.url) {
         result = res.url;
       }
 
       if (result) {
-        mediaCache.set(providerMsgId, result);
+        mediaCache.set(cacheKey, result);
         setMediaData(result);
         if (isDocument) downloadDocument(result);
         return;
       }
 
-      mediaCache.set(providerMsgId, 'expired');
+      mediaCache.set(cacheKey, 'expired');
       setMediaData('expired');
     } catch (e: any) {
       console.warn('Media load failed (non-critical):', e?.message || e);
-      mediaCache.set(providerMsgId, 'expired');
+      mediaCache.set(cacheKey, 'expired');
       setMediaData('expired');
     } finally {
       setLoading(false);
     }
   };
+
 
   useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId]);
 
