@@ -173,7 +173,10 @@ export interface Message {
   direction: MessageDirection;
   content: string | null;
   media_url: string | null;
+  storage_path?: string | null;
   media_type: string | null;
+  provider_message_id?: string | null;
+  provider_metadata?: Record<string, unknown> | null;
   sender_membership_id: string | null;
   is_ai_generated: boolean;
   created_at: string;
