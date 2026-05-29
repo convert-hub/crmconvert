@@ -91,18 +91,10 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
 
   const loadMedia = async () => {
     if (loading) return;
-    const cacheKey = providerMsgId || (msg as any).id;
-    const cached = mediaCache.get(cacheKey);
-    if (cached) {
-      setMediaData(cached);
-      if (isDocument && cached !== 'expired') downloadDocument(cached);
-      return;
-    }
-
+    const storagePath = (msg as any).storage_path as string | null;
+    const cacheKey = storagePath ? `storage:${storagePath}` : providerMsgId || (msg as any).id;
     setLoading(true);
     try {
-      const storagePath = (msg as any).storage_path as string | null;
-
       // 1. Prefer persisted Storage (works forever, any device)
       if (storagePath) {
         const { data: signed } = await supabase.storage
@@ -114,6 +106,13 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
           if (isDocument) downloadDocument(signed.signedUrl);
           return;
         }
+      }
+
+      const cached = mediaCache.get(cacheKey);
+      if (cached) {
+        setMediaData(cached);
+        if (isDocument && cached !== 'expired') downloadDocument(cached);
+        return;
       }
 
       if (!providerMsgId) {
@@ -183,7 +182,7 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   };
 
 
-  useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId]);
+  useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId, (msg as any).storage_path]);
 
   if (isAudio) {
     return (
