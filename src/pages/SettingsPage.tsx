@@ -882,9 +882,12 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <Table>
-                <TableHeader><TableRow className="hover:bg-transparent"><TableHead>Nome</TableHead><TableHead>Papel</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow className="hover:bg-transparent"><TableHead>Nome</TableHead><TableHead>Papel</TableHead><TableHead>Escopo</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
                 <TableBody>
-                  {members.map(m => (
+                  {members.map(m => {
+                    const isPrivileged = m.role === 'admin' || m.role === 'manager';
+                    const viewAll = isPrivileged || (m as any).can_view_all === true;
+                    return (
                     <TableRow key={m.id}>
                       <TableCell className="font-medium text-foreground">{m.profile?.full_name ?? 'Sem nome'}</TableCell>
                       <TableCell>
@@ -898,10 +901,23 @@ export default function SettingsPage() {
                           </Select>
                         ) : <Badge variant="outline" className="capitalize rounded-full">{m.role}</Badge>}
                       </TableCell>
+                      <TableCell>
+                        {isPrivileged ? (
+                          <span className="text-xs text-muted-foreground">Todas (papel)</span>
+                        ) : isAdmin && m.role === 'attendant' ? (
+                          <div className="flex items-center gap-2">
+                            <Switch checked={viewAll} onCheckedChange={(v) => updateMemberViewAll(m.id, v)} />
+                            <span className="text-xs text-muted-foreground">{viewAll ? 'Todas' : 'Próprias'}</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{viewAll ? 'Todas' : 'Próprias'}</span>
+                        )}
+                      </TableCell>
                       <TableCell><Badge variant={m.is_active ? 'default' : 'secondary'} className="rounded-full">{m.is_active ? 'Ativo' : 'Inativo'}</Badge></TableCell>
                       <TableCell>{isAdmin && m.is_active && <Button variant="ghost" size="sm" className="rounded-lg" onClick={() => removeMember(m.id)}>Desativar</Button>}</TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
