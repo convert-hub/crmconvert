@@ -91,18 +91,10 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
 
   const loadMedia = async () => {
     if (loading) return;
-    const cacheKey = providerMsgId || (msg as any).id;
-    const cached = mediaCache.get(cacheKey);
-    if (cached) {
-      setMediaData(cached);
-      if (isDocument && cached !== 'expired') downloadDocument(cached);
-      return;
-    }
-
+    const storagePath = (msg as any).storage_path as string | null;
+    const cacheKey = storagePath ? `storage:${storagePath}` : providerMsgId || (msg as any).id;
     setLoading(true);
     try {
-      const storagePath = (msg as any).storage_path as string | null;
-
       // 1. Prefer persisted Storage (works forever, any device)
       if (storagePath) {
         const { data: signed } = await supabase.storage
@@ -114,6 +106,13 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
           if (isDocument) downloadDocument(signed.signedUrl);
           return;
         }
+      }
+
+      const cached = mediaCache.get(cacheKey);
+      if (cached) {
+        setMediaData(cached);
+        if (isDocument && cached !== 'expired') downloadDocument(cached);
+        return;
       }
 
       if (!providerMsgId) {
@@ -183,7 +182,7 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   };
 
 
-  useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId]);
+  useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId, (msg as any).storage_path]);
 
   if (isAudio) {
     return (
@@ -508,6 +507,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       else if (file.type.startsWith('video/')) mediaType = 'video';
       else if (file.type.includes('pdf') || file.type.includes('document')) mediaType = 'document';
 
+      const extFromName = file.name.split('.').pop()?.toLowerCase();
+      const audioExt = extFromName && ['ogg', 'mp3', 'm4a', 'wav', 'webm', 'flac'].includes(extFromName)
+        ? extFromName
+        : file.type.includes('mpeg') ? 'mp3' : file.type.includes('mp4') ? 'm4a' : file.type.includes('wav') ? 'wav' : file.type.includes('webm') ? 'webm' : 'ogg';
+
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: conversationId, direction: 'outbound',
         content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`,
@@ -515,11 +519,26 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         media_type: file.type.startsWith('audio/') ? 'AudioMessage' : file.type.startsWith('image/') ? 'ImageMessage' : file.type.startsWith('video/') ? 'VideoMessage' : 'DocumentMessage',
       }).select('id').single();
 
+      let storagePath: string | null = null;
+      if (mediaType === 'audio' && savedMsg?.id) {
+        const path = `${tenant.id}/${savedMsg.id}.${audioExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from('whatsapp-media')
+          .upload(path, file, { contentType: file.type || 'audio/ogg', upsert: true });
+        if (!uploadError) {
+          storagePath = path;
+          await supabase.from('messages').update({ storage_path: path }).eq('id', savedMsg.id);
+        } else {
+          console.warn('Outbound audio persist failed:', uploadError.message);
+        }
+      }
+
       const optimisticMsg: Message = {
         id: savedMsg?.id || crypto.randomUUID(), tenant_id: tenant.id, conversation_id: conversationId,
         direction: 'outbound', content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : 'Mídia'}]`,
         sender_membership_id: membership.id, created_at: new Date().toISOString(), is_ai_generated: false,
         media_type: file.type.startsWith('audio/') ? 'AudioMessage' : 'ImageMessage', media_url: null,
+        storage_path: storagePath,
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
