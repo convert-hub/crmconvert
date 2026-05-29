@@ -2076,6 +2076,7 @@ export type Database = {
       }
       tenant_memberships: {
         Row: {
+          can_view_all: boolean
           created_at: string
           id: string
           invited_by: string | null
@@ -2086,6 +2087,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          can_view_all?: boolean
           created_at?: string
           id?: string
           invited_by?: string | null
@@ -2096,6 +2098,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          can_view_all?: boolean
           created_at?: string
           id?: string
           invited_by?: string | null
@@ -2487,6 +2490,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      can_view_all_in_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       claim_campaign_recipients: {
         Args: { _campaign_id: string; _limit: number }
         Returns: {

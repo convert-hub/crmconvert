@@ -1,31 +1,60 @@
-## Problema
 
-O bloco de Ação **"Atribuir atendente"** hoje sempre faz round-robin automático (rota para o membro com menor workload), sem dar ao usuário a opção de escolher um atendente específico. A imagem confirma: o campo só mostra o tipo da ação, sem picker.
+## Objetivo
 
-## Solução
+Hoje atendentes só veem conversas atribuídas a eles ou sem dono (Inbox) e oportunidades pelo mesmo critério (Pipeline, via RLS). Admin/Manager veem tudo. A proposta é tornar isso configurável **por atendente**, permitindo que admin marque atendentes específicos como "podem ver tudo".
 
-Adicionar configuração ao tipo `assign_agent` com dois modos:
+## Mudanças
 
-1. **Automático (carga de trabalho)** — comportamento atual (round-robin via `get_member_workload`). Mantido como padrão para não quebrar fluxos existentes.
-2. **Atendente específico** — usuário escolhe um membro do tenant (admin/manager/attendant ativo). O worker grava `assigned_to = membership_id` direto.
+### 1. Banco (migração)
+- Adicionar coluna `can_view_all` (boolean, default `false`) em `tenant_memberships`.
+- Criar função `can_view_all_conversations(_tenant_id uuid)` (SECURITY DEFINER) que retorna `true` se o usuário for admin/manager OU se o membership ativo dele no tenant tiver `can_view_all = true`.
+- Atualizar a policy `Members view opportunities` para usar essa função no lugar do check atual de role/assigned_to.
+- (Conversations já permite ver tudo via RLS; o filtro hoje é client-side em `InboxPage`. Não precisa mexer na RLS.)
 
-## Alterações
+### 2. UI – Configurações de equipe
+- Em `SettingsPage` (aba Membros/Equipe — onde a lista de `tenant_memberships` já aparece), adicionar um switch "Ver todas as conversas" para cada membro com role `attendant`. Admin/Manager mostra como "Sempre" desabilitado.
+- Somente admin pode alterar.
 
-**Frontend — `src/components/flow-builder/ActionConfigFields.tsx`**
-- Quando `type === 'assign_agent'`, renderizar:
-  - `Select` "Modo": Automático / Atendente específico
-  - Se "específico": `Select` carregando membros ativos do tenant (`memberships` join `profiles`, filtrando pelo `tenantId` recebido por prop)
-- Persistir em `config`: `{ mode: 'auto' | 'specific', membership_id?: string }`
+### 3. Frontend – aplicar permissão
+- `InboxPage.tsx`: trocar o filtro `assigned_to.is.null,assigned_to.eq.X` por: se `role` é admin/manager OU `membership.can_view_all`, não filtrar; caso contrário, manter filtro atual.
+- `PipelinePage` / listagens de oportunidades: já dependem da RLS, então passam a respeitar o flag automaticamente após a migração.
+- `AuthContext`: incluir `can_view_all` no objeto `membership` carregado.
 
-**Worker — `worker/index.js` (case `assign_agent`, ~linha 1071)**
-- Se `config.mode === 'specific'` e `config.membership_id`: validar que pertence ao `tenant_id` do fluxo e está ativo; se válido, `update assigned_to = config.membership_id`.
-- Caso contrário (auto ou inválido): manter fluxo round-robin atual como fallback.
+### 4. Fora de escopo
+- Não muda fluxo de atribuição automática (round-robin) nem o nó "assign_agent" do flow builder.
+- Não cria papel novo; é só um flag por membership.
 
-**Compatibilidade**
-- Configs antigas sem `mode` são tratadas como `auto` → zero regressão.
-- Worker exige rebuild/redeploy para a opção "específico" entrar em produção (regra documentada em `mem://tech/restricoes`). UI funciona imediatamente.
+## Detalhes técnicos
 
-## Fora de escopo
+```sql
+ALTER TABLE public.tenant_memberships
+  ADD COLUMN can_view_all boolean NOT NULL DEFAULT false;
 
-- Não alterar outros tipos de ação.
-- Não mexer em `ActionNode` (label já reflete o tipo).
+CREATE OR REPLACE FUNCTION public.can_view_all_in_tenant(_tenant_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM tenant_memberships
+    WHERE tenant_id=_tenant_id AND user_id=auth.uid() AND is_active=true
+      AND (role IN ('admin','manager') OR can_view_all=true)
+  )
+$$;
+
+-- Substituir policy "Members view opportunities":
+DROP POLICY "Members view opportunities" ON public.opportunities;
+CREATE POLICY "Members view opportunities" ON public.opportunities
+FOR SELECT TO authenticated
+USING (
+  is_member_of_tenant(tenant_id) AND (
+    can_view_all_in_tenant(tenant_id)
+    OR assigned_to IS NULL
+    OR assigned_to = get_user_membership_id(tenant_id)
+  )
+);
+```
+
+Arquivos tocados:
+- `supabase/migrations/...` (novo)
+- `src/contexts/AuthContext.tsx`
+- `src/pages/InboxPage.tsx`
+- `src/pages/SettingsPage.tsx` (ou subcomponente da aba de equipe)
+- `src/integrations/supabase/types.ts` (regenerado automaticamente)

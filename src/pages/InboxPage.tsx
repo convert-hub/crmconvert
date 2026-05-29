@@ -100,8 +100,9 @@ export default function InboxPage() {
     if (!tenant) return;
     let query = supabase.from('conversations').select('*, contact:contacts(*)').eq('tenant_id', tenant.id).order('last_message_at', { ascending: false }).limit(100);
 
-    // Attendants only see unassigned chats + chats assigned to themselves
-    if (role === 'attendant' && membership) {
+    // Attendants without "ver todas" only see unassigned + own conversations
+    const canViewAll = (membership as any)?.can_view_all === true;
+    if (role === 'attendant' && membership && !canViewAll) {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
 
