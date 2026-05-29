@@ -1,11 +1,43 @@
+import { useEffect, useState } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Plus, Trash2 } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
 import TagPickerSelect from '@/components/contacts/TagPickerSelect';
 import PipelineStagePicker from '@/components/flow-builder/PipelineStagePicker';
+
+function AgentPicker({ tenantId, value, onChange }: { tenantId: string | null; value?: string; onChange: (v: string) => void }) {
+  const [members, setMembers] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    if (!tenantId) return;
+    (async () => {
+      const { data: mems } = await supabase
+        .from('tenant_memberships')
+        .select('id,user_id,role')
+        .eq('tenant_id', tenantId)
+        .eq('is_active', true);
+      if (!mems?.length) { setMembers([]); return; }
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('user_id, full_name')
+        .in('user_id', mems.map((m: any) => m.user_id));
+      const pmap = new Map((profs || []).map((p: any) => [p.user_id, p.full_name]));
+      setMembers(mems.map((m: any) => ({ id: m.id, name: pmap.get(m.user_id) || m.role || 'Sem nome' })));
+    })();
+  }, [tenantId]);
+  return (
+    <Select value={value || ''} onValueChange={onChange}>
+      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Selecione um atendente…" /></SelectTrigger>
+      <SelectContent>
+        {members.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
+}
+
 
 export const ACTION_LABELS: Record<string, string> = {
   add_tag: 'Adicionar tag',
@@ -42,6 +74,21 @@ export default function ActionConfigFields({ tenantId, type, config, onChange }:
 
       {(type === 'add_tag' || type === 'remove_tag') && (
         <TagPickerSelect value={config?.tag ?? ''} onChange={(v) => patch({ tag: v })} />
+      )}
+
+      {type === 'assign_agent' && (
+        <div className="space-y-2">
+          <Select value={config?.mode || 'auto'} onValueChange={(v) => patch({ mode: v, membership_id: v === 'auto' ? undefined : config?.membership_id })}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Automático (menor carga)</SelectItem>
+              <SelectItem value="specific">Atendente específico</SelectItem>
+            </SelectContent>
+          </Select>
+          {config?.mode === 'specific' && (
+            <AgentPicker tenantId={tenantId} value={config?.membership_id} onChange={(v) => patch({ membership_id: v })} />
+          )}
+        </div>
       )}
 
       {type === 'send_whatsapp' && (

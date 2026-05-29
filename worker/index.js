@@ -1070,9 +1070,23 @@ const handlers = {
                 break;
               case 'assign_agent':
                 if (ctx.conversation_id) {
-                  const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenant_id });
-                  if (workload && workload.length > 0) {
-                    await supabase.from('conversations').update({ assigned_to: workload[0].membership_id }).eq('id', ctx.conversation_id);
+                  let assignTo = null;
+                  if (config.mode === 'specific' && config.membership_id) {
+                    const { data: mem } = await supabase
+                      .from('tenant_memberships')
+                      .select('id')
+                      .eq('id', config.membership_id)
+                      .eq('tenant_id', tenant_id)
+                      .eq('is_active', true)
+                      .maybeSingle();
+                    if (mem) assignTo = mem.id;
+                  }
+                  if (!assignTo) {
+                    const { data: workload } = await supabase.rpc('get_member_workload', { p_tenant_id: tenant_id });
+                    if (workload && workload.length > 0) assignTo = workload[0].membership_id;
+                  }
+                  if (assignTo) {
+                    await supabase.from('conversations').update({ assigned_to: assignTo }).eq('id', ctx.conversation_id);
                   }
                 }
                 break;
