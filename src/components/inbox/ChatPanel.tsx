@@ -411,45 +411,50 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     const contactPhone = contact?.phone;
     const msgContent = newMsg;
     const sendAsInternal = isInternal;
+    const capturedConvId = conversationId;
     setNewMsg('');
 
     const optimisticId = crypto.randomUUID();
     const optimisticMsg: any = {
-      id: optimisticId, tenant_id: tenant.id, conversation_id: conversationId,
+      id: optimisticId, tenant_id: tenant.id, conversation_id: capturedConvId,
       direction: 'outbound', content: msgContent, sender_membership_id: membership.id,
       created_at: new Date().toISOString(), is_ai_generated: false, media_type: null, media_url: null,
       is_internal: sendAsInternal,
     };
-    setMessages(prev => [...prev, optimisticMsg as Message]);
+    if (currentConvIdRef.current === capturedConvId) {
+      setMessages(prev => [...prev, optimisticMsg as Message]);
+    }
 
     setSending(true);
     try {
       const { data: savedMsg } = await supabase.from('messages').insert({
-        tenant_id: tenant.id, conversation_id: conversationId, direction: 'outbound',
+        tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
         content: msgContent, sender_membership_id: membership.id, is_internal: sendAsInternal,
       } as any).select('id').single();
 
-      if (savedMsg?.id) setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
+      if (savedMsg?.id && currentConvIdRef.current === capturedConvId) {
+        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
+      }
 
-      // Only update conversation status and send to WhatsApp if NOT internal note
       if (!sendAsInternal) {
         supabase.from('conversations').update({
           last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
-        }).eq('id', conversationId);
+        }).eq('id', capturedConvId);
 
         if (isWhatsApp && contactPhone) {
           const res = await sendText({
-            conversationId,
+            conversationId: capturedConvId,
             tenantId: tenant.id,
             phone: contactPhone,
             text: msgContent,
             providerInfo: providerInfo ?? undefined,
           });
           if (!res.ok) {
-            // Remove a mensagem persistida e otimista — não foi entregue
             if (savedMsg?.id) await supabase.from('messages').delete().eq('id', savedMsg.id);
-            setMessages(prev => prev.filter(m => m.id !== optimisticId && m.id !== savedMsg?.id));
-            setNewMsg(msgContent);
+            if (currentConvIdRef.current === capturedConvId) {
+              setMessages(prev => prev.filter(m => m.id !== optimisticId && m.id !== savedMsg?.id));
+              setNewMsg(msgContent);
+            }
             if (res.code === 'outside_24h_window') {
               toast.error(res.error ?? 'Cliente fora da janela de 24h.', {
                 duration: 8000,
@@ -469,6 +474,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       setSending(false);
     }
   };
+
 
   const handleAiSuggest = async () => {
     if (!tenant || !conversationId || aiSuggesting) return;
