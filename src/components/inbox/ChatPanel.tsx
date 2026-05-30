@@ -381,12 +381,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
     const ch = supabase.channel(`chat-panel-msgs-${conversationId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, payload => {
+        if (currentConvIdRef.current !== conversationId) return;
         const newMsg = payload.new as any;
         setMessages(prev => {
+          // dedup por id
           if (prev.some(m => m.id === newMsg.id)) return prev;
+          // dedup por conteúdo+timestamp (janela 15s) para casar com a optimistic
           const isOptimistic = prev.find(m =>
             m.direction === 'outbound' && m.content === newMsg.content &&
-            Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 5000
+            Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 15000
           );
           if (isOptimistic) return prev.map(m => m.id === isOptimistic.id ? (newMsg as unknown as Message) : m);
           return [...prev, newMsg as unknown as Message];
@@ -394,9 +397,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, payload => {
+        if (currentConvIdRef.current !== conversationId) return;
         setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
       })
       .subscribe();
+
     return () => { supabase.removeChannel(ch); };
   }, [conversationId]);
 
