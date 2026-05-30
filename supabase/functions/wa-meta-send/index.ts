@@ -563,3 +563,35 @@ import { normalizeBrazilPhone } from "../_shared/phone.ts";
 function normalizePhone(p: string): string {
   return normalizeBrazilPhone(p);
 }
+
+// ── MIME validation (Meta Cloud aceitos por tipo) ──────────────
+const META_OK_AUDIO = ["audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg"];
+const META_OK_IMAGE = ["image/jpeg", "image/png"];
+const META_OK_VIDEO = ["video/mp4", "video/3gpp"];
+const META_OK_DOC = [
+  "application/pdf",
+  "application/vnd.ms-powerpoint",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+];
+
+function validateMimeForMeta(type: string, mime: string): { ok: boolean; code?: string; error?: string } {
+  const base = String(mime || "").split(";")[0].trim().toLowerCase();
+  let list: string[] | null = null;
+  if (type === "audio") list = META_OK_AUDIO;
+  else if (type === "image") list = META_OK_IMAGE;
+  else if (type === "video") list = META_OK_VIDEO;
+  else if (type === "document") list = META_OK_DOC;
+  if (!list) return { ok: true };
+  if (list.includes(base)) return { ok: true };
+  return {
+    ok: false,
+    code: `${type}_mime_unsupported`,
+    error: `Formato "${mime}" não é aceito pela WhatsApp Cloud API para ${type}. Aceitos: ${list.join(", ")}.`,
+  };
+}
+
