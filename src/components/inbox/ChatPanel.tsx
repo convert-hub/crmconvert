@@ -309,7 +309,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Guard contra trocas de conversa durante operações assíncronas
+  const currentConvIdRef = useRef<string>(conversationId);
+  useEffect(() => { currentConvIdRef.current = conversationId; }, [conversationId]);
   const [emojiOpen, setEmojiOpen] = useState(false);
+
 
   const insertEmoji = (emoji: string) => {
     const ta = textareaRef.current;
