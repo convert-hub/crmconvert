@@ -504,75 +504,107 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
   const handleSendMedia = async (file: File) => {
     if (!tenant || !membership || !conversationId) return;
+    const capturedConvId = conversationId;
     const contactPhone = contact?.phone;
     const isWhatsApp = channel === 'whatsapp';
     if (!isWhatsApp || !contactPhone) { toast.error('Envio de mídia só disponível para WhatsApp'); return; }
 
+    // Classifica tipo
+    let mediaType: 'audio' | 'image' | 'video' | 'document' = 'image';
+    if (file.type.startsWith('audio/')) mediaType = 'audio';
+    else if (file.type.startsWith('video/')) mediaType = 'video';
+    else if (!file.type.startsWith('image/')) mediaType = 'document';
+
+    // Validação de tamanho (limites Meta Cloud / pragmáticos)
+    const MAX = mediaType === 'audio' ? 16 * 1024 * 1024
+              : mediaType === 'image' ? 5 * 1024 * 1024
+              : mediaType === 'video' ? 16 * 1024 * 1024
+              : 100 * 1024 * 1024;
+    if (file.size > MAX) {
+      const mb = Math.round(MAX / 1024 / 1024);
+      toast.error(`Arquivo excede o limite de ${mb}MB para ${mediaType === 'audio' ? 'áudios' : mediaType === 'image' ? 'imagens' : mediaType === 'video' ? 'vídeos' : 'documentos'}.`);
+      return;
+    }
+
     setSending(true);
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => { resolve((reader.result as string).split(',')[1]); };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // 1) Cria a row de mensagens (pending=true) para obter ID estável
+      const mediaTypeLabel = mediaType === 'audio' ? 'AudioMessage'
+                           : mediaType === 'image' ? 'ImageMessage'
+                           : mediaType === 'video' ? 'VideoMessage' : 'DocumentMessage';
+      const contentLabel = `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`;
 
-      let mediaType = 'image';
-      if (file.type.startsWith('audio/')) mediaType = 'audio';
-      else if (file.type.startsWith('video/')) mediaType = 'video';
-      else if (file.type.includes('pdf') || file.type.includes('document')) mediaType = 'document';
-
-      const extFromName = file.name.split('.').pop()?.toLowerCase();
-      const audioExt = extFromName && ['ogg', 'mp3', 'm4a', 'wav', 'webm', 'flac'].includes(extFromName)
-        ? extFromName
-        : file.type.includes('mpeg') ? 'mp3' : file.type.includes('mp4') ? 'm4a' : file.type.includes('wav') ? 'wav' : file.type.includes('webm') ? 'webm' : 'ogg';
-
-      const { data: savedMsg } = await supabase.from('messages').insert({
-        tenant_id: tenant.id, conversation_id: conversationId, direction: 'outbound',
-        content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`,
+      const { data: savedMsg, error: insertErr } = await supabase.from('messages').insert({
+        tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
+        content: contentLabel,
         sender_membership_id: membership.id,
-        media_type: file.type.startsWith('audio/') ? 'AudioMessage' : file.type.startsWith('image/') ? 'ImageMessage' : file.type.startsWith('video/') ? 'VideoMessage' : 'DocumentMessage',
-      }).select('id').single();
-
-      let storagePath: string | null = null;
-      if (mediaType === 'audio' && savedMsg?.id) {
-        const path = `${tenant.id}/${savedMsg.id}.${audioExt}`;
-        const { error: uploadError } = await supabase.storage
-          .from('whatsapp-media')
-          .upload(path, file, { contentType: file.type || 'audio/ogg', upsert: true });
-        if (!uploadError) {
-          storagePath = path;
-          await supabase.from('messages').update({ storage_path: path }).eq('id', savedMsg.id);
-        } else {
-          console.warn('Outbound audio persist failed:', uploadError.message);
-        }
+        media_type: mediaTypeLabel,
+      } as any).select('id').single();
+      if (insertErr || !savedMsg?.id) {
+        toast.error('Falha ao registrar mensagem.');
+        return;
       }
 
-      const optimisticMsg: Message = {
-        id: savedMsg?.id || crypto.randomUUID(), tenant_id: tenant.id, conversation_id: conversationId,
-        direction: 'outbound', content: `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : 'Mídia'}]`,
-        sender_membership_id: membership.id, created_at: new Date().toISOString(), is_ai_generated: false,
-        media_type: file.type.startsWith('audio/') ? 'AudioMessage' : 'ImageMessage', media_url: null,
-        storage_path: storagePath,
-      };
-      setMessages(prev => [...prev, optimisticMsg]);
+      // 2) Upload para o bucket whatsapp-media (uniforme para todos os tipos)
+      const ext = file.name.split('.').pop()?.toLowerCase()
+        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
+      const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('whatsapp-media')
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+      if (uploadError) {
+        console.error('[ChatPanel] upload bucket falhou', uploadError.message);
+        await supabase.from('messages').delete().eq('id', savedMsg.id);
+        toast.error('Falha ao enviar arquivo para o storage.');
+        return;
+      }
+      await supabase.from('messages').update({ storage_path: storagePath }).eq('id', savedMsg.id);
 
+      // 3) Signed URL (1h, suficiente para upload Meta + retries)
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('whatsapp-media')
+        .createSignedUrl(storagePath, 60 * 60);
+      if (signErr || !signed?.signedUrl) {
+        await supabase.from('messages').delete().eq('id', savedMsg.id);
+        toast.error('Falha ao gerar URL temporária do arquivo.');
+        return;
+      }
+
+      // 4) Optimistic bubble
+      if (currentConvIdRef.current === capturedConvId) {
+        const optimisticMsg: Message = {
+          id: savedMsg.id, tenant_id: tenant.id, conversation_id: capturedConvId,
+          direction: 'outbound', content: contentLabel,
+          sender_membership_id: membership.id, created_at: new Date().toISOString(), is_ai_generated: false,
+          media_type: mediaTypeLabel, media_url: null,
+          storage_path: storagePath,
+        } as any;
+        setMessages(prev => [...prev, optimisticMsg]);
+      }
+
+      // 5) Envia via router (Meta: upload_media + send / UAZAPI: send_media com URL)
       const res = await sendMedia({
-        conversationId,
+        conversationId: capturedConvId,
         tenantId: tenant.id,
         phone: contactPhone,
-        fileBase64: base64,
+        mediaUrl: signed.signedUrl,
         mimeType: file.type,
-        mediaType: mediaType as any,
+        mediaType,
         filename: file.name,
         caption: '',
         providerInfo: providerInfo ?? undefined,
       });
 
       if (!res.ok) {
-        if (savedMsg?.id) await supabase.from('messages').delete().eq('id', savedMsg.id);
-        setMessages(prev => prev.filter(m => m.id !== savedMsg?.id));
-        if (res.code === 'outside_24h_window') {
+        await supabase.from('messages').delete().eq('id', savedMsg.id);
+        if (currentConvIdRef.current === capturedConvId) {
+          setMessages(prev => prev.filter(m => m.id !== savedMsg.id));
+        }
+        if (res.code?.endsWith('_mime_unsupported')) {
+          toast.error(res.error ?? 'Formato de mídia não aceito pelo WhatsApp.');
+        } else if (res.code === 'media_fetch_failed') {
+          toast.error('Falha ao baixar arquivo do storage. Tente novamente.');
+        } else if (res.code === 'outside_24h_window') {
           toast.error(res.error ?? 'Cliente fora da janela de 24h.', {
             duration: 8000,
             action: { label: 'Enviar template', onClick: () => setShowTemplate(true) },
@@ -580,7 +612,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         } else {
           toast.error(res.error ?? 'Falha ao enviar mídia');
         }
-      } else if (savedMsg?.id) {
+      } else {
         const update: { provider_message_id?: string; provider_metadata?: any } = {};
         if (res.provider_message_id) update.provider_message_id = res.provider_message_id;
         if (res.meta_media_id) update.provider_metadata = { provider: 'meta_cloud', meta_media_id: res.meta_media_id };
@@ -591,13 +623,14 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
 
       supabase.from('conversations').update({
         last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
-      }).eq('id', conversationId);
+      }).eq('id', capturedConvId);
     } catch (err: any) {
       toast.error('Erro ao enviar mídia: ' + err.message);
     } finally {
       setSending(false);
     }
   };
+
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
