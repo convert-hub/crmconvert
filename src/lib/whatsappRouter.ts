@@ -94,11 +94,17 @@ export async function sendText(params: {
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
 
+/**
+ * Envia mídia para a conversa.
+ * IMPORTANTE: o caller DEVE primeiro fazer upload do arquivo para o bucket
+ * `whatsapp-media` e obter uma signed URL (TTL >= 1h) — passar essa URL em `mediaUrl`.
+ * Nada de base64 trafegando pelo gateway.
+ */
 export async function sendMedia(params: {
   conversationId: string;
   tenantId: string;
   phone: string;
-  fileBase64: string; // sem prefixo data:
+  mediaUrl: string; // signed URL temporária
   mimeType: string;
   mediaType: 'image' | 'audio' | 'video' | 'document';
   filename?: string;
@@ -108,12 +114,31 @@ export async function sendMedia(params: {
   const info = params.providerInfo ?? (await getConversationProvider(params.conversationId));
 
   if (info.provider === 'meta_cloud' && info.instance_id) {
-    const { data, error } = await supabase.functions.invoke('wa-meta-send', {
+    const upRes = await supabase.functions.invoke('wa-meta-send', {
       body: {
-        action: 'send_media_base64',
+        action: 'upload_media',
         type: params.mediaType,
-        media_base64: params.fileBase64,
+        media_url: params.mediaUrl,
         media_mime: params.mimeType,
+        filename: params.filename,
+        whatsapp_instance_id: info.instance_id,
+      },
+    });
+    if (upRes.error || upRes.data?.ok === false || upRes.data?.error) {
+      return {
+        ok: false,
+        error: upRes.data?.error || upRes.error?.message || 'Falha ao subir mídia para Meta',
+        code: upRes.data?.code,
+      };
+    }
+    const metaMediaId = upRes.data?.meta_media_id ?? upRes.data?.media_id ?? null;
+    if (!metaMediaId) return { ok: false, error: 'Meta não retornou media_id', code: 'no_media_id' };
+
+    const sendRes = await supabase.functions.invoke('wa-meta-send', {
+      body: {
+        action: 'send',
+        type: params.mediaType,
+        media_id: metaMediaId,
         filename: params.filename,
         caption: params.caption,
         conversation_id: params.conversationId,
@@ -121,10 +146,19 @@ export async function sendMedia(params: {
         skip_persist: true,
       },
     });
-    if (error || data?.error || data?.ok === false) {
-      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta', code: data?.code };
+    if (sendRes.error || sendRes.data?.error || sendRes.data?.ok === false) {
+      return {
+        ok: false,
+        error: sendRes.data?.error || sendRes.error?.message || 'Falha no envio Meta',
+        code: sendRes.data?.code,
+        meta_media_id: metaMediaId,
+      };
     }
-    return { ok: true, provider_message_id: data?.provider_message_id ?? null, meta_media_id: data?.meta_media_id ?? null };
+    return {
+      ok: true,
+      provider_message_id: sendRes.data?.provider_message_id ?? null,
+      meta_media_id: metaMediaId,
+    };
   }
 
   const { data, error } = await supabase.functions.invoke('uazapi-proxy', {
@@ -132,7 +166,7 @@ export async function sendMedia(params: {
       action: 'send_media',
       tenant_id: params.tenantId,
       phone: params.phone,
-      media_base64: `data:${params.mimeType};base64,${params.fileBase64}`,
+      media_url: params.mediaUrl,
       media_type: params.mediaType,
       caption: params.caption ?? '',
       conversation_id: params.conversationId,
@@ -143,6 +177,7 @@ export async function sendMedia(params: {
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
+
 
 export interface DownloadResult {
   ok: boolean;

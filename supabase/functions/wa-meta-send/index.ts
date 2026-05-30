@@ -314,10 +314,30 @@ serve(async (req) => {
     // ── Upload media (URL → media_id) ─────────────────────────
     if (action === "upload_media") {
       if (!body.media_url) return jsonResponse({ error: "media_url required" }, 400);
-      const fileResp = await fetch(body.media_url);
-      if (!fileResp.ok) return jsonResponse({ error: "Failed to fetch media_url" }, 400);
+      let fileResp: Response;
+      try {
+        fileResp = await fetch(body.media_url);
+      } catch (e: any) {
+        const prefix = String(body.media_url).slice(0, 80);
+        console.error("[wa-meta-send] upload_media fetch failed", { reason: e?.message ?? String(e), url_prefix: prefix });
+        return jsonResponse({ ok: false, code: "media_fetch_failed", error: "Falha ao baixar mídia da URL fornecida.", details: e?.message }, 200);
+      }
+      if (!fileResp.ok) {
+        const prefix = String(body.media_url).slice(0, 80);
+        console.error("[wa-meta-send] upload_media fetch non-ok", { status: fileResp.status, url_prefix: prefix });
+        return jsonResponse({ ok: false, code: "media_fetch_failed", error: `Falha ao baixar mídia (HTTP ${fileResp.status}).` }, 200);
+      }
       const fileBlob = await fileResp.blob();
-      const mime = fileResp.headers.get("Content-Type") || "application/octet-stream";
+      const mime = body.media_mime || fileResp.headers.get("Content-Type") || "application/octet-stream";
+
+      // Valida MIME contra os tipos aceitos pela Meta para o tipo informado (quando body.type vem)
+      if (body.type) {
+        const v = validateMimeForMeta(body.type, mime);
+        if (!v.ok) {
+          console.warn("[wa-meta-send] upload_media mime rejeitado", { received: mime, type: body.type });
+          return jsonResponse({ ok: false, code: v.code, error: v.error, received_mime: mime }, 200);
+        }
+      }
 
       const fd = new FormData();
       fd.append("messaging_product", "whatsapp");
@@ -331,8 +351,9 @@ serve(async (req) => {
       });
       const upData = await upR.json();
       if (!upR.ok) return jsonResponse({ ok: false, error: upData?.error?.message ?? "Upload failed", details: upData }, 200);
-      return jsonResponse({ ok: true, media_id: upData.id });
+      return jsonResponse({ ok: true, media_id: upData.id, meta_media_id: upData.id });
     }
+
 
     // ── Download media (media_id → base64) ────────────────────
     if (action === "download_media") {
@@ -361,28 +382,15 @@ serve(async (req) => {
       }
     }
 
-    // ── Send media via base64 (upload + send) ─────────────────
+    // ── Send media via base64 (upload + send) — legacy/compat ───
     if (action === "send_media_base64") {
       if (!body.media_base64 || !body.type || !body.media_mime) {
         return jsonResponse({ error: "media_base64, type, media_mime required" }, 400);
       }
-      // Meta Cloud API só aceita um conjunto restrito de MIME por tipo.
-      // Áudio: audio/aac, audio/mp4, audio/mpeg, audio/amr, audio/ogg (Opus em container ogg).
-      // Bloqueamos audio/webm (formato nativo do MediaRecorder em browsers) que a Meta rejeita
-      // silenciosamente — assim devolvemos erro claro ao caller em vez de falhar no Graph.
-      if (body.type === "audio") {
-        const allowedAudio = ["audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg"];
-        const mimeBase = String(body.media_mime).split(";")[0].trim().toLowerCase();
-        if (!allowedAudio.includes(mimeBase)) {
-          console.warn("[wa-meta-send] audio mime rejeitado", { received: body.media_mime, allowed: allowedAudio });
-          return jsonResponse({
-            ok: false,
-            code: "audio_mime_unsupported",
-            error: `Formato de áudio "${body.media_mime}" não é aceito pela WhatsApp Cloud API. Use audio/ogg (Opus), audio/aac, audio/mp4, audio/mpeg ou audio/amr.`,
-            received_mime: body.media_mime,
-            allowed: allowedAudio,
-          });
-        }
+      const v = validateMimeForMeta(body.type, body.media_mime);
+      if (!v.ok) {
+        console.warn("[wa-meta-send] send_media_base64 mime rejeitado", { received: body.media_mime, type: body.type });
+        return jsonResponse({ ok: false, code: v.code, error: v.error, received_mime: body.media_mime }, 200);
       }
       // decode base64 → blob
       const binStr = atob(body.media_base64);
@@ -408,6 +416,7 @@ serve(async (req) => {
       (body as any)._uploaded_media_id = upData.id;
       // segue para o fluxo "Send message" abaixo
     }
+
 
     const to = body.to || (await resolveContactPhone(supabaseAdmin, conversation?.contact_id));
     if (!to) return jsonResponse({ error: "to (phone) required" }, 400);
@@ -554,3 +563,35 @@ import { normalizeBrazilPhone } from "../_shared/phone.ts";
 function normalizePhone(p: string): string {
   return normalizeBrazilPhone(p);
 }
+
+// ── MIME validation (Meta Cloud aceitos por tipo) ──────────────
+const META_OK_AUDIO = ["audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg"];
+const META_OK_IMAGE = ["image/jpeg", "image/png"];
+const META_OK_VIDEO = ["video/mp4", "video/3gpp"];
+const META_OK_DOC = [
+  "application/pdf",
+  "application/vnd.ms-powerpoint",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+];
+
+function validateMimeForMeta(type: string, mime: string): { ok: boolean; code?: string; error?: string } {
+  const base = String(mime || "").split(";")[0].trim().toLowerCase();
+  let list: string[] | null = null;
+  if (type === "audio") list = META_OK_AUDIO;
+  else if (type === "image") list = META_OK_IMAGE;
+  else if (type === "video") list = META_OK_VIDEO;
+  else if (type === "document") list = META_OK_DOC;
+  if (!list) return { ok: true };
+  if (list.includes(base)) return { ok: true };
+  return {
+    ok: false,
+    code: `${type}_mime_unsupported`,
+    error: `Formato "${mime}" não é aceito pela WhatsApp Cloud API para ${type}. Aceitos: ${list.join(", ")}.`,
+  };
+}
+

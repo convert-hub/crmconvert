@@ -330,9 +330,14 @@ async function handleInboundMessage(
     created_at: timestamp,
   });
   if (insMsgErr) {
+    if ((insMsgErr as any).code === "23505") {
+      console.log("[webhook-meta] duplicate_inbound_race_ignored", { provider_message_id: providerMessageId });
+      return;
+    }
     console.error("[webhook-meta] insert_message_failed", { provider_message_id: providerMessageId, error: insMsgErr.message });
     return;
   }
+
 
   // 6) Update conversation timestamps
   const { error: convUpdErr } = await supabase
