@@ -314,10 +314,30 @@ serve(async (req) => {
     // ── Upload media (URL → media_id) ─────────────────────────
     if (action === "upload_media") {
       if (!body.media_url) return jsonResponse({ error: "media_url required" }, 400);
-      const fileResp = await fetch(body.media_url);
-      if (!fileResp.ok) return jsonResponse({ error: "Failed to fetch media_url" }, 400);
+      let fileResp: Response;
+      try {
+        fileResp = await fetch(body.media_url);
+      } catch (e: any) {
+        const prefix = String(body.media_url).slice(0, 80);
+        console.error("[wa-meta-send] upload_media fetch failed", { reason: e?.message ?? String(e), url_prefix: prefix });
+        return jsonResponse({ ok: false, code: "media_fetch_failed", error: "Falha ao baixar mídia da URL fornecida.", details: e?.message }, 200);
+      }
+      if (!fileResp.ok) {
+        const prefix = String(body.media_url).slice(0, 80);
+        console.error("[wa-meta-send] upload_media fetch non-ok", { status: fileResp.status, url_prefix: prefix });
+        return jsonResponse({ ok: false, code: "media_fetch_failed", error: `Falha ao baixar mídia (HTTP ${fileResp.status}).` }, 200);
+      }
       const fileBlob = await fileResp.blob();
-      const mime = fileResp.headers.get("Content-Type") || "application/octet-stream";
+      const mime = body.media_mime || fileResp.headers.get("Content-Type") || "application/octet-stream";
+
+      // Valida MIME contra os tipos aceitos pela Meta para o tipo informado (quando body.type vem)
+      if (body.type) {
+        const v = validateMimeForMeta(body.type, mime);
+        if (!v.ok) {
+          console.warn("[wa-meta-send] upload_media mime rejeitado", { received: mime, type: body.type });
+          return jsonResponse({ ok: false, code: v.code, error: v.error, received_mime: mime }, 200);
+        }
+      }
 
       const fd = new FormData();
       fd.append("messaging_product", "whatsapp");
@@ -331,8 +351,9 @@ serve(async (req) => {
       });
       const upData = await upR.json();
       if (!upR.ok) return jsonResponse({ ok: false, error: upData?.error?.message ?? "Upload failed", details: upData }, 200);
-      return jsonResponse({ ok: true, media_id: upData.id });
+      return jsonResponse({ ok: true, media_id: upData.id, meta_media_id: upData.id });
     }
+
 
     // ── Download media (media_id → base64) ────────────────────
     if (action === "download_media") {
