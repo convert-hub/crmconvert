@@ -1,0 +1,1 @@
+CREATE POLICY "whatsapp-media tenant delete" ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'whatsapp-media' AND is_member_of_tenant(((storage.foldername(name))[1])::uuid));
