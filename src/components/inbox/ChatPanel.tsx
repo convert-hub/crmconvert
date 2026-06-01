@@ -21,7 +21,6 @@ import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
 import VariablePicker from '@/components/shared/VariablePicker';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
-
 interface QuickReply {
   id: string;
   shortcut: string;
@@ -29,10 +28,7 @@ interface QuickReply {
   content: string;
   variables: string[];
 }
-
-// Media cache to avoid re-downloading
 const mediaCache = new Map<string, string>();
-
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -56,12 +52,10 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
     </div>
   );
 }
-
 function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Message; tenantId: string; conversationId: string; providerInfo: ProviderInfo | null }) {
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-
   const mediaType = ((msg as any).media_type || '').toLowerCase();
   const isAudio = mediaType.includes('audio') || mediaType.includes('ptt');
   const isImage = mediaType.includes('image');
@@ -70,7 +64,6 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   const providerMsgId = (msg as any).provider_message_id;
   const metaMediaId = (msg as any).provider_metadata?.meta_media_id ?? null;
   const isOutbound = msg.direction === 'outbound';
-
   const unavailableMessage = isAudio
     ? 'Áudio expirado ou indisponível no WhatsApp'
     : isImage
@@ -78,7 +71,6 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       : isVideo
         ? 'Vídeo expirado ou indisponível no WhatsApp'
         : 'Documento expirado ou indisponível no WhatsApp';
-
   const downloadDocument = (src: string) => {
     const a = document.createElement('a');
     a.href = src;
@@ -88,18 +80,16 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
     a.click();
     document.body.removeChild(a);
   };
-
   const loadMedia = async () => {
     if (loading) return;
     const storagePath = (msg as any).storage_path as string | null;
     const cacheKey = storagePath ? `storage:${storagePath}` : providerMsgId || (msg as any).id;
     setLoading(true);
     try {
-      // 1. Prefer persisted Storage (works forever, any device)
       if (storagePath) {
         const { data: signed } = await supabase.storage
           .from('whatsapp-media')
-          .createSignedUrl(storagePath, 60 * 60 * 6); // 6h
+          .createSignedUrl(storagePath, 60 * 60 * 6);
         if (signed?.signedUrl) {
           mediaCache.set(cacheKey, signed.signedUrl);
           setMediaData(signed.signedUrl);
@@ -107,21 +97,17 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
           return;
         }
       }
-
       const cached = mediaCache.get(cacheKey);
       if (cached) {
         setMediaData(cached);
         if (isDocument && cached !== 'expired') downloadDocument(cached);
         return;
       }
-
       if (!providerMsgId) {
         mediaCache.set(cacheKey, 'expired');
         setMediaData('expired');
         return;
       }
-
-      // 2. Fallback: provider (UAZAPI/Meta) — may already be expired
       const res = await downloadMedia({
         conversationId,
         tenantId,
@@ -129,19 +115,15 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
         metaMediaId,
         providerInfo: providerInfo ?? undefined,
       });
-
       if (!res.ok) {
         mediaCache.set(cacheKey, 'expired');
         setMediaData('expired');
         return;
       }
-
       let result: string | null = null;
       if (res.base64) {
         const mime = res.mimetype || (isAudio ? 'audio/ogg' : isImage ? 'image/jpeg' : 'application/octet-stream');
         result = `data:${mime};base64,${res.base64}`;
-
-        // 3. Self-healing: persist audio so the next device/load doesn't need provider
         if (isAudio && (msg as any).id && !storagePath) {
           try {
             const ext = mime.includes('mpeg') ? 'mp3' : mime.includes('mp4') ? 'm4a' : mime.includes('wav') ? 'wav' : 'ogg';
@@ -162,14 +144,12 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       } else if (res.url) {
         result = res.url;
       }
-
       if (result) {
         mediaCache.set(cacheKey, result);
         setMediaData(result);
         if (isDocument) downloadDocument(result);
         return;
       }
-
       mediaCache.set(cacheKey, 'expired');
       setMediaData('expired');
     } catch (e: any) {
@@ -180,10 +160,7 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       setLoading(false);
     }
   };
-
-
   useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId, (msg as any).storage_path]);
-
   if (isAudio) {
     return (
       <div className="min-w-[220px]">
@@ -213,7 +190,6 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       </div>
     );
   }
-
   if (isImage) {
     return (
       <div className="max-w-[280px]">
@@ -232,7 +208,6 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       </div>
     );
   }
-
   if (isVideo) {
     return (
       <div className="max-w-[280px]">
@@ -248,7 +223,6 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       </div>
     );
   }
-
   if (isDocument) {
     return (
       <div className="max-w-[280px] rounded-lg border border-border/60 bg-muted/20 p-3">
@@ -273,15 +247,12 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       </div>
     );
   }
-
   return null;
 }
-
 const hasMedia = (msg: Message) => {
   const mt = ((msg as any).media_type || '').toLowerCase();
   return mt.includes('audio') || mt.includes('image') || mt.includes('video') || mt.includes('document') || mt.includes('ptt');
 };
-
 interface ChatPanelProps {
   conversationId: string;
   contact?: Contact;
@@ -290,7 +261,6 @@ interface ChatPanelProps {
   showHeader?: boolean;
   className?: string;
 }
-
 export default function ChatPanel({ conversationId, contact, channel, status, showHeader = true, className }: ChatPanelProps) {
   const { tenant, membership } = useAuth();
   const composerVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'inbox-composer' });
@@ -309,12 +279,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Guard contra trocas de conversa durante operações assíncronas
   const currentConvIdRef = useRef<string>(conversationId);
   useEffect(() => { currentConvIdRef.current = conversationId; }, [conversationId]);
   const [emojiOpen, setEmojiOpen] = useState(false);
-
-
   const insertEmoji = (emoji: string) => {
     const ta = textareaRef.current;
     if (!ta) { setNewMsg(prev => prev + emoji); return; }
@@ -328,38 +295,29 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       ta.setSelectionRange(pos, pos);
     });
   };
-
-
-
   const statusColors: Record<string, string> = {
     open: 'bg-success/10 text-success border-success/20',
     waiting_customer: 'bg-warning/10 text-warning border-warning/20',
     waiting_agent: 'bg-info/10 text-info border-info/20',
     closed: 'bg-muted text-muted-foreground',
   };
-
-  // Load quick replies
   useEffect(() => {
     if (!tenant) return;
     supabase.from('quick_replies').select('*').eq('tenant_id', tenant.id).eq('is_active', true).order('position')
       .then(({ data }) => setQuickReplies((data as unknown as QuickReply[]) ?? []));
   }, [tenant]);
-
   const replaceVariables = (text: string): string => {
     return text
       .replace(/\{\{nome\}\}/gi, contact?.name || '')
       .replace(/\{\{telefone\}\}/gi, contact?.phone || '')
       .replace(/\{\{email\}\}/gi, contact?.email || '');
   };
-
   const handleSelectQuickReply = (qr: QuickReply) => {
     const replaced = replaceVariables(qr.content);
     setNewMsg(replaced);
     setShowQuickReplies(false);
     setQrFilter('');
   };
-
-  // Close quick replies on click outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (qrRef.current && !qrRef.current.contains(e.target as Node)) setShowQuickReplies(false);
@@ -367,7 +325,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
   useEffect(() => {
     if (!conversationId) return;
     getConversationProvider(conversationId).then(setProviderInfo).catch(() => setProviderInfo(null));
@@ -376,17 +333,13 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         setMessages((data as unknown as Message[]) ?? []);
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }), 50);
       });
-
     supabase.from('conversations').update({ unread_count: 0 }).eq('id', conversationId);
-
     const ch = supabase.channel(`chat-panel-msgs-${conversationId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, payload => {
         if (currentConvIdRef.current !== conversationId) return;
         const newMsg = payload.new as any;
         setMessages(prev => {
-          // dedup por id
           if (prev.some(m => m.id === newMsg.id)) return prev;
-          // dedup por conteúdo+timestamp (janela 15s) para casar com a optimistic
           const isOptimistic = prev.find(m =>
             m.direction === 'outbound' && m.content === newMsg.content &&
             Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 15000
@@ -401,10 +354,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
       })
       .subscribe();
-
     return () => { supabase.removeChannel(ch); };
   }, [conversationId]);
-
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !conversationId) return;
     const isWhatsApp = channel === 'whatsapp';
@@ -413,7 +364,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     const sendAsInternal = isInternal;
     const capturedConvId = conversationId;
     setNewMsg('');
-
     const optimisticId = crypto.randomUUID();
     const optimisticMsg: any = {
       id: optimisticId, tenant_id: tenant.id, conversation_id: capturedConvId,
@@ -424,23 +374,19 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     if (currentConvIdRef.current === capturedConvId) {
       setMessages(prev => [...prev, optimisticMsg as Message]);
     }
-
     setSending(true);
     try {
       const { data: savedMsg } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
         content: msgContent, sender_membership_id: membership.id, is_internal: sendAsInternal,
       } as any).select('id').single();
-
       if (savedMsg?.id && currentConvIdRef.current === capturedConvId) {
         setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
       }
-
       if (!sendAsInternal) {
         supabase.from('conversations').update({
           last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
         }).eq('id', capturedConvId);
-
         if (isWhatsApp && contactPhone) {
           const res = await sendText({
             conversationId: capturedConvId,
@@ -474,8 +420,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       setSending(false);
     }
   };
-
-
   const handleAiSuggest = async () => {
     if (!tenant || !conversationId || aiSuggesting) return;
     setAiSuggesting(true);
@@ -483,39 +427,25 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       const { data, error } = await supabase.functions.invoke('ai-copilot', {
         body: { conversation_id: conversationId, tenant_id: tenant.id },
       });
-      if (error) {
-        toast.error('Erro ao gerar sugestão: ' + error.message);
-        return;
-      }
-      if (data?.error) {
-        toast.error(data.error);
-        return;
-      }
-      if (data?.suggestion) {
-        setNewMsg(data.suggestion);
-        toast.success('Sugestão de IA inserida');
-      }
+      if (error) { toast.error('Erro ao gerar sugestão: ' + error.message); return; }
+      if (data?.error) { toast.error(data.error); return; }
+      if (data?.suggestion) { setNewMsg(data.suggestion); toast.success('Sugestão de IA inserida'); }
     } catch (err: any) {
       toast.error('Erro: ' + err.message);
     } finally {
       setAiSuggesting(false);
     }
   };
-
   const handleSendMedia = async (file: File) => {
     if (!tenant || !membership || !conversationId) return;
     const capturedConvId = conversationId;
     const contactPhone = contact?.phone;
     const isWhatsApp = channel === 'whatsapp';
     if (!isWhatsApp || !contactPhone) { toast.error('Envio de mídia só disponível para WhatsApp'); return; }
-
-    // Classifica tipo
     let mediaType: 'audio' | 'image' | 'video' | 'document' = 'image';
     if (file.type.startsWith('audio/')) mediaType = 'audio';
     else if (file.type.startsWith('video/')) mediaType = 'video';
     else if (!file.type.startsWith('image/')) mediaType = 'document';
-
-    // Validação de tamanho (limites Meta Cloud / pragmáticos)
     const MAX = mediaType === 'audio' ? 16 * 1024 * 1024
               : mediaType === 'image' ? 5 * 1024 * 1024
               : mediaType === 'video' ? 16 * 1024 * 1024
@@ -525,27 +455,19 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       toast.error(`Arquivo excede o limite de ${mb}MB para ${mediaType === 'audio' ? 'áudios' : mediaType === 'image' ? 'imagens' : mediaType === 'video' ? 'vídeos' : 'documentos'}.`);
       return;
     }
-
     setSending(true);
     try {
-      // 1) Cria a row de mensagens (pending=true) para obter ID estável
       const mediaTypeLabel = mediaType === 'audio' ? 'AudioMessage'
                            : mediaType === 'image' ? 'ImageMessage'
                            : mediaType === 'video' ? 'VideoMessage' : 'DocumentMessage';
       const contentLabel = `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`;
-
       const { data: savedMsg, error: insertErr } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
         content: contentLabel,
         sender_membership_id: membership.id,
         media_type: mediaTypeLabel,
       } as any).select('id').single();
-      if (insertErr || !savedMsg?.id) {
-        toast.error('Falha ao registrar mensagem.');
-        return;
-      }
-
-      // 2) Upload para o bucket whatsapp-media (uniforme para todos os tipos)
+      if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
       const ext = file.name.split('.').pop()?.toLowerCase()
         || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
       const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
@@ -559,8 +481,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         return;
       }
       await supabase.from('messages').update({ storage_path: storagePath }).eq('id', savedMsg.id);
-
-      // 3) Signed URL (1h, suficiente para upload Meta + retries)
       const { data: signed, error: signErr } = await supabase.storage
         .from('whatsapp-media')
         .createSignedUrl(storagePath, 60 * 60);
@@ -569,8 +489,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         toast.error('Falha ao gerar URL temporária do arquivo.');
         return;
       }
-
-      // 4) Optimistic bubble
       if (currentConvIdRef.current === capturedConvId) {
         const optimisticMsg: Message = {
           id: savedMsg.id, tenant_id: tenant.id, conversation_id: capturedConvId,
@@ -581,8 +499,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         } as any;
         setMessages(prev => [...prev, optimisticMsg]);
       }
-
-      // 5) Envia via router (Meta: upload_media + send / UAZAPI: send_media com URL)
       const res = await sendMedia({
         conversationId: capturedConvId,
         tenantId: tenant.id,
@@ -594,7 +510,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         caption: '',
         providerInfo: providerInfo ?? undefined,
       });
-
       if (!res.ok) {
         await supabase.from('messages').delete().eq('id', savedMsg.id);
         if (currentConvIdRef.current === capturedConvId) {
@@ -620,7 +535,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           await supabase.from('messages').update(update).eq('id', savedMsg.id);
         }
       }
-
       supabase.from('conversations').update({
         last_message_at: new Date().toISOString(), last_agent_message_at: new Date().toISOString(), status: 'waiting_customer',
       }).eq('id', capturedConvId);
@@ -630,8 +544,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       setSending(false);
     }
   };
-
-
   return (
     <div className={cn("flex flex-col h-full", className)}>
       {showHeader && contact && (
@@ -651,7 +563,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
         </div>
       )}
-
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">
         {messages.map(msg => {
           const pmeta = (msg as any).provider_metadata ?? {};
@@ -717,17 +628,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         })}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Input area */}
       <div className="border-t border-border/50 bg-card/50">
-        {/* Internal note indicator */}
         {isInternal && (
           <div className="px-3 pt-2 flex items-center gap-1.5 text-xs text-warning font-medium">
             <Lock className="h-3 w-3" /> Modo nota interna — não será enviada ao cliente
           </div>
         )}
-
-        {/* Quick replies dropdown */}
         {showQuickReplies && quickReplies.length > 0 && (
           <div ref={qrRef} className="mx-3 mt-2 rounded-xl border border-border bg-card shadow-lg max-h-48 overflow-y-auto">
             {quickReplies
@@ -745,7 +651,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             )}
           </div>
         )}
-
         <div className="p-3 flex gap-2 items-end">
           <input type="file" ref={fileInputRef} className="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
             onChange={e => { const file = e.target.files?.[0]; if (file) handleSendMedia(file); e.target.value = ''; }} />
@@ -759,7 +664,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
               toast.error('Não foi possível gravar áudio neste navegador.');
             }
           }} />}
-
           <Button size="icon" variant={isInternal ? 'default' : 'ghost'} onClick={() => setIsInternal(!isInternal)}
             className={cn("rounded-xl h-10 w-10 shrink-0", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')} title="Nota interna">
             <StickyNote className="h-4 w-4" />
@@ -831,7 +735,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           </Button>
         </div>
       </div>
-
       {tenant && membership && (
         <ScheduleMessageDialog
           open={showSchedule}
@@ -854,5 +757,4 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     </div>
   );
 }
-// sync-touch: storage-first media flow + currentConvIdRef guard + 15s dedup window
-
+// sync-touch: handleSendMedia storage-first (mediaUrl), currentConvIdRef guard, dedup window 15s, onUnsupported toast
