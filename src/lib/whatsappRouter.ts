@@ -223,3 +223,5 @@ export async function downloadMedia(params: {
     mimetype: data?.mimetype ?? data?.data?.mimetype,
   };
 }
+// sync-touch: sendMedia uses signed mediaUrl (no base64), upload_media -> send
+
