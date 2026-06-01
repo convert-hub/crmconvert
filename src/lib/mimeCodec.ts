@@ -3,11 +3,11 @@
 // UAZAPI tipicamente aceita audio/ogg ou webm.
 
 export const META_ACCEPTED_AUDIO_MIMES = [
+  'audio/ogg;codecs=opus',
+  'audio/ogg',
   'audio/mp4;codecs=mp4a.40.2',
   'audio/mp4',
   'audio/aac',
-  'audio/ogg;codecs=opus',
-  'audio/ogg',
   'audio/mpeg',
 ];
 
