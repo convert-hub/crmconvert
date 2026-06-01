@@ -29,6 +29,7 @@ export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupp
   const cleanup = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     streamRef.current?.getTracks().forEach(t => t.stop());
+    
     streamRef.current = null;
     mediaRecorderRef.current = null;
   }, []);
