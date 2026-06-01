@@ -854,3 +854,5 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     </div>
   );
 }
+// sync-touch: storage-first media flow + currentConvIdRef guard + 15s dedup window
+

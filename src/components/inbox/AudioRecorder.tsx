@@ -111,3 +111,5 @@ export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupp
     </Button>
   );
 }
+// sync-touch: pickRecorderMime from mimeCodec, no opus-recorder, onUnsupported callback
+
