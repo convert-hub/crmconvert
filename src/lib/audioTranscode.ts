@@ -45,7 +45,8 @@ async function getFFmpeg(): Promise<FFmpegInstance> {
         return inst;
       } catch (e2) {
         loadPromise = null;
-        throw new Error('Falha ao carregar ffmpeg.wasm', { cause: e2 });
+        console.error('[audioTranscode] both CDNs failed', e2);
+        throw new Error('Falha ao carregar ffmpeg.wasm');
       }
     }
   })();
@@ -76,7 +77,10 @@ export async function transcodeToOggOpus(file: File): Promise<File> {
       throw new Error(`ffmpeg exec returned ${code}`);
     }
     const data = await ffmpeg.readFile(outName);
-    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+    const raw = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+    // Copia para um Uint8Array com ArrayBuffer "real" (não SharedArrayBuffer) para satisfazer o BlobPart.
+    const bytes = new Uint8Array(raw.byteLength);
+    bytes.set(raw);
     const out = new File([bytes], `audio_${Date.now()}.ogg`, { type: 'audio/ogg' });
     console.info('[audioTranscode] done', {
       inputType: file.type,
@@ -93,7 +97,8 @@ export async function transcodeToOggOpus(file: File): Promise<File> {
       durationMs: Math.round(performance.now() - t0),
       error: e,
     });
-    throw new Error('Falha ao converter áudio para OGG', { cause: e as Error });
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Falha ao converter áudio para OGG: ${msg}`);
   } finally {
     try { await ffmpeg.deleteFile(inName); } catch { /* noop */ }
     try { await ffmpeg.deleteFile(outName); } catch { /* noop */ }
