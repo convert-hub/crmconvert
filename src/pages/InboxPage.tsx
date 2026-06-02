@@ -136,6 +136,23 @@ export default function InboxPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
         loadConversations();
       })
+      // Fallback: if a new message arrives for a conversation NOT in our current list,
+      // it means either (a) the conversation INSERT event was missed, or (b) the conversation
+      // was created by a webhook just milliseconds before this message — either way, refetch the list.
+      // This avoids the bug where new conversations from new contacts don't appear until refresh.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, payload => {
+        const newMsg = payload.new as any;
+        const convId = newMsg?.conversation_id;
+        if (!convId) return;
+        // Use functional setState to read current conversations without stale closure
+        setConversations(prev => {
+          if (!prev.some(c => c.id === convId)) {
+            // Unknown conversation — trigger a refetch
+            loadConversations();
+          }
+          return prev;
+        });
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [tenant, role, membership?.id]);
