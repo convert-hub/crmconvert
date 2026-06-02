@@ -1,127 +1,102 @@
-# Transcoding cliente webm-opus → ogg-opus via ffmpeg.wasm (v2 — com ajustes)
+# Habilitar cross-origin isolation para ffmpeg.wasm (COEP: credentialless)
 
-Hipótese validada em produção: Meta Cloud aceita `audio/ogg;codecs=opus` puro. Como webm-opus e ogg-opus compartilham o mesmo codec Opus, basta re-muxar (sem re-encode).
+Diagnóstico: ffmpeg-core.js + .wasm baixam com 200, mas `ffmpeg.load()` falha porque `SharedArrayBuffer` é `undefined`. Browsers só expõem SAB quando a página está em estado `crossOriginIsolated`, o que exige COOP `same-origin` + COEP. Usar `credentialless` (em vez de `require-corp`) ativa o isolation sem exigir que recursos cross-origin enviem CORP — crítico porque Supabase Storage não emite CORP nas signed URLs.
 
-## 1. Dependências
+## 1. `nginx.conf` — COOP + COEP credentialless + MIME wasm
 
-- `@ffmpeg/ffmpeg@^0.12.10`
-- `@ffmpeg/util@^0.12.1`
+```
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
 
-Versão `@ffmpeg/core` pinada em **`0.12.10`** (constante exportada de `audioTranscode.ts` — sem wildcard).
+    # default mime.types do nginx não inclui wasm → browser recusa instanciar WebAssembly
+    types {
+        application/wasm wasm;
+    }
 
-## 2. `src/lib/audioTranscode.ts` (novo)
+    add_header Cross-Origin-Embedder-Policy "credentialless" always;
+    add_header Cross-Origin-Opener-Policy   "same-origin"    always;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cross-Origin-Embedder-Policy "credentialless" always;
+        add_header Cross-Origin-Opener-Policy   "same-origin"    always;
+    }
+
+    location ~* \.(js|css|wasm|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Cross-Origin-Embedder-Policy "credentialless" always;
+        add_header Cross-Origin-Opener-Policy   "same-origin"    always;
+        add_header Cross-Origin-Resource-Policy "same-origin"    always;
+    }
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript application/wasm text/xml application/xml text/javascript;
+}
+```
+
+Notas:
+- `types { application/wasm wasm; }` no nível server complementa (não substitui) o `include /etc/nginx/mime.types` carregado no `http` block do nginx:alpine.
+- `add_header` em `location` não herda do `server` → headers repetidos.
+
+## 2. Self-host do `@ffmpeg/core` via prebuild
+
+`package.json`:
+```json
+"scripts": {
+  "dev": "vite",
+  "prebuild": "mkdir -p public/ffmpeg && cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js public/ffmpeg/ && cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm public/ffmpeg/",
+  "build": "npm run prebuild && vite build",
+  "build:dev": "npm run prebuild && vite build --mode development",
+  ...
+}
+```
+
+`.gitignore` — acrescentar:
+```
+public/ffmpeg/
+```
+(gerados no build dentro do Docker, não devem ser versionados).
+
+`@ffmpeg/core` é resolvido transitivamente por `@ffmpeg/ffmpeg@0.12.10`. Dockerfile já roda `npm install` + `npm run build`, prebuild dispara automaticamente.
+
+## 3. `src/lib/audioTranscode.ts` — self-hosted primeiro, unpkg fallback
 
 ```ts
 const FFMPEG_CORE_VERSION = '0.12.10';
-const CDN_PRIMARY = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
-const CDN_FALLBACK = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
-
-export async function transcodeToOggOpus(file: File): Promise<File>
+const SELF_HOSTED  = '/ffmpeg';
+const CDN_FALLBACK = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
 ```
 
-Detalhes:
-- Singleton module-level: `ffmpegInstance` + `loadPromise` para deduplicar inicialização concorrente.
-- `getFFmpeg()`:
-  - `await import('@ffmpeg/ffmpeg')` e `await import('@ffmpeg/util')` (lazy / code-split).
-  - Tenta `toBlobURL(`${CDN_PRIMARY}/ffmpeg-core.js`, 'text/javascript')` + `.wasm` (`application/wasm`).
-  - Em caso de erro de rede/fetch no unpkg, retry automático contra `CDN_FALLBACK` (jsdelivr). Log explícito de qual CDN serviu.
-  - `ffmpeg.load({ coreURL, wasmURL })`.
-- Transcodificação:
-  1. `const t0 = performance.now();`
-  2. `const sizeIn = file.size;`
-  3. `writeFile('in.webm', await fetchFile(file))`
-  4. `exec(['-i', 'in.webm', '-c:a', 'copy', '-f', 'ogg', 'out.ogg'])`
-  5. `readFile('out.ogg')` → `Uint8Array`
-  6. Limpar FS (`deleteFile` em ambos, try/catch silencioso).
-  7. Construir `out = new File([data], `audio_${Date.now()}.ogg`, { type: 'audio/ogg' })`.
-  8. Log estruturado:
-     ```
-     console.info('[audioTranscode] done', {
-       inputType: file.type, inputSize: sizeIn,
-       outputType: out.type, outputSize: out.size,
-       durationMs: Math.round(performance.now() - t0),
-     });
-     ```
-  9. Log no início também: `console.info('[audioTranscode] start', { inputType, inputSize })`.
-- Erros do `exec` lançam `Error('Falha ao converter áudio para OGG')` com `cause` original e log `console.error('[audioTranscode] failed', { ... })`.
+`getFFmpeg()`:
+1. `loadFromBase(SELF_HOSTED)` → log `{ cdn: 'self-hosted' }`
+2. catch → `loadFromBase(CDN_FALLBACK)` → log `{ cdn: 'unpkg' }`
+3. catch → reset `loadPromise`, lança `Falha ao carregar ffmpeg.wasm`
 
-## 3. `src/components/inbox/AudioRecorder.tsx`
+Remove caminho `jsdelivr`. Mantém singleton, `transcodeToOggOpus` intacto.
 
-- Adicionar `PREFERRED_RECORDING_MIMES = ['audio/webm;codecs=opus', 'audio/webm']` como primeira tentativa.
-- Se nenhum suportado, cair para `pickRecorderMime(provider)` (cascata atual — Safari mp4/aac).
-- Não emitir `onUnsupported` para `meta_cloud` quando webm está disponível (transcode resolve).
-- Só dispara `onUnsupported` se nem webm nem nada da cascata existir.
+## Arquivos NÃO tocados
 
-## 4. `src/components/inbox/ChatPanel.tsx` — `handleSendMedia`
+- `ChatPanel.tsx`, `AudioRecorder.tsx`, `whatsappRouter.ts`, `mimeCodec.ts`
+- Edge functions, worker, Dockerfile, docker-compose.yml
 
-Logo após determinar `mediaType` e ANTES do bloco de tamanho MAX, inserir:
+## Validação manual no VPS
 
-```ts
-let fileToUpload = file;
-
-if (
-  file.type.startsWith('audio/') &&
-  providerInfo?.provider === 'meta_cloud' &&
-  !file.type.startsWith('audio/ogg')
-) {
-  const t = toast.loading('Processando áudio...');
-  try {
-    const { transcodeToOggOpus } = await import('@/lib/audioTranscode');
-    fileToUpload = await transcodeToOggOpus(file);
-  } catch (e) {
-    toast.dismiss(t);
-    toast.error('Não foi possível processar o áudio para envio.');
-    return;
-  }
-  toast.dismiss(t);
-}
-
-// RE-VALIDAÇÃO de tamanho após transcode (re-mux pode alterar o size)
-const MAX = mediaType === 'audio' ? 16 * 1024 * 1024
-          : mediaType === 'image' ? 5 * 1024 * 1024
-          : mediaType === 'video' ? 16 * 1024 * 1024
-          : 100 * 1024 * 1024;
-if (fileToUpload.size > MAX) {
-  toast.error('Arquivo excede o limite após processamento.');
-  return;
-}
+```
+git pull
+docker compose build app && docker compose up -d --no-deps --force-recreate app
 ```
 
-Substituir todos os usos subsequentes de `file` por `fileToUpload` dentro de `handleSendMedia` — incluindo:
-- derivação de `ext`/`storagePath`,
-- `supabase.storage.from('whatsapp-media').upload(storagePath, fileToUpload, ...)`,
-- `mimeType: fileToUpload.type` em `sendMedia(...)`,
-- qualquer `filename`/preview otimista derivado do arquivo.
+Browser (Ctrl+Shift+R):
+- Console: `crossOriginIsolated === true`
+- Console: `typeof SharedArrayBuffer === 'function'`
+- Network `/ffmpeg/ffmpeg-core.wasm` → 200, `Content-Type: application/wasm`, headers COOP/COEP/CORP presentes
+- Gravar áudio → log `[audioTranscode] ffmpeg loaded { cdn: 'self-hosted' }` → `[audioTranscode] done`
+- Abrir conversa com mídia Supabase → carrega normalmente (credentialless não exige CORP cross-origin)
 
-Confirmado: o condicional usa `providerInfo?.provider === 'meta_cloud'` (a variável existe no escopo do componente em `ChatPanel.tsx:277`), **não** `provider`.
+## Compatibilidade
 
-## 5. Sem alterações
-
-- `src/lib/mimeCodec.ts` — cascata e fallback Safari permanecem.
-- `src/lib/whatsappRouter.ts` — assinatura `sendMedia(mediaUrl)` intacta.
-- `supabase/functions/wa-meta-send` — validação MIME mantida.
-- Fluxo Storage-first (upload → signed URL → sendMedia) inalterado.
-
-## 6. Bundle / performance
-
-- ffmpeg.wasm (~25MB core+wasm) é lazy-loaded via dynamic `import()` + `toBlobURL` do CDN, fora do bundle inicial.
-- Singleton em memória: gravações subsequentes na sessão reusam a instância.
-- Re-mux com `-c:a copy`: tipicamente < 500ms para áudios de poucos minutos.
-
-## 7. Validação manual pós-deploy (sem deploy automático)
-
-- Chrome desktop (Mac/Win): webm → transcode → OGG → Meta aceita.
-- Firefox: idem.
-- Safari (sem webm): cai no fallback mp4/aac da cascata; **não** entra no bloco de transcode (já é MIME aceito Meta).
-- PC antigo SOS: confirmar custo do transcode aceitável.
-- Conferir logs `[audioTranscode] start` / `done` no console com sizes e ms.
-
-## 8. Restrições respeitadas
-
-- Sem deploy automático.
-- Storage-first intacto.
-- Cascata `pickRecorderMime` mantida como fallback Safari.
-- Versão `@ffmpeg/core` pinada (`0.12.10`).
-- Fallback CDN unpkg → jsdelivr.
-- Re-validação de 16MB pós-transcode.
-- Logs estruturados antes/depois com size e duração.
+COEP `credentialless`: Chrome/Edge 96+, Firefox 119+, Safari 17.4+.
