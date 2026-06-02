@@ -88,8 +88,10 @@ export async function sendText(params: {
       conversation_id: params.conversationId,
     },
   });
-  if (error || data?.error) {
-    return { ok: false, error: data?.error || error?.message };
+  // Note: uazapi-proxy now always returns 200 with { ok, error?, code? } for UAZAPI-level failures.
+  // We check data.ok / data.error explicitly; `error` from invoke is only set for real HTTP failures.
+  if (error || data?.error || data?.ok === false) {
+    return { ok: false, error: data?.error || error?.message, code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
@@ -172,8 +174,9 @@ export async function sendMedia(params: {
       conversation_id: params.conversationId,
     },
   });
-  if (error || data?.error) {
-    return { ok: false, error: data?.error || error?.message };
+  // uazapi-proxy now returns 200 with { ok, error?, code? } for UAZAPI failures.
+  if (error || data?.error || data?.ok === false) {
+    return { ok: false, error: data?.error || error?.message, code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }

@@ -338,6 +338,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, payload => {
         if (currentConvIdRef.current !== conversationId) return;
         const newMsg = payload.new as any;
+        // Defense in depth: explicitly verify conversation_id on payload.
+        // The Realtime filter SHOULD prevent cross-conversation leakage, but in practice
+        // it sometimes doesn't (race during channel re-subscribe, payload from a previous
+        // open channel arriving late, etc). This guard ensures we never inject a message
+        // from another conversation into the active chat.
+        if (newMsg.conversation_id !== conversationId) return;
         setMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev;
           const isOptimistic = prev.find(m =>
@@ -351,7 +357,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, payload => {
         if (currentConvIdRef.current !== conversationId) return;
-        setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? payload.new as unknown as Message : m));
+        const updated = payload.new as any;
+        // Defense in depth: same as INSERT — verify conversation_id explicitly.
+        if (updated.conversation_id !== conversationId) return;
+        setMessages(prev => prev.map(m => m.id === updated.id ? updated as unknown as Message : m));
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -396,10 +405,17 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             providerInfo: providerInfo ?? undefined,
           });
           if (!res.ok) {
-            if (savedMsg?.id) await supabase.from('messages').delete().eq('id', savedMsg.id);
-            if (currentConvIdRef.current === capturedConvId) {
-              setMessages(prev => prev.filter(m => m.id !== optimisticId && m.id !== savedMsg?.id));
-              setNewMsg(msgContent);
+            // Mark as failed instead of deleting — message may have actually been delivered to WhatsApp
+            // despite the upstream error. UI renders it with failed indicator (red bubble + "!" badge).
+            if (savedMsg?.id) {
+              await supabase.from('messages').update({
+                provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida', failed_at: new Date().toISOString() } as any,
+              }).eq('id', savedMsg.id);
+              if (currentConvIdRef.current === capturedConvId) {
+                setMessages(prev => prev.map(m => (m.id === optimisticId || m.id === savedMsg.id)
+                  ? { ...m, id: savedMsg.id, provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida' } } as any
+                  : m));
+              }
             }
             if (res.code === 'outside_24h_window') {
               toast.error(res.error ?? 'Cliente fora da janela de 24h.', {
@@ -513,9 +529,14 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         providerInfo: providerInfo ?? undefined,
       });
       if (!res.ok) {
-        await supabase.from('messages').delete().eq('id', savedMsg.id);
+        // Mark as failed instead of deleting — media may have actually been delivered despite error.
+        await supabase.from('messages').update({
+          provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida', failed_at: new Date().toISOString() } as any,
+        }).eq('id', savedMsg.id);
         if (currentConvIdRef.current === capturedConvId) {
-          setMessages(prev => prev.filter(m => m.id !== savedMsg.id));
+          setMessages(prev => prev.map(m => m.id === savedMsg.id
+            ? { ...m, provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida' } } as any
+            : m));
         }
         if (res.code?.endsWith('_mime_unsupported')) {
           toast.error(res.error ?? 'Formato de mídia não aceito pelo WhatsApp.');

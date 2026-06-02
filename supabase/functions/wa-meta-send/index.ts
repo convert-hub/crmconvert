@@ -547,8 +547,11 @@ serve(async (req) => {
 
     return jsonResponse({ ok: true, provider_message_id: providerMessageId, meta_media_id: uploadedMediaId, raw: sendData });
   } catch (err: any) {
+    // Return 200 with ok:false (instead of 500) so the frontend doesn't show the misleading
+    // "Edge Function returned a non-2xx status code" toast. The real error is in data.error
+    // and the SDK's `error` field stays clean (no false-positive on supabase.functions.invoke).
     console.error("wa-meta-send error:", err);
-    return jsonResponse({ error: err.message || "Internal error" }, 500);
+    return jsonResponse({ ok: false, code: "internal_error", error: err.message || "Erro interno no envio. Tente novamente." });
   }
 });
 

@@ -301,9 +301,9 @@ serve(async (req) => {
         if (!sendRes.ok) {
           const rawErr = sendData.error || sendData.message || `Falha ao enviar: ${sendRes.status}`;
           const errMsg = typeof rawErr === 'string' ? rawErr : JSON.stringify(rawErr);
-          // Return 400 for client errors (invalid number, etc.), 502 for upstream issues
-          const isClientError = errMsg.includes('not on WhatsApp') || errMsg.includes('invalid') || sendRes.status === 400 || sendRes.status === 404;
-          return jsonResponse({ error: errMsg, details: sendData }, isClientError ? 400 : 502);
+          // Always return 200 with ok:false so SDK does not throw generic "non-2xx" toast.
+          // Frontend checks data.error / data.ok to decide UX.
+          return jsonResponse({ ok: false, error: errMsg, details: sendData, upstream_status: sendRes.status });
         }
 
         // Reset inactivity: update opportunities linked to this contact
@@ -529,7 +529,8 @@ serve(async (req) => {
         console.log('UAZAPI send media response:', sendRes.status, JSON.stringify(sendData));
 
         if (!sendRes.ok) {
-          return jsonResponse({ error: sendData.error || sendData.message || `Falha ao enviar mídia: ${sendRes.status}`, details: sendData }, 502);
+          // Always return 200 with ok:false so SDK does not throw generic "non-2xx" toast.
+          return jsonResponse({ ok: false, error: sendData.error || sendData.message || `Falha ao enviar mídia: ${sendRes.status}`, details: sendData, upstream_status: sendRes.status });
         }
 
         if (convId) {
