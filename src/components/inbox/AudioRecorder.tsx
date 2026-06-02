@@ -62,8 +62,7 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
 
   const startOpus = useCallback(async () => {
     // dynamic import keeps bundle lean and lets us fall back on failure
-    // @ts-expect-error no bundled types
-    const mod: any = await import('opus-recorder');
+    const mod: any = await import('opus-recorder' as any);
     const Recorder = mod.default ?? mod;
     const rec = new Recorder({
       encoderPath: '/encoderWorker.min.js',
