@@ -456,31 +456,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       return;
     }
 
-    // Transcode client-side: webm/opus -> ogg/opus quando vai para Meta Cloud.
-    // Meta aceita audio/ogg;codecs=opus puro; re-mux é rápido (-c:a copy, sem re-encode).
-    let fileToUpload: File = file;
-    if (
-      file.type.startsWith('audio/') &&
-      providerInfo?.provider === 'meta_cloud' &&
-      !file.type.startsWith('audio/ogg')
-    ) {
-      const t = toast.loading('Processando áudio...');
-      try {
-        const { transcodeToOggOpus } = await import('@/lib/audioTranscode');
-        fileToUpload = await transcodeToOggOpus(file);
-      } catch (e: any) {
-        toast.dismiss(t);
-        toast.error(e?.message || 'Não foi possível processar o áudio para envio.');
-        return;
-      }
-      toast.dismiss(t);
-      // Re-validar tamanho — re-mux pode alterar o size.
-      if (fileToUpload.size > MAX) {
-        const mb = Math.round(MAX / 1024 / 1024);
-        toast.error(`Áudio convertido excede o limite de ${mb}MB.`);
-        return;
-      }
-    }
 
     setSending(true);
     try {
@@ -495,12 +470,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         media_type: mediaTypeLabel,
       } as any).select('id').single();
       if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
-      const ext = fileToUpload.name.split('.').pop()?.toLowerCase()
-        || (fileToUpload.type.split('/')[1]?.split(';')[0] ?? 'bin');
+      const ext = file.name.split('.').pop()?.toLowerCase()
+        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
       const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
       const { error: uploadError } = await supabase.storage
         .from('whatsapp-media')
-        .upload(storagePath, fileToUpload, { contentType: fileToUpload.type || 'application/octet-stream', upsert: true });
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
       if (uploadError) {
         console.error('[ChatPanel] upload bucket falhou', uploadError.message);
         await supabase.from('messages').delete().eq('id', savedMsg.id);
@@ -531,9 +506,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         tenantId: tenant.id,
         phone: contactPhone,
         mediaUrl: signed.signedUrl,
-        mimeType: fileToUpload.type,
+        mimeType: file.type,
         mediaType,
-        filename: fileToUpload.name,
+        filename: file.name,
         caption: '',
         providerInfo: providerInfo ?? undefined,
       });
@@ -684,13 +659,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending || isInternal} className="rounded-xl h-10 w-10 shrink-0" title="Anexar arquivo">
             <Paperclip className="h-4 w-4" />
           </Button>
-          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} provider={providerInfo?.provider ?? null} onUnsupported={({ reason }) => {
-            if (reason === 'webm-only-browser') {
-              toast.error('Seu navegador só grava em webm, formato não aceito pela WhatsApp Cloud. Atualize o navegador ou use outro dispositivo.');
-            } else {
-              toast.error('Não foi possível gravar áudio neste navegador.');
-            }
-          }} />}
+          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} provider={providerInfo?.provider ?? null} />}
           <Button size="icon" variant={isInternal ? 'default' : 'ghost'} onClick={() => setIsInternal(!isInternal)}
             className={cn("rounded-xl h-10 w-10 shrink-0", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')} title="Nota interna">
             <StickyNote className="h-4 w-4" />
