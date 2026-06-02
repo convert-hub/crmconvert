@@ -455,6 +455,33 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       toast.error(`Arquivo excede o limite de ${mb}MB para ${mediaType === 'audio' ? 'áudios' : mediaType === 'image' ? 'imagens' : mediaType === 'video' ? 'vídeos' : 'documentos'}.`);
       return;
     }
+
+    // Transcode client-side: webm/opus -> ogg/opus quando vai para Meta Cloud.
+    // Meta aceita audio/ogg;codecs=opus puro; re-mux é rápido (-c:a copy, sem re-encode).
+    let fileToUpload: File = file;
+    if (
+      file.type.startsWith('audio/') &&
+      providerInfo?.provider === 'meta_cloud' &&
+      !file.type.startsWith('audio/ogg')
+    ) {
+      const t = toast.loading('Processando áudio...');
+      try {
+        const { transcodeToOggOpus } = await import('@/lib/audioTranscode');
+        fileToUpload = await transcodeToOggOpus(file);
+      } catch (e: any) {
+        toast.dismiss(t);
+        toast.error(e?.message || 'Não foi possível processar o áudio para envio.');
+        return;
+      }
+      toast.dismiss(t);
+      // Re-validar tamanho — re-mux pode alterar o size.
+      if (fileToUpload.size > MAX) {
+        const mb = Math.round(MAX / 1024 / 1024);
+        toast.error(`Áudio convertido excede o limite de ${mb}MB.`);
+        return;
+      }
+    }
+
     setSending(true);
     try {
       const mediaTypeLabel = mediaType === 'audio' ? 'AudioMessage'
@@ -468,12 +495,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         media_type: mediaTypeLabel,
       } as any).select('id').single();
       if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
-      const ext = file.name.split('.').pop()?.toLowerCase()
-        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
+      const ext = fileToUpload.name.split('.').pop()?.toLowerCase()
+        || (fileToUpload.type.split('/')[1]?.split(';')[0] ?? 'bin');
       const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
       const { error: uploadError } = await supabase.storage
         .from('whatsapp-media')
-        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+        .upload(storagePath, fileToUpload, { contentType: fileToUpload.type || 'application/octet-stream', upsert: true });
       if (uploadError) {
         console.error('[ChatPanel] upload bucket falhou', uploadError.message);
         await supabase.from('messages').delete().eq('id', savedMsg.id);
@@ -504,9 +531,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         tenantId: tenant.id,
         phone: contactPhone,
         mediaUrl: signed.signedUrl,
-        mimeType: file.type,
+        mimeType: fileToUpload.type,
         mediaType,
-        filename: file.name,
+        filename: fileToUpload.name,
         caption: '',
         providerInfo: providerInfo ?? undefined,
       });
