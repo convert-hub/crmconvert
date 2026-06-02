@@ -37,20 +37,34 @@ export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupp
   useEffect(() => cleanup, [cleanup]);
 
   const startRecording = useCallback(async () => {
-    const picked = pickRecorderMime(provider ?? null);
-    if (!picked.mime) {
-      onUnsupported?.({ provider: provider ?? 'unknown', reason: 'no-codec' });
-      return;
+    // Preferência: webm/opus (todos browsers modernos suportam). O transcode
+    // client-side (ffmpeg.wasm) re-muxa para ogg/opus antes do upload, aceito pela Meta.
+    // Cascata pickRecorderMime continua como fallback Safari (mp4/aac).
+    const PREFERRED = ['audio/webm;codecs=opus', 'audio/webm'];
+    let chosen: string | null = null;
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+      for (const m of PREFERRED) {
+        try { if (MediaRecorder.isTypeSupported(m)) { chosen = m; break; } } catch { /* noop */ }
+      }
     }
-    if (picked.fallbackUsed && provider === 'meta_cloud') {
-      onUnsupported?.({ provider: 'meta_cloud', reason: 'webm-only-browser' });
-      return;
+    if (!chosen) {
+      const picked = pickRecorderMime(provider ?? null);
+      if (!picked.mime) {
+        onUnsupported?.({ provider: provider ?? 'unknown', reason: 'no-codec' });
+        return;
+      }
+      if (picked.fallbackUsed && provider === 'meta_cloud') {
+        onUnsupported?.({ provider: 'meta_cloud', reason: 'webm-only-browser' });
+        return;
+      }
+      chosen = picked.mime;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const mr = new MediaRecorder(stream, { mimeType: picked.mime });
-      mimeRef.current = picked.mime;
+      const mr = new MediaRecorder(stream, { mimeType: chosen });
+      mimeRef.current = chosen;
+
       mediaRecorderRef.current = mr;
       chunksRef.current = [];
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
