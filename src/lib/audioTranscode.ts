@@ -5,15 +5,15 @@
 // na primeira chamada — por isso lazy-load + singleton em memória.
 
 export const FFMPEG_CORE_VERSION = '0.12.10';
-const CDN_PRIMARY = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
-const CDN_FALLBACK = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
+const SELF_HOSTED  = '/ffmpeg';
+const CDN_FALLBACK = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
 
 type FFmpegInstance = any; // tipo opaco para evitar import síncrono do pacote pesado
 
 let ffmpegInstance: FFmpegInstance | null = null;
 let loadPromise: Promise<FFmpegInstance> | null = null;
 
-async function loadFromCdn(base: string): Promise<FFmpegInstance> {
+async function loadFromBase(base: string): Promise<FFmpegInstance> {
   const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
     import('@ffmpeg/ffmpeg'),
     import('@ffmpeg/util'),
@@ -32,20 +32,20 @@ async function getFFmpeg(): Promise<FFmpegInstance> {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
     try {
-      const inst = await loadFromCdn(CDN_PRIMARY);
-      console.info('[audioTranscode] ffmpeg loaded', { cdn: 'unpkg' });
+      const inst = await loadFromBase(SELF_HOSTED);
+      console.info('[audioTranscode] ffmpeg loaded', { cdn: 'self-hosted' });
       ffmpegInstance = inst;
       return inst;
     } catch (e1) {
-      console.warn('[audioTranscode] unpkg load failed, trying jsdelivr', e1);
+      console.warn('[audioTranscode] self-hosted load failed, trying unpkg', e1);
       try {
-        const inst = await loadFromCdn(CDN_FALLBACK);
-        console.info('[audioTranscode] ffmpeg loaded', { cdn: 'jsdelivr' });
+        const inst = await loadFromBase(CDN_FALLBACK);
+        console.info('[audioTranscode] ffmpeg loaded', { cdn: 'unpkg' });
         ffmpegInstance = inst;
         return inst;
       } catch (e2) {
         loadPromise = null;
-        console.error('[audioTranscode] both CDNs failed', e2);
+        console.error('[audioTranscode] both sources failed', e2);
         throw new Error('Falha ao carregar ffmpeg.wasm');
       }
     }
