@@ -1,101 +1,141 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Mic, Send, Trash2 } from 'lucide-react';
+import { Mic, Square, Trash2, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { pickRecorderMime, extFromMime } from '@/lib/mimeCodec';
 
 interface AudioRecorderProps {
   onRecorded: (file: File) => void;
   disabled?: boolean;
   /**
-   * 'meta_cloud' tenta selecionar um MIME aceito pela WhatsApp Cloud API
-   * (mp4/aac/ogg). Se apenas webm estiver disponível, dispara onUnsupported
-   * e NÃO grava (Meta rejeita webm).
+   * Quando 'meta_cloud', tenta gravar em audio/ogg (Opus) via opus-recorder,
+   * que é o formato exigido pela WhatsApp Cloud API.
+   * Para 'uazapi' (ou indefinido) usa MediaRecorder nativo (audio/webm).
    */
   provider?: 'meta_cloud' | 'uazapi' | null;
-  /** Callback quando o navegador não suporta nenhum codec aceito pelo provider. */
-  onUnsupported?: (info: { provider: string; reason: string }) => void;
 }
 
-export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupported }: AudioRecorderProps) {
+export default function AudioRecorder({ onRecorded, disabled, provider }: AudioRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
+  // Native MediaRecorder path (uazapi)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const mimeRef = useRef<string>('audio/webm');
+  // opus-recorder path (meta_cloud)
+  const opusRecorderRef = useRef<any>(null);
+  const opusBlobRef = useRef<Blob | null>(null);
+  const usingOpusRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const cleanup = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
     streamRef.current?.getTracks().forEach(t => t.stop());
-    
     streamRef.current = null;
     mediaRecorderRef.current = null;
+    try { opusRecorderRef.current?.close?.(); } catch { /* noop */ }
+    opusRecorderRef.current = null;
+    opusBlobRef.current = null;
+    usingOpusRef.current = false;
   }, []);
 
   useEffect(() => cleanup, [cleanup]);
 
-  const startRecording = useCallback(async () => {
-    // Preferência: webm/opus (todos browsers modernos suportam). O transcode
-    // client-side (ffmpeg.wasm) re-muxa para ogg/opus antes do upload, aceito pela Meta.
-    // Cascata pickRecorderMime continua como fallback Safari (mp4/aac).
-    const PREFERRED = ['audio/webm;codecs=opus', 'audio/webm'];
-    let chosen: string | null = null;
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
-      for (const m of PREFERRED) {
-        try { if (MediaRecorder.isTypeSupported(m)) { chosen = m; break; } } catch { /* noop */ }
-      }
-    }
-    if (!chosen) {
-      const picked = pickRecorderMime(provider ?? null);
-      if (!picked.mime) {
-        onUnsupported?.({ provider: provider ?? 'unknown', reason: 'no-codec' });
-        return;
-      }
-      if (picked.fallbackUsed && provider === 'meta_cloud') {
-        onUnsupported?.({ provider: 'meta_cloud', reason: 'webm-only-browser' });
-        return;
-      }
-      chosen = picked.mime;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mr = new MediaRecorder(stream, { mimeType: chosen });
-      mimeRef.current = chosen;
+  const startNative = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm',
+    });
+    mediaRecorderRef.current = mediaRecorder;
+    chunksRef.current = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    mediaRecorder.start();
+    usingOpusRef.current = false;
+  }, []);
 
-      mediaRecorderRef.current = mr;
-      chunksRef.current = [];
-      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.start();
+  const startOpus = useCallback(async () => {
+    // dynamic import keeps bundle lean and lets us fall back on failure
+    const mod: any = await import('opus-recorder');
+    const Recorder = mod.default ?? mod;
+    const rec = new Recorder({
+      encoderPath: '/encoderWorker.min.js',
+      encoderApplication: 2048, // VOIP
+      encoderSampleRate: 48000,
+      numberOfChannels: 1,
+      streamPages: false,
+    });
+    rec.ondataavailable = (typedArray: Uint8Array) => {
+      const ab = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
+      opusBlobRef.current = new Blob([ab], { type: 'audio/ogg' });
+    };
+    await rec.start();
+    opusRecorderRef.current = rec;
+    usingOpusRef.current = true;
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    try {
+      if (provider === 'meta_cloud') {
+        try {
+          await startOpus();
+        } catch (e) {
+          console.warn('[AudioRecorder] opus-recorder falhou, usando webm fallback', e);
+          await startNative();
+        }
+      } else {
+        await startNative();
+      }
       setRecording(true);
       setDuration(0);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-    } catch (e) {
-      console.warn('[AudioRecorder] start failed', e);
+    } catch {
       cleanup();
     }
-  }, [provider, onUnsupported, cleanup]);
+  }, [provider, startOpus, startNative, cleanup]);
 
-  const stopAndSend = useCallback(() => {
-    const mr = mediaRecorderRef.current;
-    if (!mr) return;
-    mr.onstop = () => {
-      const mime = mimeRef.current;
-      const ext = extFromMime(mime);
-      const blob = new Blob(chunksRef.current, { type: mime.split(';')[0] });
-      const file = new File([blob], `audio_${Date.now()}.${ext}`, { type: mime.split(';')[0] });
+  const stopAndSend = useCallback(async () => {
+    if (usingOpusRef.current && opusRecorderRef.current) {
+      const rec = opusRecorderRef.current;
+      try {
+        await rec.stop();
+        const blob = opusBlobRef.current;
+        if (blob && blob.size > 0) {
+          const file = new File([blob], `audio_${Date.now()}.ogg`, { type: 'audio/ogg' });
+          onRecorded(file);
+        }
+      } catch (e) {
+        console.warn('[AudioRecorder] stop opus failed', e);
+      }
+      setRecording(false);
+      setDuration(0);
+      cleanup();
+      return;
+    }
+    if (!mediaRecorderRef.current) return;
+    mediaRecorderRef.current.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const file = new File([blob], `audio_${Date.now()}.webm`, { type: 'audio/webm' });
       onRecorded(file);
     };
-    mr.stop();
+    mediaRecorderRef.current.stop();
     setRecording(false);
     setDuration(0);
     cleanup();
   }, [onRecorded, cleanup]);
 
   const cancelRecording = useCallback(() => {
-    try { mediaRecorderRef.current?.stop(); } catch { /* noop */ }
+    if (usingOpusRef.current && opusRecorderRef.current) {
+      try { opusRecorderRef.current.stop(); } catch { /* noop */ }
+    } else {
+      try { mediaRecorderRef.current?.stop(); } catch { /* noop */ }
+    }
     setRecording(false);
     setDuration(0);
     cleanup();
@@ -106,14 +146,29 @@ export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupp
   if (recording) {
     return (
       <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2 duration-200">
-        <Button size="icon" variant="ghost" className="rounded-full h-10 w-10 shrink-0 text-muted-foreground hover:text-destructive" onClick={cancelRecording} title="Cancelar">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="rounded-full h-10 w-10 shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={cancelRecording}
+          title="Cancelar"
+        >
           <Trash2 className="h-4 w-4" />
         </Button>
+
         <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-destructive/10 border border-destructive/20">
           <span className="h-2 w-2 rounded-full bg-destructive animate-pulse" />
-          <span className="text-sm font-medium text-destructive tabular-nums min-w-[32px]">{fmt(duration)}</span>
+          <span className="text-sm font-medium text-destructive tabular-nums min-w-[32px]">
+            {fmt(duration)}
+          </span>
         </div>
-        <Button size="icon" className="rounded-full h-10 w-10 shrink-0" onClick={stopAndSend} title="Enviar áudio">
+
+        <Button
+          size="icon"
+          className="rounded-full h-10 w-10 shrink-0"
+          onClick={stopAndSend}
+          title="Enviar áudio"
+        >
           <Send className="h-4 w-4" />
         </Button>
       </div>
@@ -121,10 +176,15 @@ export default function AudioRecorder({ onRecorded, disabled, provider, onUnsupp
   }
 
   return (
-    <Button size="icon" variant="ghost" className={cn("rounded-xl h-12 w-12 shrink-0 text-muted-foreground hover:text-foreground")} onClick={startRecording} disabled={disabled} title="Gravar áudio">
+    <Button
+      size="icon"
+      variant="ghost"
+      className="rounded-xl h-12 w-12 shrink-0 text-muted-foreground hover:text-foreground"
+      onClick={startRecording}
+      disabled={disabled}
+      title="Gravar áudio"
+    >
       <Mic className="h-5 w-5" />
     </Button>
   );
 }
-// sync-touch: pickRecorderMime from mimeCodec, no opus-recorder, onUnsupported callback
-

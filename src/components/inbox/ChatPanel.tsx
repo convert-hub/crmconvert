@@ -456,31 +456,6 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       return;
     }
 
-    // Transcode client-side: webm/opus -> ogg/opus quando vai para Meta Cloud.
-    // Meta aceita audio/ogg;codecs=opus puro; re-mux é rápido (-c:a copy, sem re-encode).
-    let fileToUpload: File = file;
-    if (
-      file.type.startsWith('audio/') &&
-      providerInfo?.provider === 'meta_cloud' &&
-      !file.type.startsWith('audio/ogg')
-    ) {
-      const t = toast.loading('Processando áudio...');
-      try {
-        const { transcodeToOggOpus } = await import('@/lib/audioTranscode');
-        fileToUpload = await transcodeToOggOpus(file);
-      } catch (e: any) {
-        toast.dismiss(t);
-        toast.error(e?.message || 'Não foi possível processar o áudio para envio.');
-        return;
-      }
-      toast.dismiss(t);
-      // Re-validar tamanho — re-mux pode alterar o size.
-      if (fileToUpload.size > MAX) {
-        const mb = Math.round(MAX / 1024 / 1024);
-        toast.error(`Áudio convertido excede o limite de ${mb}MB.`);
-        return;
-      }
-    }
 
     setSending(true);
     try {
