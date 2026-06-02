@@ -470,12 +470,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         media_type: mediaTypeLabel,
       } as any).select('id').single();
       if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
-      const ext = fileToUpload.name.split('.').pop()?.toLowerCase()
-        || (fileToUpload.type.split('/')[1]?.split(';')[0] ?? 'bin');
+      const ext = file.name.split('.').pop()?.toLowerCase()
+        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
       const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
       const { error: uploadError } = await supabase.storage
         .from('whatsapp-media')
-        .upload(storagePath, fileToUpload, { contentType: fileToUpload.type || 'application/octet-stream', upsert: true });
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
       if (uploadError) {
         console.error('[ChatPanel] upload bucket falhou', uploadError.message);
         await supabase.from('messages').delete().eq('id', savedMsg.id);
@@ -506,9 +506,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         tenantId: tenant.id,
         phone: contactPhone,
         mediaUrl: signed.signedUrl,
-        mimeType: fileToUpload.type,
+        mimeType: file.type,
         mediaType,
-        filename: fileToUpload.name,
+        filename: file.name,
         caption: '',
         providerInfo: providerInfo ?? undefined,
       });
