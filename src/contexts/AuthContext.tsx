@@ -111,8 +111,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
       } else if (activeMem) {
-        const { data: t } = await supabase
+        let { data: t, error: tErr } = await supabase
           .from('tenants').select('*').eq('id', activeMem.tenant_id).single();
+        if (tErr || !t) {
+          console.warn('[Auth] tenant select failed, retrying once:', tErr?.message);
+          await new Promise(r => setTimeout(r, 300));
+          const retry = await supabase
+            .from('tenants').select('*').eq('id', activeMem.tenant_id).single();
+          t = retry.data;
+          tErr = retry.error;
+        }
+        if (tErr) {
+          console.error('[Auth] tenant select FAILED after retry:', tErr.message);
+        }
         console.log('[Auth] tenant loaded:', t?.id, t?.name);
         setTenant(t as unknown as Tenant);
       }

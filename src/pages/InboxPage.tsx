@@ -116,7 +116,7 @@ export default function InboxPage() {
       });
   };
 
-  useEffect(() => { loadConversations(); }, [tenant, role, membership?.id]);
+  useEffect(() => { loadConversations(); }, [tenant?.id, role, membership?.id]);
 
   // Keep ?conv= in URL in sync with selectedConv so the open chat survives remounts/refreshes.
   useEffect(() => {
@@ -155,7 +155,7 @@ export default function InboxPage() {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [tenant, role, membership?.id]);
+  }, [tenant?.id, role, membership?.id]);
 
   useEffect(() => {
     if (!selectedConv) return;
