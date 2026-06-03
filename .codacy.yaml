@@ -1,0 +1,13 @@
+---
+engines:
+  eslint:
+    enabled: true
+  pmd:
+    enabled: true
+    plugins:
+      - name: rulesets/java/quickstart.xml
+  pmd-legacy:
+    enabled: false  # Disable if not needed
+exclude_paths:
+  - node_modules
+  - vendor
