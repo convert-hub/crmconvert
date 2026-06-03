@@ -155,7 +155,7 @@ export default function InboxPage() {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [tenant, role, membership?.id]);
+  }, [tenant?.id, role, membership?.id]);
 
   useEffect(() => {
     if (!selectedConv) return;
