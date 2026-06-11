@@ -542,6 +542,34 @@ export default function SettingsPage() {
     toast.success('Campo removido');
   };
 
+  const addContactCustomField = async () => {
+    if (!tenant || !ccfLabel.trim()) return;
+    const key = slugify(ccfLabel);
+    if (contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
+    const newField: CustomFieldDef = { key, label: ccfLabel.trim(), type: ccfType };
+    if (ccfType === 'select' && ccfOptions.trim()) {
+      newField.options = ccfOptions.split(',').map(o => o.trim()).filter(Boolean);
+    }
+    const updated = [...contactCustomFields, newField];
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setContactCustomFields(updated);
+    setCcfLabel(''); setCcfType('text'); setCcfOptions('');
+    toast.success('Campo adicionado');
+  };
+
+  const removeContactCustomField = async (key: string) => {
+    if (!tenant) return;
+    const updated = contactCustomFields.filter(f => f.key !== key);
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setContactCustomFields(updated);
+    toast.success('Campo removido');
+
   const CF_TYPE_LABELS: Record<string, string> = { text: 'Texto', number: 'Número', select: 'Seleção', date: 'Data', boolean: 'Sim/Não' };
 
   const navGroups: { label: string; items: { value: string; label: string; icon: any }[] }[] = [
