@@ -46,12 +46,13 @@ export function customFieldVars(
   keys: string[],
   scopes: VariableScope[],
 ): SystemVariable[] {
+  const suffix = prefix === 'contact.custom' ? ' (contato)' : ' (oportunidade)';
   return keys
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b))
     .map((k) => ({
       token: `${prefix}.${k}`,
-      label: k,
+      label: `${k}${suffix}`,
       group: 'Personalizado',
       description: prefix === 'contact.custom' ? 'Campo personalizado do contato' : 'Campo personalizado da oportunidade',
       scopes,

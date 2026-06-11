@@ -125,13 +125,32 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
     return out;
   }, [slots, values, realData]);
 
+  const tokenOnlyRe = /^\s*\{\{\s*([A-Za-z0-9_.]+)\s*\}\}\s*$/;
+  const emptyTokenSlots = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of slots) {
+      const raw = values[s.id];
+      if (!raw) continue;
+      const m = raw.match(tokenOnlyRe);
+      if (!m) continue;
+      const resolved = resolveToken(m[1]);
+      if (resolved === null) out[s.id] = m[1];
+    }
+    return out;
+  }, [slots, values, realData]);
+
   const missingCount = slots.filter(s => !values[s.id]?.trim()).length;
+  const emptyTokenCount = Object.keys(emptyTokenSlots).length;
   const tplVars = useSystemVariables({ tenantId, scope: 'template-meta', templateComponents: (selected?.components as any[]) ?? null });
 
   const handleSend = async () => {
     if (!selected) return;
     if (missingCount > 0) {
       toast.error(`Preencha as ${missingCount} variável(is) restantes`);
+      return;
+    }
+    if (emptyTokenCount > 0) {
+      toast.error('Há variáveis selecionadas sem valor para este contato. A Meta vai rejeitar o envio.');
       return;
     }
     setSending(true);
@@ -224,6 +243,11 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
                   onChange={v => setValues(prev => ({ ...prev, [s.id]: v }))}
                   placeholder={s.named ? s.key : `Valor para {{${s.key}}}`}
                 />
+                {emptyTokenSlots[s.id] && (
+                  <p className="text-[11px] text-destructive">
+                    ⚠ <span className="font-mono">{`{{${emptyTokenSlots[s.id]}}}`}</span> está vazio para {realData.contact?.name ?? 'este contato'}. A Meta vai rejeitar o envio.
+                  </p>
+                )}
               </div>
             ))}
 
@@ -235,7 +259,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
 
         <DialogFooter>
           <Button variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button className="rounded-xl" disabled={!selectedId || sending || missingCount > 0} onClick={handleSend}>
+          <Button className="rounded-xl" disabled={!selectedId || sending || missingCount > 0 || emptyTokenCount > 0} onClick={handleSend}>
             {sending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
             Enviar
           </Button>
