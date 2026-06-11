@@ -207,8 +207,12 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
                 {bodyComp?.text && (
                   <p>{renderPreview(bodyComp.text, valuesByKey)}</p>
                 )}
+                {realData.contact?.name && (
+                  <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40">Pré-visualizando com dados de <span className="font-medium text-foreground">{realData.contact.name}</span></p>
+                )}
               </div>
             )}
+
 
             {slots.map(s => (
               <div key={s.id} className="space-y-1">
