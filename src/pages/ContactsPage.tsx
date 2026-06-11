@@ -293,6 +293,39 @@ export default function ContactsPage() {
               </Popover>
             </div>
             <div className="space-y-1.5"><Label className="text-[13px]">Tags</Label><TagInput value={form.tags} onChange={tags => setForm(f => ({ ...f, tags }))} /></div>
+            {customFieldDefs.length > 0 && (
+              <div className="space-y-3 pt-2 border-t border-border/50">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Campos Personalizados</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {customFieldDefs.map(fd => (
+                    <div key={fd.key} className="space-y-1.5">
+                      <Label className="text-xs">{fd.label}</Label>
+                      {fd.type === 'text' && (
+                        <Input value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value }))} className="h-9" />
+                      )}
+                      {fd.type === 'number' && (
+                        <Input type="number" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value ? parseFloat(e.target.value) : '' }))} className="h-9" />
+                      )}
+                      {fd.type === 'date' && (
+                        <Input type="date" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value }))} className="h-9" />
+                      )}
+                      {fd.type === 'select' && (
+                        <Select value={String(customFieldValues[fd.key] ?? '')} onValueChange={v => setCustomFieldValues(p => ({ ...p, [fd.key]: v }))}>
+                          <SelectTrigger className="h-9"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                          <SelectContent>{fd.options?.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+                        </Select>
+                      )}
+                      {fd.type === 'boolean' && (
+                        <div className="flex items-center gap-2 h-9">
+                          <Checkbox checked={!!customFieldValues[fd.key]} onCheckedChange={v => setCustomFieldValues(p => ({ ...p, [fd.key]: v }))} />
+                          <span className="text-sm text-muted-foreground">{customFieldValues[fd.key] ? 'Sim' : 'Não'}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <Button type="submit" className="w-full">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>
           </form>
         </DialogContent>
