@@ -334,15 +334,14 @@ export default function SettingsPage() {
   const [aiGlobalKeyId, setAiGlobalKeyId] = useState('');
   const [globalApiKeys, setGlobalApiKeys] = useState<{ id: string; label: string; provider: string }[]>([]);
 
-  // Custom fields state
+  // Custom fields state (unified: each field can target Contact and/or Opportunity)
   const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
+  const [contactCustomFields, setContactCustomFields] = useState<CustomFieldDef[]>([]);
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
   const [cfOptions, setCfOptions] = useState('');
-  const [contactCustomFields, setContactCustomFields] = useState<CustomFieldDef[]>([]);
-  const [ccfLabel, setCcfLabel] = useState('');
-  const [ccfType, setCcfType] = useState<CustomFieldDef['type']>('text');
-  const [ccfOptions, setCcfOptions] = useState('');
+  const [cfInContact, setCfInContact] = useState(true);
+  const [cfInOpportunity, setCfInOpportunity] = useState(true);
   const [activeTab, setActiveTab] = useState('general');
 
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
