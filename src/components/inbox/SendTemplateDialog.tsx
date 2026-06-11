@@ -28,6 +28,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   const [sending, setSending] = useState(false);
   const [selectedId, setSelectedId] = useState<string>('');
   const [values, setValues] = useState<Record<string, string>>({});
+  const [realData, setRealData] = useState<{ contact: any | null; opportunity: any | null }>({ contact: null, opportunity: null });
 
   useEffect(() => {
     if (!open) return;
