@@ -258,8 +258,8 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             const def = customDefs.find(d => d.key === key);
             if (!def) continue;
             const res = coerceCustom(def, val);
-            if (!res.ok) { customError = res.reason; break; }
-            if (res.value !== undefined) customFields[key] = res.value;
+            if (res && res.ok === false) { customError = res.reason; break; }
+            if (res && res.ok === true && res.value !== undefined) customFields[key] = res.value;
           } else if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
           else if (field === 'tags') c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
           else if (field === 'birth_date') {
