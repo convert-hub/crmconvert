@@ -1,51 +1,43 @@
-## Objetivo
-Rollback de ffmpeg.wasm → opus-recorder, mantendo todas as melhorias estruturais (Storage-first, currentConvIdRef, dedup, idempotência inbound, normalização de telefone, assinatura `sendMedia(mediaUrl)`).
+# Diagnóstico forense
 
-## Mudanças
+**Sintoma:** Campos personalizados criados em *Configurações → Campos* não aparecem no picker de variáveis ao enviar um template Meta no Inbox.
 
-### 1. `package.json`
-- **Remover** de `dependencies`: `@ffmpeg/core`, `@ffmpeg/ffmpeg`, `@ffmpeg/util`.
-- **Adicionar** em `dependencies`: `"opus-recorder": "^8.0.5"`.
-- **Scripts**:
-  - Remover `prebuild`.
-  - `build`: `"vite build"` (sem `npm run prebuild &&`).
-  - `build:dev`: `"vite build --mode development"`.
+**Causa raiz (3 problemas encadeados em `src/hooks/useSystemVariables.ts`):**
 
-### 2. `public/encoderWorker.min.js`
-Restaurar arquivo. Fonte (em ordem):
-1. `node_modules/opus-recorder/dist/encoderWorker.min.js` após `npm install`.
-2. Fallback: `https://raw.githubusercontent.com/convert-hub/crmconvert/84b90e128ee04d798f2291235da2495dcea6f19f/public/encoderWorker.min.js`.
+1. **Fonte errada de descoberta.** `discoverCustomKeys()` faz `SELECT custom_fields FROM contacts/opportunities` e extrai chaves dos JSONB **já preenchidos**. Quem nunca preencheu o campo em nenhum registro, nunca vê a chave no picker. As **definições** dos campos vivem em outro lugar: `tenants.settings.custom_opportunity_fields` (gravado em `SettingsPage.tsx` linha 522).
 
-### 3. `src/components/inbox/AudioRecorder.tsx`
-Restaurar para versão do commit `13048dd3`:
-- URL: `https://raw.githubusercontent.com/convert-hub/crmconvert/13048dd3/src/components/inbox/AudioRecorder.tsx`.
-- Características: `await import('opus-recorder')` com `encoderPath: '/encoderWorker.min.js'` em modo `meta_cloud`; produz `File` com `type: 'audio/ogg'`; fallback nativo `audio/webm` para UAZAPI ou quando opus-recorder falhar.
+2. **Escopo do picker omite oportunidade.** No ramo `scope === 'template-meta'`, o hook só chama `customFieldVars('contact.custom', custom.contact, …)`. Os campos definidos como `custom_opportunity_fields` ficam de fora mesmo se houvesse dados — não há `customFieldVars('opportunity.custom', …)` nesse ramo.
 
-### 4. `src/lib/audioTranscode.ts`
-**DELETAR** o arquivo.
+3. **Cache de 5 min mascara o problema.** Mesmo se os pontos 1 e 2 fossem corrigidos via dado real, a chave nova só apareceria depois do TTL do cache em memória.
 
-### 5. `src/components/inbox/ChatPanel.tsx`
-Em `handleSendMedia`, remover o bloco do transcode (`let fileToUpload: File = file;` até o fechamento do `if`, ~linhas 317–337). Voltar a usar `file` direto no upload do Storage, signed URL e `sendMedia`. Manter intactos: `currentConvIdRef`, validação de tamanho, validação `providerInfo`, fluxo Storage-first.
+**Observação extra (não é o bug, mas convém alinhar):** a chave usada hoje em `tenants.settings` é `custom_opportunity_fields`, mas o painel em `SettingsPage` é genérico ("Campos") e o usuário pode esperar que valha para contato também. O nome atual é herdado; mantenho-o para não quebrar dados existentes, mas exponho como `opportunity.custom.*` no picker.
 
-### 6. `nginx.conf`
-Restaurar para versão do commit `cbfc2404`:
-- URL: `https://raw.githubusercontent.com/convert-hub/crmconvert/cbfc2404/nginx.conf`.
-- Sem `types {}`, sem headers COEP/COOP/CORP, sem `wasm` no `location ~*` nem em `gzip_types`.
+# Plano de correção (mínimo, cirúrgico)
 
-### 7. `.gitignore`
-Remover a linha `public/ffmpeg/`.
+Alterar **apenas** `src/hooks/useSystemVariables.ts`. Nenhum outro arquivo precisa mudar — `SendTemplateDialog` e `MessageNodeEditor` já consomem o hook.
 
-## Arquivos NÃO tocados
-- `src/lib/whatsappRouter.ts` (assinatura `sendMedia(mediaUrl)` mantida).
-- `supabase/functions/wa-meta-send/index.ts` (validação MIME já aceita `audio/ogg`).
-- `supabase/functions/webhook-meta/index.ts` (idempotência inbound).
-- `src/lib/phone.ts`, `src/lib/mimeCodec.ts`.
-- Migrations e demais arquivos.
+### Mudanças
 
-## Validação
-1. Antes de aplicar: revisar diff de cada arquivo no GitHub.
-2. Após `npm install`: confirmar que `node_modules/opus-recorder/dist/encoderWorker.min.js` existe e foi copiado para `public/`.
-3. No VPS: `docker compose build app && docker compose up -d --no-deps --force-recreate app`.
-4. Browser (Ctrl+Shift+R): gravar áudio em conversa Meta Cloud, confirmar upload `audio/ogg` direto, sem chamadas a ffmpeg.
+1. **Trocar a fonte de descoberta** de `contacts/opportunities.custom_fields` para `tenants.settings`:
+   - Ler `tenants.settings.custom_opportunity_fields` (definições oficiais).
+   - Ler também `tenants.settings.custom_contact_fields` caso exista no futuro (forward-compatible; hoje retorna vazio).
+   - Cada definição expõe `key` e `label` — usar `label` no `SystemVariable.label` (melhor UX que slug).
 
-Sem deploy automático.
+2. **Incluir `opportunity.custom.*` no escopo `template-meta`.** Hoje só inclui `contact.custom.*`. Passar a adicionar ambos.
+
+3. **Reduzir o TTL do cache** de 5 min → 30 s, e invalidar quando o `tenantId` muda (já faz). Mantém leveza sem prender chave nova por muito tempo.
+
+### Por que não tocar no backend
+
+O `wa-meta-send` envia os valores do template já resolvidos pelo frontend (o usuário digita ou seleciona um valor concreto via `VariableInput`). O picker é puramente UI — corrigir a fonte de dados do picker resolve o sintoma sem mexer em envio, interpolação no worker, nem RLS.
+
+### Validação
+
+- Em Configurações → Campos, criar um campo novo (ex.: "CPF").
+- Em Inbox → enviar template → o picker dentro de cada slot deve listar `opportunity.custom.cpf` no grupo *Personalizado*, mesmo sem nenhuma oportunidade preenchida.
+
+### Fora de escopo
+
+- Renomear `custom_opportunity_fields` para algo neutro (migração de dados — não pediu).
+- Resolver `{{opportunity.custom.*}}` server-side em templates Meta (hoje o usuário cola o valor literal; mudança maior).
+- Mexer no `MessageNodeEditor`, `wa-meta-send`, ou worker.
