@@ -831,28 +831,46 @@ export default function SettingsPage() {
         <TabsContent value="custom_fields" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">
             <CardHeader>
-              <CardTitle>Campos Personalizados de Oportunidade</CardTitle>
-              <CardDescription>Defina campos extras que aparecerão nos cards do pipeline e no detalhe da oportunidade</CardDescription>
+              <CardTitle>Campos Personalizados</CardTitle>
+              <CardDescription>Defina campos extras e escolha em quais entidades aparecem. Valores ficam em cada entidade de forma independente.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {customFields.length > 0 ? (
-                <Table>
-                  <TableHeader><TableRow className="hover:bg-transparent">
-                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {customFields.map(f => (
-                      <TableRow key={f.key}>
-                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
-                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
-                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado definido.</p>}
+              {(() => {
+                const merged = new Map<string, { def: CustomFieldDef; inContact: boolean; inOpportunity: boolean }>();
+                for (const f of contactCustomFields) merged.set(f.key, { def: f, inContact: true, inOpportunity: false });
+                for (const f of customFields) {
+                  const ex = merged.get(f.key);
+                  if (ex) ex.inOpportunity = true;
+                  else merged.set(f.key, { def: f, inContact: false, inOpportunity: true });
+                }
+                const rows = Array.from(merged.values());
+                if (rows.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado definido.</p>;
+                return (
+                  <Table>
+                    <TableHeader><TableRow className="hover:bg-transparent">
+                      <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead>
+                      <TableHead className="text-center">Contato</TableHead><TableHead className="text-center">Oportunidade</TableHead><TableHead></TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {rows.map(({ def: f, inContact, inOpportunity }) => (
+                        <TableRow key={f.key}>
+                          <TableCell className="font-medium text-foreground">{f.label}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
+                          <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
+                          <TableCell className="text-center">
+                            <Checkbox checked={inContact} disabled={!isAdmin} onCheckedChange={(v) => toggleCustomFieldScope(f.key, 'contact', !!v)} />
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Checkbox checked={inOpportunity} disabled={!isAdmin} onCheckedChange={(v) => toggleCustomFieldScope(f.key, 'opportunity', !!v)} />
+                          </TableCell>
+                          <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                );
+              })()}
 
               {isAdmin && (
                 <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
@@ -860,7 +878,7 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Nome do campo</Label>
-                      <Input value={cfLabel} onChange={e => setCfLabel(e.target.value)} placeholder="Ex: Produto" className="rounded-xl" />
+                      <Input value={cfLabel} onChange={e => setCfLabel(e.target.value)} placeholder="Ex: CPF, Produto" className="rounded-xl" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Tipo</Label>
@@ -882,75 +900,25 @@ export default function SettingsPage() {
                       <Input value={cfOptions} onChange={e => setCfOptions(e.target.value)} placeholder="Ex: Baixa, Média, Alta" className="rounded-xl" />
                     </div>
                   )}
-                  <Button onClick={addCustomField} disabled={!cfLabel.trim()} className="rounded-xl">
-                    <Plus className="h-4 w-4 mr-1" />Adicionar Campo
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="glass-card rounded-2xl">
-            <CardHeader>
-              <CardTitle>Campos Personalizados de Contato</CardTitle>
-              <CardDescription>Definidos no contato e disponíveis como variáveis em templates/disparos antes mesmo de virar oportunidade</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {contactCustomFields.length > 0 ? (
-                <Table>
-                  <TableHeader><TableRow className="hover:bg-transparent">
-                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {contactCustomFields.map(f => (
-                      <TableRow key={f.key}>
-                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
-                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
-                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeContactCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado de contato.</p>}
-
-              {isAdmin && (
-                <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
-                  <p className="text-sm font-medium text-foreground">Novo campo</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Nome do campo</Label>
-                      <Input value={ccfLabel} onChange={e => setCcfLabel(e.target.value)} placeholder="Ex: CPF" className="rounded-xl" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Tipo</Label>
-                      <Select value={ccfType} onValueChange={v => setCcfType(v as CustomFieldDef['type'])}>
-                        <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="text">Texto</SelectItem>
-                          <SelectItem value="number">Número</SelectItem>
-                          <SelectItem value="select">Seleção</SelectItem>
-                          <SelectItem value="date">Data</SelectItem>
-                          <SelectItem value="boolean">Sim/Não</SelectItem>
-                        </SelectContent>
-                      </Select>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Aparece em</Label>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={cfInContact} onCheckedChange={(v) => setCfInContact(!!v)} /> Contato
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={cfInOpportunity} onCheckedChange={(v) => setCfInOpportunity(!!v)} /> Oportunidade
+                      </label>
                     </div>
                   </div>
-                  {ccfType === 'select' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Opções (separadas por vírgula)</Label>
-                      <Input value={ccfOptions} onChange={e => setCcfOptions(e.target.value)} placeholder="Ex: A, B, C" className="rounded-xl" />
-                    </div>
-                  )}
-                  <Button onClick={addContactCustomField} disabled={!ccfLabel.trim()} className="rounded-xl">
+                  <Button onClick={addCustomField} disabled={!cfLabel.trim() || (!cfInContact && !cfInOpportunity)} className="rounded-xl">
                     <Plus className="h-4 w-4 mr-1" />Adicionar Campo
                   </Button>
                 </div>
               )}
             </CardContent>
           </Card>
-        </TabsContent>
+
 
 
         <TabsContent value="team" className="space-y-4 pt-4">
