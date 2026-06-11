@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Upload, FileText, AlertTriangle, Download } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -41,6 +41,8 @@ interface ImportContactsDialogProps {
 
 type CsvRow = Record<string, string>;
 
+type CustomFieldDef = { key: string; label: string; type: 'text'|'number'|'date'|'select'|'boolean'; options?: string[] };
+
 const PRESET_COLORS = [
   '#ef4444', '#f97316', '#eab308', '#22c55e',
   '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
@@ -60,7 +62,9 @@ const CONTACT_FIELDS = [
   { value: 'notes', label: 'Notas' },
 ];
 
-function guessMapping(header: string): string {
+const normKey = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').trim();
+
+function guessMapping(header: string, customDefs: CustomFieldDef[] = []): string {
   const h = header.toLowerCase().trim();
   if (/^nome|name|full.?name/i.test(h)) return 'name';
   if (/^telefone|phone|whatsapp|celular|fone/i.test(h)) return 'phone';
@@ -72,16 +76,19 @@ function guessMapping(header: string): string {
   if (/^estado|state|uf/i.test(h)) return 'state';
   if (/^origem|source/i.test(h)) return 'source';
   if (/^nota|note|obs/i.test(h)) return 'notes';
+  // Custom fields: try matching by label or key
+  const nh = normKey(header);
+  for (const fd of customDefs) {
+    if (normKey(fd.label) === nh || normKey(fd.key) === nh) return `custom:${fd.key}`;
+  }
   return 'skip';
 }
 
 // RFC 4180-style CSV parser: handles quoted fields, escaped quotes ("") and embedded delimiters/newlines.
 function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
-  // Strip BOM
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   if (!text.trim()) return { headers: [], rows: [] };
 
-  // Delimiter detection on first non-quoted line
   const firstLine = text.split(/\r?\n/, 1)[0] || '';
   const commaCount = (firstLine.match(/,/g) || []).length;
   const semiCount = (firstLine.match(/;/g) || []).length;
@@ -104,7 +111,7 @@ function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
     } else {
       if (c === '"') inQuotes = true;
       else if (c === delimiter) { record.push(field); field = ''; }
-      else if (c === '\r') { /* skip — handled by \n */ }
+      else if (c === '\r') { /* skip */ }
       else if (c === '\n') {
         record.push(field); field = '';
         if (record.some(v => v.length > 0)) records.push(record);
@@ -114,7 +121,6 @@ function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
       }
     }
   }
-  // Trailing field/record
   if (field.length > 0 || record.length > 0) {
     record.push(field);
     if (record.some(v => v.length > 0)) records.push(record);
@@ -141,7 +147,26 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importResult, setImportResult] = useState<{ created: number; updated: number; errors: ImportError[] } | null>(null);
   const [progress, setProgress] = useState(0);
+  const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open || !tenantId) return;
+    supabase.from('tenants').select('settings').eq('id', tenantId).single().then(({ data }) => {
+      if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+        const s = data.settings as Record<string, any>;
+        setCustomDefs(Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : []);
+      }
+    });
+  }, [open, tenantId]);
+
+  const fieldLabel = (value: string): string => {
+    if (value.startsWith('custom:')) {
+      const key = value.slice(7);
+      return customDefs.find(d => d.key === key)?.label ?? key;
+    }
+    return CONTACT_FIELDS.find(f => f.value === value)?.label ?? value;
+  };
 
   const handleFile = (file: File) => {
     const reader = new FileReader();
@@ -152,11 +177,41 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       setHeaders(h);
       setRows(r);
       const autoMapping: Record<string, string> = {};
-      h.forEach(header => { autoMapping[header] = guessMapping(header); });
+      h.forEach(header => { autoMapping[header] = guessMapping(header, customDefs); });
       setMapping(autoMapping);
       setStep('mapping');
     };
     reader.readAsText(file, 'UTF-8');
+  };
+
+  const coerceCustom = (def: CustomFieldDef, val: string): { ok: true; value: unknown } | { ok: false; reason: string } => {
+    const v = val.trim();
+    if (!v) return { ok: true, value: undefined };
+    switch (def.type) {
+      case 'text': return { ok: true, value: v };
+      case 'number': {
+        const n = parseFloat(v.replace(',', '.'));
+        if (Number.isNaN(n)) return { ok: false, reason: `Campo "${def.label}": número inválido "${val}"` };
+        return { ok: true, value: n };
+      }
+      case 'date': {
+        const parsed = parseDateBR(v);
+        if (!parsed) return { ok: false, reason: `Campo "${def.label}": data inválida "${val}" (use DD/MM/AAAA)` };
+        return { ok: true, value: parsed };
+      }
+      case 'select': {
+        const opts = def.options ?? [];
+        const match = opts.find(o => normKey(o) === normKey(v));
+        if (!match) return { ok: false, reason: `Campo "${def.label}": valor "${val}" não está nas opções (${opts.join(', ')})` };
+        return { ok: true, value: match };
+      }
+      case 'boolean': {
+        const lc = normKey(v);
+        if (['sim', 'true', '1', 'yes', 'y', 's'].includes(lc)) return { ok: true, value: true };
+        if (['nao', 'false', '0', 'no', 'n'].includes(lc)) return { ok: true, value: false };
+        return { ok: false, reason: `Campo "${def.label}": boolean inválido "${val}" (use Sim/Não)` };
+      }
+    }
   };
 
   const handleImport = async () => {
@@ -167,9 +222,8 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     setProgress(0);
     let created = 0, updated = 0;
     const errors: ImportError[] = [];
-    // Track contacts created/updated within this run, so duplicate phones inside the same CSV also merge tags.
-    const seenByPhone = new Map<string, { id: string; tags: string[] }>();
-    const seenByEmail = new Map<string, { id: string; tags: string[] }>();
+    const seenByPhone = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
+    const seenByEmail = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
     const allTagsUsed = new Set<string>();
 
     const mergeTags = (a: string[] = [], b: string[] = []) => {
@@ -193,10 +247,20 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         let rawPhone = '';
         let rawBirth = '';
         let birthInvalid = false;
-        Object.entries(mapping).forEach(([csvCol, field]) => {
+        const customFields: Record<string, unknown> = {};
+        let customError: string | null = null;
+
+        for (const [csvCol, field] of Object.entries(mapping)) {
           const val = row[csvCol];
-          if (field === 'skip' || !val) return;
-          if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
+          if (field === 'skip' || !val) continue;
+          if (field.startsWith('custom:')) {
+            const key = field.slice(7);
+            const def = customDefs.find(d => d.key === key);
+            if (!def) continue;
+            const res = coerceCustom(def, val);
+            if (res && res.ok === false) { customError = res.reason; break; }
+            if (res && res.ok === true && res.value !== undefined) customFields[key] = res.value;
+          } else if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
           else if (field === 'tags') c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
           else if (field === 'birth_date') {
             rawBirth = val;
@@ -205,9 +269,12 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             else birthInvalid = true;
           }
           else c[field] = val;
-        });
+        }
 
-        // Phone validation: if user provided a phone but normalization stripped it, flag the row.
+        if (customError) {
+          errors.push({ row: i + 2, reason: customError, data: row });
+          continue;
+        }
         if (rawPhone && !c.phone) {
           errors.push({ row: i + 2, reason: `Telefone inválido: "${rawPhone}"`, data: row });
           continue;
@@ -219,36 +286,40 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         if (!c.name) c.name = 'Sem nome';
         if (!c.status) c.status = 'lead';
         (c.tags || []).forEach((t: string) => allTagsUsed.add(t));
+        const hasCustom = Object.keys(customFields).length > 0;
 
-        // Resolve existing — check in-memory first to merge intra-CSV duplicates.
-        let existing: { id: string; tags: string[] } | null = null;
+        let existing: { id: string; tags: string[]; custom_fields: Record<string, unknown> } | null = null;
         if (c.phone && seenByPhone.has(c.phone)) existing = seenByPhone.get(c.phone)!;
         else if (c.email && seenByEmail.has(c.email)) existing = seenByEmail.get(c.email)!;
 
         if (!existing && c.phone) {
-          const { data } = await supabase.from('contacts').select('id, tags').eq('tenant_id', tenantId).eq('phone', c.phone).limit(1);
-          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [] };
+          const { data } = await supabase.from('contacts').select('id, tags, custom_fields').eq('tenant_id', tenantId).eq('phone', c.phone).limit(1);
+          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [], custom_fields: (data[0].custom_fields as Record<string, unknown>) || {} };
         }
         if (!existing && c.email) {
-          const { data } = await supabase.from('contacts').select('id, tags').eq('tenant_id', tenantId).eq('email', c.email).limit(1);
-          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [] };
+          const { data } = await supabase.from('contacts').select('id, tags, custom_fields').eq('tenant_id', tenantId).eq('email', c.email).limit(1);
+          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [], custom_fields: (data[0].custom_fields as Record<string, unknown>) || {} };
         }
 
         if (existing) {
           const mergedTags = mergeTags(existing.tags, c.tags || []);
+          const mergedCustom = hasCustom ? { ...existing.custom_fields, ...customFields } : existing.custom_fields;
           const { tenant_id, tags: _t, ...rest } = c;
           const updateData: any = { ...rest, tags: mergedTags };
+          if (hasCustom) updateData.custom_fields = mergedCustom;
           const { error } = await supabase.from('contacts').update(updateData).eq('id', existing.id);
           if (error) throw error;
           updated++;
           existing.tags = mergedTags;
+          existing.custom_fields = mergedCustom;
           if (c.phone) seenByPhone.set(c.phone, existing);
           if (c.email) seenByEmail.set(c.email, existing);
         } else {
+          if (hasCustom) c.custom_fields = customFields;
           const { data: ins, error } = await supabase.from('contacts').insert(c).select('id').single();
           if (error) throw error;
           created++;
-          const entry = { id: ins!.id, tags: c.tags || [] };
+          const entry = { id: ins!.id, tags: c.tags || [], custom_fields: customFields };
           if (c.phone) seenByPhone.set(c.phone, entry);
           if (c.email) seenByEmail.set(c.email, entry);
         }
@@ -259,7 +330,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       setProgress(Math.round(((i + 1) / rows.length) * 100));
     }
 
-    // Auto-register new tags in tenants.settings.tags
+    // Auto-register new tags
     if (allTagsUsed.size > 0) {
       try {
         const { data: tData } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
@@ -356,6 +427,14 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                     <SelectTrigger className="w-48 h-8 text-[13px]"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {CONTACT_FIELDS.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
+                      {customDefs.length > 0 && (
+                        <SelectGroup>
+                          <SelectLabel className="text-[11px] uppercase tracking-wide text-muted-foreground">Campos personalizados</SelectLabel>
+                          {customDefs.map(fd => (
+                            <SelectItem key={`custom:${fd.key}`} value={`custom:${fd.key}`}>{fd.label}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
                     </SelectContent>
                   </Select>
                   <span className="text-xs text-muted-foreground truncate flex-1">{rows[0]?.[header] || '-'}</span>
@@ -369,7 +448,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                 <TableHeader>
                   <TableRow>
                     {headers.filter(h => mapping[h] !== 'skip').map(h => (
-                      <TableHead key={h} className="text-[11px]">{mapping[h]}</TableHead>
+                      <TableHead key={h} className="text-[11px]">{fieldLabel(mapping[h])}</TableHead>
                     ))}
                   </TableRow>
                 </TableHeader>

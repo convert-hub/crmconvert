@@ -1,54 +1,36 @@
-# Corrigir importação de contatos (CSV)
-
 ## Diagnóstico
-A planilha da Patrícia (51 linhas) gerou apenas 19 contatos com as tags esperadas. A investigação no banco e no código de `ImportContactsDialog.tsx` apontou três falhas concorrentes:
 
-1. **Tags sobrescritas no dedup.** Quando o telefone já existe (incluindo telefones repetidos *dentro do mesmo CSV*), o `update` substitui o array `tags` inteiro. Contatos que apareciam em mais de uma aba/seção da planilha perderam todas as tags exceto a última processada — exatamente o padrão observado (`NUNCA RESPONDEU = 0`, `VNFM = 4` em vez de 12, `NV = 12` em vez de 36).
-2. **Parser CSV ingênuo.** `lines[i].split(delimiter)` não respeita aspas. Campos como `"Silva, Jr."` deslocam colunas, telefone vira lixo, `normalizeBrazilPhone` devolve `''`, e a linha vira um contato sem telefone (sem dedup) ou falha silenciosamente.
-3. **Erros invisíveis.** O `catch { errors++ }` engole o motivo. A usuária nunca soube que houve falhas — o toast só mostra "X criados, Y atualizados".
+Hoje, no `ImportContactsDialog`, a lista `CONTACT_FIELDS` é estática e contém apenas campos nativos (nome, telefone, email, status, tags, nascimento, cidade, estado, origem, notas). Não há como direcionar uma coluna da planilha para um campo personalizado definido em Configurações → Contatos (`tenants.settings.custom_contact_fields`, persistidos em `contacts.custom_fields` JSONB). Resultado: colunas extras só podem ser ignoradas.
 
-## Correções
+## O que vamos construir
 
-### 1. Mesclar tags em vez de sobrescrever
-No bloco de `update` do `handleImport`, buscar o contato existente com `tags` (não só `id`) e fazer união dos arrays antes do update. Mesmo tratamento para *segunda ocorrência do mesmo telefone dentro do próprio CSV* — manter um `Map<phone, accumulatedTags>` em memória durante o batch para que duplicatas internas também acumulem.
+Adicionar suporte a campos personalizados como destinos válidos do mapeamento, gravando os valores no JSONB `custom_fields` do contato, respeitando o tipo de cada campo.
 
-Regra de merge:
-- `tags = unique([...existing.tags, ...row.tags])` (case-insensitive na comparação, mantendo a grafia original já cadastrada)
-- Demais campos (`name`, `email`, `city`, etc.) continuam com comportamento atual: só sobrescreve se a linha trouxer valor; nunca apaga com vazio.
+## Mudanças
 
-### 2. Parser CSV que respeita aspas
-Substituir `split(delimiter)` por um parser linha-a-linha que entenda:
-- Campos entre aspas duplas (`"..."`), com aspas escapadas (`""`)
-- Delimitador dentro de aspas (`"Silva, Jr."`)
-- Quebras de linha CRLF/LF
-- Detecção automática de `,` vs `;` mantida (heurística atual)
+**`src/components/contacts/ImportContactsDialog.tsx`**
 
-Mantém-se a abordagem 100% client-side, sem dependência nova.
+1. Carregar `custom_contact_fields` de `tenants.settings` ao abrir o diálogo (mesmo padrão de `ContactsPage`).
+2. Estender o `Select` de destino: após os campos nativos, adicionar um grupo "Campos personalizados" listando cada definição com `value = "custom:<key>"` e `label = fd.label`.
+3. Melhorar `guessMapping` para também tentar casar headers pelo `label` ou `key` dos campos personalizados (match case-insensitive, sem acentos, ignorando espaços) antes de retornar `skip`.
+4. No `handleImport`, ao processar cada coluna mapeada:
+   - Se `field` começa com `custom:`, extrair a `key`, localizar a definição e coercer o valor conforme o tipo:
+     - `text` → string
+     - `number` → `parseFloat`, ignora se `NaN`
+     - `date` → reutiliza `parseDateBR`; valor inválido vira erro de linha igual ao `birth_date`
+     - `select` → aceita só se valor estiver em `options` (case-insensitive); caso contrário, erro de linha
+     - `boolean` → normalizar `sim/true/1/yes` → true, `não/nao/false/0/no` → false; outros viram erro
+   - Acumular em um objeto `customFields` local e, ao final, setar `c.custom_fields = customFields` (apenas se houver pelo menos uma chave).
+5. No fluxo de update de contato existente, fazer **merge raso** com `custom_fields` atual do banco (buscar junto no `select('id, tags, custom_fields')`) para não apagar chaves que não vieram no CSV.
+6. No preview da etapa de mapeamento, exibir o label do campo personalizado quando selecionado (ex.: "CPF" em vez de `custom:cpf`).
 
-### 3. Auto-criar tags novas no cadastro do tenant
-Hoje as tags vão direto para `contacts.tags` (string[]) sem registrar em `tenants.settings.tags`. Confirmado com a usuária que tags inéditas devem aparecer automaticamente em **Configurações → Tags** com cor padrão.
+## Detalhes técnicos
 
-Ao final do import:
-- Coletar todas as tags únicas usadas (case-insensitive, comparando com as já cadastradas)
-- Para cada tag nova, anexar em `tenants.settings.tags` com uma cor sorteada da paleta existente (`PRESET_COLORS` de `TagsSettings.tsx`)
-- Um único `update` em `tenants` ao fim, evitando race.
+- Sem migration: `contacts.custom_fields` já existe como JSONB e `ContactsPage` já lê/grava nele.
+- Sem mudança em RLS: a importação usa o cliente autenticado e as policies de `contacts` já cobrem insert/update por tenant.
+- Sem mudanças em outras telas, edge functions ou worker.
 
-### 4. Relatório de erros visível
-- Trocar `catch { errors++ }` por `catch (e) { errors.push({ row: i, reason: e.message }) }`
-- Tela final do dialog passa a listar até 20 linhas com falha (linha do CSV + motivo curto) e oferece botão "Baixar relatório completo (CSV)"
-- Console.error de cada falha para facilitar suporte futuro
+## Fora de escopo
 
-### 5. Normalização defensiva
-- Se `normalizeBrazilPhone` devolver `''` e a linha trouxer telefone original não vazio, marcar a linha como erro ("telefone inválido: <valor>") em vez de inserir contato sem telefone silenciosamente.
-- Linha sem telefone *e* sem email continua aceita (cria contato só com nome), mas é contabilizada separadamente no relatório.
-
-## Arquivos afetados
-- `src/components/contacts/ImportContactsDialog.tsx` — parser, merge de tags, relatório de erros, criação automática de tags
-- Nenhuma migração de banco (índices e constraints atuais já são adequados)
-- Nenhuma mudança em edge functions ou worker
-
-## Validação manual sugerida após implementação
-1. Reimportar a mesma planilha da Patrícia (sem apagar os 19 atuais — a lógica de merge vai completar tags faltantes nos existentes e criar os que faltam).
-2. Conferir contagens: `NV - 11/06/2026 = 36`, `VNFM - 11/06/2026 = 12`, `NUNCA RESPONDEU = 3`.
-3. Verificar em **Configurações → Tags** se as 3 tags continuam listadas (não duplicadas) e com a cor original.
-4. Conferir a tela de "Importação concluída" mostrando 0 erros (ou listando os motivos, caso a planilha original tenha linhas inválidas reais).
+- Não criar definições de campos personalizados a partir da planilha (campos precisam existir previamente em Configurações).
+- Não alterar o export CSV (pode ser próximo passo se desejar).
