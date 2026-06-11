@@ -569,6 +569,9 @@ export default function SettingsPage() {
     if (error) { toast.error(error.message); return; }
     setContactCustomFields(updated);
     toast.success('Campo removido');
+  };
+
+
 
   const CF_TYPE_LABELS: Record<string, string> = { text: 'Texto', number: 'Número', select: 'Seleção', date: 'Data', boolean: 'Sim/Não' };
 
