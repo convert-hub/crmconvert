@@ -105,17 +105,28 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   const headerComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'HEADER');
   const bodyComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'BODY');
 
-  // Map slot.id → value, but also build a "by key" view for preview
+  // Map slot.id → value, but also build a "by key" view for preview.
+  // Se o valor digitado for um token puro {{x}}, resolve contra os dados reais
+  // da conversa para que o operador veja o conteúdo final antes de enviar.
   const valuesByKey = useMemo(() => {
     const out: Record<string, string> = {};
+    const tokenOnly = /^\s*\{\{\s*([A-Za-z0-9_.]+)\s*\}\}\s*$/;
     for (const s of slots) {
-      if (values[s.id]) out[s.key] = values[s.id];
+      const raw = values[s.id];
+      if (!raw) continue;
+      const m = raw.match(tokenOnly);
+      if (m) {
+        const resolved = resolveToken(m[1]);
+        out[s.key] = resolved ?? `(${m[1]} vazio)`;
+      } else {
+        out[s.key] = raw;
+      }
     }
     return out;
-  }, [slots, values]);
+  }, [slots, values, realData]);
 
   const missingCount = slots.filter(s => !values[s.id]?.trim()).length;
-  const tplVars = useSystemVariables({ tenantId, scope: 'flow' });
+  const tplVars = useSystemVariables({ tenantId, scope: 'template-meta', templateComponents: (selected?.components as any[]) ?? null });
 
   const handleSend = async () => {
     if (!selected) return;
