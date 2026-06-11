@@ -47,6 +47,46 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
     })();
   }, [open, tenantId, whatsappInstanceId]);
 
+  // Carrega dados reais da conversa para resolver tokens na pré-visualização
+  useEffect(() => {
+    if (!open || !conversationId) return;
+    (async () => {
+      const { data: conv } = await supabase
+        .from('conversations')
+        .select('contact_id, opportunity_id')
+        .eq('id', conversationId)
+        .maybeSingle();
+      if (!conv) return;
+      const [{ data: contact }, oppRes] = await Promise.all([
+        conv.contact_id
+          ? supabase.from('contacts').select('name, email, phone, custom_fields').eq('id', conv.contact_id).maybeSingle()
+          : Promise.resolve({ data: null } as any),
+        conv.opportunity_id
+          ? supabase.from('opportunities').select('title, value, custom_fields').eq('id', conv.opportunity_id).maybeSingle()
+          : Promise.resolve({ data: null } as any),
+      ]);
+      setRealData({ contact: contact ?? null, opportunity: oppRes?.data ?? null });
+    })();
+  }, [open, conversationId]);
+
+  const resolveToken = (raw: string): string | null => {
+    const path = raw.trim();
+    const c = realData.contact || {};
+    const o = realData.opportunity || {};
+    const cc = (c.custom_fields && typeof c.custom_fields === 'object') ? c.custom_fields as Record<string, unknown> : {};
+    const oc = (o.custom_fields && typeof o.custom_fields === 'object') ? o.custom_fields as Record<string, unknown> : {};
+    let v: unknown = undefined;
+    if (path === 'contact.name') v = c.name;
+    else if (path === 'contact.email') v = c.email;
+    else if (path === 'contact.phone') v = c.phone;
+    else if (path.startsWith('contact.custom.')) v = cc[path.slice('contact.custom.'.length)];
+    else if (path === 'opportunity.title') v = o.title;
+    else if (path === 'opportunity.value') v = o.value;
+    else if (path.startsWith('opportunity.custom.')) v = oc[path.slice('opportunity.custom.'.length)];
+    if (v === undefined || v === null || v === '') return null;
+    return String(v);
+  };
+
   const selected = templates.find(t => t.id === selectedId);
   const slots: TemplateSlot[] = useMemo(
     () => extractTemplateSlots((selected?.components as any) ?? []),
