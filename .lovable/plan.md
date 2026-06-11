@@ -1,32 +1,54 @@
-# Ajustes no SendTemplateDialog e no picker de variáveis
+# Corrigir importação de contatos (CSV)
 
-Dois problemas pequenos no envio de template:
+## Diagnóstico
+A planilha da Patrícia (51 linhas) gerou apenas 19 contatos com as tags esperadas. A investigação no banco e no código de `ImportContactsDialog.tsx` apontou três falhas concorrentes:
 
-1. Quando um campo personalizado tem os dois escopos marcados (Contato + Oportunidade), ele aparece duas vezes no picker com o mesmo rótulo (`data_de_agendamento` × 2), sem como o usuário distinguir qual é qual.
-2. Não há aviso visível quando o usuário escolhe uma variável que está vazia para aquele contato/oportunidade — só aparece `(x vazio)` discreto na pré-visualização.
+1. **Tags sobrescritas no dedup.** Quando o telefone já existe (incluindo telefones repetidos *dentro do mesmo CSV*), o `update` substitui o array `tags` inteiro. Contatos que apareciam em mais de uma aba/seção da planilha perderam todas as tags exceto a última processada — exatamente o padrão observado (`NUNCA RESPONDEU = 0`, `VNFM = 4` em vez de 12, `NV = 12` em vez de 36).
+2. **Parser CSV ingênuo.** `lines[i].split(delimiter)` não respeita aspas. Campos como `"Silva, Jr."` deslocam colunas, telefone vira lixo, `normalizeBrazilPhone` devolve `''`, e a linha vira um contato sem telefone (sem dedup) ou falha silenciosamente.
+3. **Erros invisíveis.** O `catch { errors++ }` engole o motivo. A usuária nunca soube que houve falhas — o toast só mostra "X criados, Y atualizados".
 
-## Mudanças
+## Correções
 
-### 1. Diferenciar rótulo de campos personalizados — `src/lib/systemVariables.ts`
-Em `customFieldVars`, mudar o `label` para incluir o escopo de origem:
-- `contact.custom.data_de_agendamento` → label `data_de_agendamento (contato)`
-- `opportunity.custom.data_de_agendamento` → label `data_de_agendamento (oportunidade)`
+### 1. Mesclar tags em vez de sobrescrever
+No bloco de `update` do `handleImport`, buscar o contato existente com `tags` (não só `id`) e fazer união dos arrays antes do update. Mesmo tratamento para *segunda ocorrência do mesmo telefone dentro do próprio CSV* — manter um `Map<phone, accumulatedTags>` em memória durante o batch para que duplicatas internas também acumulem.
 
-O `token` continua o mesmo, então nada quebra na resolução. Só o que o usuário vê no picker muda.
+Regra de merge:
+- `tags = unique([...existing.tags, ...row.tags])` (case-insensitive na comparação, mantendo a grafia original já cadastrada)
+- Demais campos (`name`, `email`, `city`, etc.) continuam com comportamento atual: só sobrescreve se a linha trouxer valor; nunca apaga com vazio.
 
-### 2. Aviso de "campo vazio" — `src/components/inbox/SendTemplateDialog.tsx`
-Para cada slot do template cujo valor digitado é um token puro `{{x}}`:
-- Reusar `resolveToken` (já existe) para checar se o valor resolvido é `null`.
-- Quando vazio, mostrar abaixo do `VariableInput` um texto pequeno em `text-destructive`:  
-  `⚠ Este campo está vazio para {contact.name ?? "este contato"}. A Meta vai rejeitar o envio.`
-- Bloquear o botão **Enviar** quando houver qualquer slot com token vazio (somando ao `missingCount` atual), e mostrar toast explicativo se o usuário tentar.
+### 2. Parser CSV que respeita aspas
+Substituir `split(delimiter)` por um parser linha-a-linha que entenda:
+- Campos entre aspas duplas (`"..."`), com aspas escapadas (`""`)
+- Delimitador dentro de aspas (`"Silva, Jr."`)
+- Quebras de linha CRLF/LF
+- Detecção automática de `,` vs `;` mantida (heurística atual)
 
-## Fora de escopo
-- Não muda o storage dos campos (continuam dois sets em `tenants.settings`).
-- Não muda outros lugares que usam o picker (flow, campanha) — o sufixo `(contato)`/`(oportunidade)` é útil em todos, então o ajuste em `systemVariables.ts` se aplica naturalmente.
-- Não tenta auto-preencher o valor: o slot continua mostrando o token escolhido, só ganha o aviso.
+Mantém-se a abordagem 100% client-side, sem dependência nova.
 
-## Validação
-- Criar campo `data_de_agendamento` com ambos toggles → picker mostra duas entradas distintas com sufixo.
-- Selecionar variável de contato sem valor naquele contato → aviso vermelho aparece, botão Enviar desabilita.
-- Preencher manualmente o slot → aviso some, Enviar reabilita.
+### 3. Auto-criar tags novas no cadastro do tenant
+Hoje as tags vão direto para `contacts.tags` (string[]) sem registrar em `tenants.settings.tags`. Confirmado com a usuária que tags inéditas devem aparecer automaticamente em **Configurações → Tags** com cor padrão.
+
+Ao final do import:
+- Coletar todas as tags únicas usadas (case-insensitive, comparando com as já cadastradas)
+- Para cada tag nova, anexar em `tenants.settings.tags` com uma cor sorteada da paleta existente (`PRESET_COLORS` de `TagsSettings.tsx`)
+- Um único `update` em `tenants` ao fim, evitando race.
+
+### 4. Relatório de erros visível
+- Trocar `catch { errors++ }` por `catch (e) { errors.push({ row: i, reason: e.message }) }`
+- Tela final do dialog passa a listar até 20 linhas com falha (linha do CSV + motivo curto) e oferece botão "Baixar relatório completo (CSV)"
+- Console.error de cada falha para facilitar suporte futuro
+
+### 5. Normalização defensiva
+- Se `normalizeBrazilPhone` devolver `''` e a linha trouxer telefone original não vazio, marcar a linha como erro ("telefone inválido: <valor>") em vez de inserir contato sem telefone silenciosamente.
+- Linha sem telefone *e* sem email continua aceita (cria contato só com nome), mas é contabilizada separadamente no relatório.
+
+## Arquivos afetados
+- `src/components/contacts/ImportContactsDialog.tsx` — parser, merge de tags, relatório de erros, criação automática de tags
+- Nenhuma migração de banco (índices e constraints atuais já são adequados)
+- Nenhuma mudança em edge functions ou worker
+
+## Validação manual sugerida após implementação
+1. Reimportar a mesma planilha da Patrícia (sem apagar os 19 atuais — a lógica de merge vai completar tags faltantes nos existentes e criar os que faltam).
+2. Conferir contagens: `NV - 11/06/2026 = 36`, `VNFM - 11/06/2026 = 12`, `NUNCA RESPONDEU = 3`.
+3. Verificar em **Configurações → Tags** se as 3 tags continuam listadas (não duplicadas) e com a cor original.
+4. Conferir a tela de "Importação concluída" mostrando 0 erros (ou listando os motivos, caso a planilha original tenha linhas inválidas reais).

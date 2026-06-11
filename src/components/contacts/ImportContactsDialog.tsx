@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Upload, FileText, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, Download } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
@@ -17,6 +17,11 @@ interface ImportContactsDialogProps {
 }
 
 type CsvRow = Record<string, string>;
+
+const PRESET_COLORS = [
+  '#ef4444', '#f97316', '#eab308', '#22c55e',
+  '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+];
 
 const CONTACT_FIELDS = [
   { value: 'skip', label: 'Ignorar' },
@@ -47,37 +52,72 @@ function guessMapping(header: string): string {
   return 'skip';
 }
 
+// RFC 4180-style CSV parser: handles quoted fields, escaped quotes ("") and embedded delimiters/newlines.
 function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return { headers: [], rows: [] };
+  // Strip BOM
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  if (!text.trim()) return { headers: [], rows: [] };
 
-  // Detect delimiter
-  const firstLine = lines[0];
-  const delimiter = firstLine.includes(';') ? ';' : ',';
+  // Delimiter detection on first non-quoted line
+  const firstLine = text.split(/\r?\n/, 1)[0] || '';
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const delimiter = semiCount > commaCount ? ';' : ',';
 
-  const headers = firstLine.split(delimiter).map(h => h.replace(/^"|"$/g, '').trim());
-  const rows: CsvRow[] = [];
+  const records: string[][] = [];
+  let field = '';
+  let record: string[] = [];
+  let inQuotes = false;
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(delimiter).map(v => v.replace(/^"|"$/g, '').trim());
-    const row: CsvRow = {};
-    headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
-    rows.push(row);
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === delimiter) { record.push(field); field = ''; }
+      else if (c === '\r') { /* skip — handled by \n */ }
+      else if (c === '\n') {
+        record.push(field); field = '';
+        if (record.some(v => v.length > 0)) records.push(record);
+        record = [];
+      } else {
+        field += c;
+      }
+    }
+  }
+  // Trailing field/record
+  if (field.length > 0 || record.length > 0) {
+    record.push(field);
+    if (record.some(v => v.length > 0)) records.push(record);
   }
 
+  if (records.length < 1) return { headers: [], rows: [] };
+  const headers = records[0].map(h => h.trim());
+  const rows: CsvRow[] = [];
+  for (let i = 1; i < records.length; i++) {
+    const r = records[i];
+    const row: CsvRow = {};
+    headers.forEach((h, idx) => { row[h] = (r[idx] ?? '').trim(); });
+    rows.push(row);
+  }
   return { headers, rows };
 }
 
-function normalizePhone(phone: string): string {
-  return normalizeBrazilPhone(phone);
-}
+interface ImportError { row: number; reason: string; data: Record<string, string> }
 
 export default function ImportContactsDialog({ open, onOpenChange, tenantId, onImported }: ImportContactsDialogProps) {
   const [step, setStep] = useState<'upload' | 'mapping' | 'importing'>('upload');
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [importResult, setImportResult] = useState<{ created: number; updated: number; errors: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ created: number; updated: number; errors: ImportError[] } | null>(null);
+  const [progress, setProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (file: File) => {
@@ -101,54 +141,131 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     if (!nameCol) { toast.error('Mapeie pelo menos a coluna "Nome"'); return; }
 
     setStep('importing');
-    let created = 0, updated = 0, errors = 0;
-    const BATCH = 50;
+    setProgress(0);
+    let created = 0, updated = 0;
+    const errors: ImportError[] = [];
+    // Track contacts created/updated within this run, so duplicate phones inside the same CSV also merge tags.
+    const seenByPhone = new Map<string, { id: string; tags: string[] }>();
+    const seenByEmail = new Map<string, { id: string; tags: string[] }>();
+    const allTagsUsed = new Set<string>();
 
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH);
-      const contacts = batch.map(row => {
+    const mergeTags = (a: string[] = [], b: string[] = []) => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      [...a, ...b].forEach(t => {
+        const k = t.trim();
+        if (!k) return;
+        const lc = k.toLowerCase();
+        if (seen.has(lc)) return;
+        seen.add(lc);
+        out.push(k);
+      });
+      return out;
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
         const c: any = { tenant_id: tenantId };
+        let rawPhone = '';
         Object.entries(mapping).forEach(([csvCol, field]) => {
-          if (field === 'skip' || !row[csvCol]) return;
-          if (field === 'phone') c.phone = normalizePhone(row[csvCol]);
-          else if (field === 'tags') c.tags = row[csvCol].split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
-          else c[field] = row[csvCol];
+          const val = row[csvCol];
+          if (field === 'skip' || !val) return;
+          if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
+          else if (field === 'tags') c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
+          else c[field] = val;
         });
+
+        // Phone validation: if user provided a phone but normalization stripped it, flag the row.
+        if (rawPhone && !c.phone) {
+          errors.push({ row: i + 2, reason: `Telefone inválido: "${rawPhone}"`, data: row });
+          continue;
+        }
         if (!c.name) c.name = 'Sem nome';
         if (!c.status) c.status = 'lead';
-        return c;
-      });
+        (c.tags || []).forEach((t: string) => allTagsUsed.add(t));
 
-      // Deduplicate by phone/email - upsert logic
-      for (const contact of contacts) {
-        try {
-          let existing: any = null;
-          if (contact.phone) {
-            const { data } = await supabase.from('contacts').select('id').eq('tenant_id', tenantId).eq('phone', contact.phone).limit(1);
-            if (data && data.length > 0) existing = data[0];
-          }
-          if (!existing && contact.email) {
-            const { data } = await supabase.from('contacts').select('id').eq('tenant_id', tenantId).eq('email', contact.email).limit(1);
-            if (data && data.length > 0) existing = data[0];
-          }
+        // Resolve existing — check in-memory first to merge intra-CSV duplicates.
+        let existing: { id: string; tags: string[] } | null = null;
+        if (c.phone && seenByPhone.has(c.phone)) existing = seenByPhone.get(c.phone)!;
+        else if (c.email && seenByEmail.has(c.email)) existing = seenByEmail.get(c.email)!;
 
-          if (existing) {
-            const { tenant_id, ...updateData } = contact;
-            await supabase.from('contacts').update(updateData).eq('id', existing.id);
-            updated++;
-          } else {
-            await supabase.from('contacts').insert(contact);
-            created++;
-          }
-        } catch {
-          errors++;
+        if (!existing && c.phone) {
+          const { data } = await supabase.from('contacts').select('id, tags').eq('tenant_id', tenantId).eq('phone', c.phone).limit(1);
+          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [] };
         }
+        if (!existing && c.email) {
+          const { data } = await supabase.from('contacts').select('id, tags').eq('tenant_id', tenantId).eq('email', c.email).limit(1);
+          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [] };
+        }
+
+        if (existing) {
+          const mergedTags = mergeTags(existing.tags, c.tags || []);
+          const { tenant_id, tags: _t, ...rest } = c;
+          const updateData: any = { ...rest, tags: mergedTags };
+          const { error } = await supabase.from('contacts').update(updateData).eq('id', existing.id);
+          if (error) throw error;
+          updated++;
+          existing.tags = mergedTags;
+          if (c.phone) seenByPhone.set(c.phone, existing);
+          if (c.email) seenByEmail.set(c.email, existing);
+        } else {
+          const { data: ins, error } = await supabase.from('contacts').insert(c).select('id').single();
+          if (error) throw error;
+          created++;
+          const entry = { id: ins!.id, tags: c.tags || [] };
+          if (c.phone) seenByPhone.set(c.phone, entry);
+          if (c.email) seenByEmail.set(c.email, entry);
+        }
+      } catch (e: any) {
+        console.error('[ImportContacts] row failed', i + 2, e);
+        errors.push({ row: i + 2, reason: e?.message || String(e), data: row });
+      }
+      setProgress(Math.round(((i + 1) / rows.length) * 100));
+    }
+
+    // Auto-register new tags in tenants.settings.tags
+    if (allTagsUsed.size > 0) {
+      try {
+        const { data: tData } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
+        const settings = (tData?.settings && typeof tData.settings === 'object' && !Array.isArray(tData.settings))
+          ? tData.settings as Record<string, any> : {};
+        const existing: Array<{ name: string; color: string }> = Array.isArray(settings.tags) ? settings.tags : [];
+        const existingLc = new Set(existing.map(t => t.name.toLowerCase()));
+        const toAdd: Array<{ name: string; color: string }> = [];
+        allTagsUsed.forEach(name => {
+          if (!existingLc.has(name.toLowerCase())) {
+            toAdd.push({ name, color: PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)] });
+          }
+        });
+        if (toAdd.length > 0) {
+          await supabase.from('tenants').update({ settings: { ...settings, tags: [...existing, ...toAdd] } as any }).eq('id', tenantId);
+        }
+      } catch (e) {
+        console.error('[ImportContacts] failed to register new tags', e);
       }
     }
 
     setImportResult({ created, updated, errors });
-    toast.success(`Importação concluída: ${created} criados, ${updated} atualizados`);
+    const msg = `${created} criados, ${updated} atualizados${errors.length ? `, ${errors.length} com erro` : ''}`;
+    if (errors.length === 0) toast.success(`Importação concluída: ${msg}`);
+    else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
+  };
+
+  const downloadErrorsCsv = () => {
+    if (!importResult || importResult.errors.length === 0) return;
+    const cols = ['linha', 'motivo', ...headers];
+    const escape = (s: string) => `"${String(s ?? '').replace(/"/g, '""')}"`;
+    const lines = [cols.map(escape).join(',')];
+    importResult.errors.forEach(e => {
+      lines.push([escape(String(e.row)), escape(e.reason), ...headers.map(h => escape(e.data[h] || ''))].join(','));
+    });
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `erros-importacao-${Date.now()}.csv`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const reset = () => {
@@ -157,6 +274,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     setRows([]);
     setMapping({});
     setImportResult(null);
+    setProgress(0);
   };
 
   const handleClose = (o: boolean) => {
@@ -181,7 +299,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             >
               <FileText className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
               <p className="text-sm font-medium text-foreground">Clique para selecionar um arquivo CSV</p>
-              <p className="text-xs text-muted-foreground mt-1">Suporta delimitadores vírgula (,) e ponto-e-vírgula (;)</p>
+              <p className="text-xs text-muted-foreground mt-1">Suporta vírgula (,) e ponto-e-vírgula (;), campos entre aspas</p>
             </div>
             <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
@@ -240,22 +358,46 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         )}
 
         {step === 'importing' && (
-          <div className="py-8 text-center space-y-4">
+          <div className="py-6 space-y-4">
             {importResult ? (
               <>
-                <p className="text-lg font-semibold text-foreground">Importação concluída!</p>
-                <div className="flex justify-center gap-4">
+                <p className="text-base font-semibold text-foreground text-center">Importação concluída</p>
+                <div className="flex justify-center gap-2 flex-wrap">
                   <Badge variant="outline" className="text-sm py-1 px-3">{importResult.created} criados</Badge>
                   <Badge variant="outline" className="text-sm py-1 px-3">{importResult.updated} atualizados</Badge>
-                  {importResult.errors > 0 && <Badge variant="destructive" className="text-sm py-1 px-3">{importResult.errors} erros</Badge>}
+                  {importResult.errors.length > 0 && (
+                    <Badge variant="destructive" className="text-sm py-1 px-3">{importResult.errors.length} erros</Badge>
+                  )}
                 </div>
-                <Button onClick={() => handleClose(false)}>Fechar</Button>
+
+                {importResult.errors.length > 0 && (
+                  <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-foreground">Linhas com falha (mostrando até 20):</p>
+                      <Button variant="ghost" size="sm" onClick={downloadErrorsCsv} className="h-7 text-xs">
+                        <Download className="h-3 w-3 mr-1" /> Baixar CSV completo
+                      </Button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {importResult.errors.slice(0, 20).map((e, idx) => (
+                        <div key={idx} className="text-[11px] text-muted-foreground flex gap-2">
+                          <span className="font-mono text-foreground/70">L{e.row}</span>
+                          <span className="flex-1">{e.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-center">
+                  <Button onClick={() => handleClose(false)}>Fechar</Button>
+                </div>
               </>
             ) : (
-              <>
+              <div className="text-center space-y-3">
                 <div className="h-8 w-8 mx-auto border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-muted-foreground">Importando contatos...</p>
-              </>
+                <p className="text-sm text-muted-foreground">Importando contatos... {progress}%</p>
+              </div>
             )}
           </div>
         )}
