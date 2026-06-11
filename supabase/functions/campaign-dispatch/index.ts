@@ -63,6 +63,21 @@ serve(async (req) => {
 
   if (campErr || !campaign) return jsonOk({ ok: false, error: "campaign_not_found" }, 404);
 
+  // Tenant authorization: non-service callers must be admin/manager of the campaign's tenant
+  if (!isServiceRole) {
+    const { data: membership } = await supabase
+      .from("tenant_memberships")
+      .select("role")
+      .eq("user_id", callerUserId)
+      .eq("tenant_id", (campaign as any).tenant_id)
+      .eq("is_active", true)
+      .maybeSingle();
+    const role = (membership as any)?.role;
+    if (!membership || !["admin", "manager"].includes(role)) {
+      return jsonOk({ ok: false, error: "Forbidden" }, 403);
+    }
+  }
+
   if (action === "pause") {
     await supabase.from("campaigns").update({ status: "paused" }).eq("id", campaignId);
     return jsonOk({ ok: true, status: "paused" });
