@@ -1,43 +1,57 @@
-# Diagnóstico forense
+# Preview real + campos personalizados de contato
 
-**Sintoma:** Campos personalizados criados em *Configurações → Campos* não aparecem no picker de variáveis ao enviar um template Meta no Inbox.
+Dois ajustes complementares ao envio de template Meta para que disparos em base apenas de contatos (sem oportunidade ainda) funcionem corretamente e o operador veja o conteúdo final antes de enviar.
 
-**Causa raiz (3 problemas encadeados em `src/hooks/useSystemVariables.ts`):**
+## 1. Preview com dados reais resolvidos
 
-1. **Fonte errada de descoberta.** `discoverCustomKeys()` faz `SELECT custom_fields FROM contacts/opportunities` e extrai chaves dos JSONB **já preenchidos**. Quem nunca preencheu o campo em nenhum registro, nunca vê a chave no picker. As **definições** dos campos vivem em outro lugar: `tenants.settings.custom_opportunity_fields` (gravado em `SettingsPage.tsx` linha 522).
+Hoje o bloco cinza do `SendTemplateDialog` mostra `{{contact.name}}` literal porque o operador digitou o token como valor. Vamos resolver tokens contra os dados reais da conversa **só na visualização** (o que é enviado para a Meta continua sendo o valor literal digitado — a Meta/worker resolve no envio).
 
-2. **Escopo do picker omite oportunidade.** No ramo `scope === 'template-meta'`, o hook só chama `customFieldVars('contact.custom', custom.contact, …)`. Os campos definidos como `custom_opportunity_fields` ficam de fora mesmo se houvesse dados — não há `customFieldVars('opportunity.custom', …)` nesse ramo.
+Mudanças, somente em `src/components/inbox/SendTemplateDialog.tsx`:
 
-3. **Cache de 5 min mascara o problema.** Mesmo se os pontos 1 e 2 fossem corrigidos via dado real, a chave nova só apareceria depois do TTL do cache em memória.
+- Ao abrir o dialog, buscar uma única vez:
+  - `conversations` → `contact_id`, `opportunity_id` pela `conversationId`.
+  - `contacts` → `name`, `email`, `phone`, `custom_fields` (sempre que houver `contact_id`).
+  - `opportunities` → `title`, `value`, `custom_fields` (só se houver `opportunity_id`).
+- Criar `resolveToken(token)` que entende `contact.name|email|phone`, `contact.custom.<key>`, `opportunity.title|value`, `opportunity.custom.<key>`.
+- No `valuesByKey` usado pelo `renderPreview`, se o valor digitado for um token `{{x}}` puro, substituir por `resolveToken('x')` (com fallback para o próprio token se o dado real estiver vazio — assim o operador vê "—" mas sabe qual variável está faltando).
+- Adicionar pequena badge/texto sob o preview: "Pré-visualizando com dados de: {contact.name}" para deixar explícito que é o contato real da conversa.
 
-**Observação extra (não é o bug, mas convém alinhar):** a chave usada hoje em `tenants.settings` é `custom_opportunity_fields`, mas o painel em `SettingsPage` é genérico ("Campos") e o usuário pode esperar que valha para contato também. O nome atual é herdado; mantenho-o para não quebrar dados existentes, mas exponho como `opportunity.custom.*` no picker.
+Não tocar em `wa-meta-send`, worker, nem na lógica de envio. O `buildMetaComponents` continua mandando o que o operador digitou — o backend já resolve `{{contact.*}}` e `{{opportunity.*}}` no envio real.
 
-# Plano de correção (mínimo, cirúrgico)
+## 2. Campos personalizados de Contato
 
-Alterar **apenas** `src/hooks/useSystemVariables.ts`. Nenhum outro arquivo precisa mudar — `SendTemplateDialog` e `MessageNodeEditor` já consomem o hook.
+Hoje só existem campos personalizados de Oportunidade. Para uma base que ainda é só contatos, precisamos do mesmo recurso em Contato.
 
-### Mudanças
+### 2a. Settings — nova seção espelhada
 
-1. **Trocar a fonte de descoberta** de `contacts/opportunities.custom_fields` para `tenants.settings`:
-   - Ler `tenants.settings.custom_opportunity_fields` (definições oficiais).
-   - Ler também `tenants.settings.custom_contact_fields` caso exista no futuro (forward-compatible; hoje retorna vazio).
-   - Cada definição expõe `key` e `label` — usar `label` no `SystemVariable.label` (melhor UX que slug).
+Em `src/pages/SettingsPage.tsx`, na aba "Campos":
 
-2. **Incluir `opportunity.custom.*` no escopo `template-meta`.** Hoje só inclui `contact.custom.*`. Passar a adicionar ambos.
+- Renomear o card atual para "Campos Personalizados de Oportunidade" (já está) e adicionar **segundo card** "Campos Personalizados de Contato".
+- Novo state `contactCustomFields`, carregado de `tenants.settings.custom_contact_fields` em `loadAll()`.
+- Funções `addContactCustomField` / `removeContactCustomField` espelhando as de oportunidade, mas escrevendo em `custom_contact_fields`.
+- UI 100% idêntica à de oportunidade (tabela + form), só trocando o destino.
 
-3. **Reduzir o TTL do cache** de 5 min → 30 s, e invalidar quando o `tenantId` muda (já faz). Mantém leveza sem prender chave nova por muito tempo.
+### 2b. Edição de valores no Contato
 
-### Por que não tocar no backend
+Em `src/pages/ContactsPage.tsx`, no Dialog de criar/editar contato:
 
-O `wa-meta-send` envia os valores do template já resolvidos pelo frontend (o usuário digita ou seleciona um valor concreto via `VariableInput`). O picker é puramente UI — corrigir a fonte de dados do picker resolve o sintoma sem mexer em envio, interpolação no worker, nem RLS.
+- Carregar uma vez `tenants.settings.custom_contact_fields` no mount (ou via hook leve compartilhado).
+- Adicionar, abaixo das Tags, uma seção "Campos personalizados" que renderiza um input por campo definido, conforme `type` (text/number/date/select/boolean — mesmo switch do `OpportunityDetail`).
+- Estado `customFieldsValues` no `form`; ao salvar, incluir `custom_fields: customFieldsValues` no payload de `insert`/`update`.
+- No editar, pré-popular a partir de `editingContact.custom_fields`.
 
-### Validação
+### 2c. Hook de variáveis
 
-- Em Configurações → Campos, criar um campo novo (ex.: "CPF").
-- Em Inbox → enviar template → o picker dentro de cada slot deve listar `opportunity.custom.cpf` no grupo *Personalizado*, mesmo sem nenhuma oportunidade preenchida.
+`useSystemVariables` já lê `custom_contact_fields` e, em escopo `template-meta`, já injeta `contact.custom.*`. Nada a mudar aqui — a nova seção de Settings vai popular automaticamente o picker do `SendTemplateDialog`.
 
-### Fora de escopo
+## Fora de escopo
 
-- Renomear `custom_opportunity_fields` para algo neutro (migração de dados — não pediu).
-- Resolver `{{opportunity.custom.*}}` server-side em templates Meta (hoje o usuário cola o valor literal; mudança maior).
-- Mexer no `MessageNodeEditor`, `wa-meta-send`, ou worker.
+- Resolução server-side de `{{contact.custom.*}}` e `{{opportunity.custom.*}}` no `wa-meta-send`/worker (já existe ou é assumida funcional). Caso o teste mostre que esses tokens não são resolvidos no envio, abrimos uma issue separada.
+- Importação CSV de campos personalizados de contato.
+- Migração SQL — `contacts.custom_fields` (jsonb) já existe.
+
+## Validação
+
+1. Settings → Campos: criar "CPF" em Contato.
+2. Contatos → editar contato: preencher CPF, salvar.
+3. Inbox → enviar template: selecionar template com `{{contact.name}}` e `{{contact.custom.cpf}}` no picker; o preview deve mostrar o nome real e o CPF salvos. Enviar e conferir mensagem entregue.
