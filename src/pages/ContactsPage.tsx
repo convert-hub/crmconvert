@@ -71,12 +71,14 @@ export default function ContactsPage() {
   const openCreate = () => {
     setEditingContact(null);
     setForm({ name: '', phone: '', email: '', status: 'lead', tags: [], birth_date: undefined });
+    setCustomFieldValues({});
     setShowDialog(true);
   };
 
   const openEdit = (c: Contact) => {
     setEditingContact(c);
     setForm({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', status: c.status as any, tags: c.tags ?? [], birth_date: c.birth_date ? new Date(c.birth_date + 'T00:00:00') : undefined });
+    setCustomFieldValues(((c as any).custom_fields as Record<string, unknown>) ?? {});
     setShowDialog(true);
   };
 
@@ -92,6 +94,7 @@ export default function ContactsPage() {
       status: form.status,
       tags: form.tags,
       birth_date: form.birth_date ? format(form.birth_date, 'yyyy-MM-dd') : null,
+      custom_fields: customFieldValues as any,
     };
 
     if (editingContact) {
