@@ -48,7 +48,9 @@ export default function ContactsPage() {
     if (!tenant) return;
     supabase.from('tenants').select('settings').eq('id', tenant.id).single().then(({ data }) => {
       if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
-        setRegisteredTags((data.settings as Record<string, any>).tags || []);
+        const s = data.settings as Record<string, any>;
+        setRegisteredTags(s.tags || []);
+        setCustomFieldDefs(s.custom_contact_fields || []);
       }
     });
   }, [tenant]);
