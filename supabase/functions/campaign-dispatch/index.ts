@@ -27,10 +27,9 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return jsonOk({ ok: false, error: "method_not_allowed" }, 405);
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+  const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
@@ -39,6 +38,22 @@ serve(async (req) => {
   const campaignId = body.campaign_id as string;
 
   if (!campaignId) return jsonOk({ ok: false, error: "campaign_id required" }, 400);
+
+  // Auth: allow service role (cron/internal) or admin/manager of campaign tenant
+  const authHeader = req.headers.get("Authorization") || "";
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
+
+  let isServiceRole = token === SERVICE_ROLE;
+  let callerUserId: string | null = null;
+  if (!isServiceRole) {
+    const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
+    if (claimsErr || !claimsData?.claims) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
+    callerUserId = claimsData.claims.sub;
+  }
 
   const { data: campaign, error: campErr } = await supabase
     .from("campaigns")
