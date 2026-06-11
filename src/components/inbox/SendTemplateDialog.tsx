@@ -243,6 +243,11 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
                   onChange={v => setValues(prev => ({ ...prev, [s.id]: v }))}
                   placeholder={s.named ? s.key : `Valor para {{${s.key}}}`}
                 />
+                {emptyTokenSlots[s.id] && (
+                  <p className="text-[11px] text-destructive">
+                    ⚠ <span className="font-mono">{`{{${emptyTokenSlots[s.id]}}}`}</span> está vazio para {realData.contact?.name ?? 'este contato'}. A Meta vai rejeitar o envio.
+                  </p>
+                )}
               </div>
             ))}
 
