@@ -191,17 +191,29 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       try {
         const c: any = { tenant_id: tenantId };
         let rawPhone = '';
+        let rawBirth = '';
+        let birthInvalid = false;
         Object.entries(mapping).forEach(([csvCol, field]) => {
           const val = row[csvCol];
           if (field === 'skip' || !val) return;
           if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
           else if (field === 'tags') c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
+          else if (field === 'birth_date') {
+            rawBirth = val;
+            const parsed = parseDateBR(val);
+            if (parsed) c.birth_date = parsed;
+            else birthInvalid = true;
+          }
           else c[field] = val;
         });
 
         // Phone validation: if user provided a phone but normalization stripped it, flag the row.
         if (rawPhone && !c.phone) {
           errors.push({ row: i + 2, reason: `Telefone inválido: "${rawPhone}"`, data: row });
+          continue;
+        }
+        if (birthInvalid) {
+          errors.push({ row: i + 2, reason: `Data de nascimento inválida: "${rawBirth}" (use DD/MM/AAAA)`, data: row });
           continue;
         }
         if (!c.name) c.name = 'Sem nome';
