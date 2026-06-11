@@ -513,63 +513,76 @@ export default function SettingsPage() {
 
   const slugify = (text: string) => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
+  const persistCustomFields = async (
+    nextContact: CustomFieldDef[],
+    nextOpportunity: CustomFieldDef[],
+  ) => {
+    if (!tenant) return false;
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({
+      settings: {
+        ...currentSettings,
+        custom_contact_fields: nextContact,
+        custom_opportunity_fields: nextOpportunity,
+      } as any,
+    }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return false; }
+    setContactCustomFields(nextContact);
+    setCustomFields(nextOpportunity);
+    return true;
+  };
+
   const addCustomField = async () => {
     if (!tenant || !cfLabel.trim()) return;
+    if (!cfInContact && !cfInOpportunity) { toast.error('Selecione ao menos uma entidade'); return; }
     const key = slugify(cfLabel);
-    if (customFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
+    if (cfInContact && contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo de contato com essa chave'); return; }
+    if (cfInOpportunity && customFields.some(f => f.key === key)) { toast.error('Já existe um campo de oportunidade com essa chave'); return; }
     const newField: CustomFieldDef = { key, label: cfLabel.trim(), type: cfType };
     if (cfType === 'select' && cfOptions.trim()) {
       newField.options = cfOptions.split(',').map(o => o.trim()).filter(Boolean);
     }
-    const updated = [...customFields, newField];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setCustomFields(updated);
-    setCfLabel(''); setCfType('text'); setCfOptions('');
+    const nextContact = cfInContact ? [...contactCustomFields, newField] : contactCustomFields;
+    const nextOpp = cfInOpportunity ? [...customFields, newField] : customFields;
+    const ok = await persistCustomFields(nextContact, nextOpp);
+    if (!ok) return;
+    setCfLabel(''); setCfType('text'); setCfOptions(''); setCfInContact(true); setCfInOpportunity(true);
     toast.success('Campo adicionado');
+  };
+
+  const toggleCustomFieldScope = async (key: string, scope: 'contact' | 'opportunity', enabled: boolean) => {
+    if (!tenant) return;
+    // find the field def from whichever list has it
+    const def = contactCustomFields.find(f => f.key === key) ?? customFields.find(f => f.key === key);
+    if (!def) return;
+    let nextContact = contactCustomFields;
+    let nextOpp = customFields;
+    if (scope === 'contact') {
+      nextContact = enabled
+        ? (contactCustomFields.some(f => f.key === key) ? contactCustomFields : [...contactCustomFields, def])
+        : contactCustomFields.filter(f => f.key !== key);
+    } else {
+      nextOpp = enabled
+        ? (customFields.some(f => f.key === key) ? customFields : [...customFields, def])
+        : customFields.filter(f => f.key !== key);
+    }
+    if (!nextContact.some(f => f.key === key) && !nextOpp.some(f => f.key === key)) {
+      toast.error('O campo precisa estar em ao menos uma entidade. Use remover para excluir.');
+      return;
+    }
+    await persistCustomFields(nextContact, nextOpp);
   };
 
   const removeCustomField = async (key: string) => {
     if (!tenant) return;
-    const updated = customFields.filter(f => f.key !== key);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setCustomFields(updated);
-    toast.success('Campo removido');
+    const nextContact = contactCustomFields.filter(f => f.key !== key);
+    const nextOpp = customFields.filter(f => f.key !== key);
+    const ok = await persistCustomFields(nextContact, nextOpp);
+    if (ok) toast.success('Campo removido');
   };
 
-  const addContactCustomField = async () => {
-    if (!tenant || !ccfLabel.trim()) return;
-    const key = slugify(ccfLabel);
-    if (contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
-    const newField: CustomFieldDef = { key, label: ccfLabel.trim(), type: ccfType };
-    if (ccfType === 'select' && ccfOptions.trim()) {
-      newField.options = ccfOptions.split(',').map(o => o.trim()).filter(Boolean);
-    }
-    const updated = [...contactCustomFields, newField];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setContactCustomFields(updated);
-    setCcfLabel(''); setCcfType('text'); setCcfOptions('');
-    toast.success('Campo adicionado');
-  };
 
-  const removeContactCustomField = async (key: string) => {
-    if (!tenant) return;
-    const updated = contactCustomFields.filter(f => f.key !== key);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setContactCustomFields(updated);
-    toast.success('Campo removido');
-  };
 
 
 
