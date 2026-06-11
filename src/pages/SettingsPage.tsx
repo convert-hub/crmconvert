@@ -355,6 +355,7 @@ export default function SettingsPage() {
       setLeadKeywords(s.lead_keywords || []);
       setTakeoverKeywords(s.agent_takeover_keywords || []);
       setCustomFields(s.custom_opportunity_fields || []);
+      setContactCustomFields(s.custom_contact_fields || []);
     }
     const { data: mems } = await supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id);
     if (mems) {
