@@ -338,6 +338,10 @@ export default function SettingsPage() {
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
   const [cfOptions, setCfOptions] = useState('');
+  const [contactCustomFields, setContactCustomFields] = useState<CustomFieldDef[]>([]);
+  const [ccfLabel, setCcfLabel] = useState('');
+  const [ccfType, setCcfType] = useState<CustomFieldDef['type']>('text');
+  const [ccfOptions, setCcfOptions] = useState('');
   const [activeTab, setActiveTab] = useState('general');
 
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
@@ -351,6 +355,7 @@ export default function SettingsPage() {
       setLeadKeywords(s.lead_keywords || []);
       setTakeoverKeywords(s.agent_takeover_keywords || []);
       setCustomFields(s.custom_opportunity_fields || []);
+      setContactCustomFields(s.custom_contact_fields || []);
     }
     const { data: mems } = await supabase.from('tenant_memberships').select('*').eq('tenant_id', tenant.id);
     if (mems) {
@@ -536,6 +541,37 @@ export default function SettingsPage() {
     setCustomFields(updated);
     toast.success('Campo removido');
   };
+
+  const addContactCustomField = async () => {
+    if (!tenant || !ccfLabel.trim()) return;
+    const key = slugify(ccfLabel);
+    if (contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
+    const newField: CustomFieldDef = { key, label: ccfLabel.trim(), type: ccfType };
+    if (ccfType === 'select' && ccfOptions.trim()) {
+      newField.options = ccfOptions.split(',').map(o => o.trim()).filter(Boolean);
+    }
+    const updated = [...contactCustomFields, newField];
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setContactCustomFields(updated);
+    setCcfLabel(''); setCcfType('text'); setCcfOptions('');
+    toast.success('Campo adicionado');
+  };
+
+  const removeContactCustomField = async (key: string) => {
+    if (!tenant) return;
+    const updated = contactCustomFields.filter(f => f.key !== key);
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return; }
+    setContactCustomFields(updated);
+    toast.success('Campo removido');
+  };
+
+
 
   const CF_TYPE_LABELS: Record<string, string> = { text: 'Texto', number: 'Número', select: 'Seleção', date: 'Data', boolean: 'Sim/Não' };
 
@@ -840,7 +876,69 @@ export default function SettingsPage() {
               )}
             </CardContent>
           </Card>
+
+          <Card className="glass-card rounded-2xl">
+            <CardHeader>
+              <CardTitle>Campos Personalizados de Contato</CardTitle>
+              <CardDescription>Definidos no contato e disponíveis como variáveis em templates/disparos antes mesmo de virar oportunidade</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {contactCustomFields.length > 0 ? (
+                <Table>
+                  <TableHeader><TableRow className="hover:bg-transparent">
+                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {contactCustomFields.map(f => (
+                      <TableRow key={f.key}>
+                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
+                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
+                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeContactCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado de contato.</p>}
+
+              {isAdmin && (
+                <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
+                  <p className="text-sm font-medium text-foreground">Novo campo</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Nome do campo</Label>
+                      <Input value={ccfLabel} onChange={e => setCcfLabel(e.target.value)} placeholder="Ex: CPF" className="rounded-xl" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Tipo</Label>
+                      <Select value={ccfType} onValueChange={v => setCcfType(v as CustomFieldDef['type'])}>
+                        <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Texto</SelectItem>
+                          <SelectItem value="number">Número</SelectItem>
+                          <SelectItem value="select">Seleção</SelectItem>
+                          <SelectItem value="date">Data</SelectItem>
+                          <SelectItem value="boolean">Sim/Não</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  {ccfType === 'select' && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Opções (separadas por vírgula)</Label>
+                      <Input value={ccfOptions} onChange={e => setCcfOptions(e.target.value)} placeholder="Ex: A, B, C" className="rounded-xl" />
+                    </div>
+                  )}
+                  <Button onClick={addContactCustomField} disabled={!ccfLabel.trim()} className="rounded-xl">
+                    <Plus className="h-4 w-4 mr-1" />Adicionar Campo
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
+
 
         <TabsContent value="team" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">

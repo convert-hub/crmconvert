@@ -15,6 +15,7 @@ import { useCascadeDelete, type ContactLinked } from '@/hooks/useCascadeDelete';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -32,6 +33,8 @@ export default function ContactsPage() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: [] as string[], birth_date: undefined as Date | undefined });
+  const [customFieldDefs, setCustomFieldDefs] = useState<Array<{ key: string; label: string; type: 'text'|'number'|'date'|'select'|'boolean'; options?: string[] }>>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, unknown>>({});
   const [showImport, setShowImport] = useState(false);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [registeredTags, setRegisteredTags] = useState<TagDef[]>([]);
@@ -45,7 +48,9 @@ export default function ContactsPage() {
     if (!tenant) return;
     supabase.from('tenants').select('settings').eq('id', tenant.id).single().then(({ data }) => {
       if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
-        setRegisteredTags((data.settings as Record<string, any>).tags || []);
+        const s = data.settings as Record<string, any>;
+        setRegisteredTags(s.tags || []);
+        setCustomFieldDefs(s.custom_contact_fields || []);
       }
     });
   }, [tenant]);
@@ -66,12 +71,14 @@ export default function ContactsPage() {
   const openCreate = () => {
     setEditingContact(null);
     setForm({ name: '', phone: '', email: '', status: 'lead', tags: [], birth_date: undefined });
+    setCustomFieldValues({});
     setShowDialog(true);
   };
 
   const openEdit = (c: Contact) => {
     setEditingContact(c);
     setForm({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', status: c.status as any, tags: c.tags ?? [], birth_date: c.birth_date ? new Date(c.birth_date + 'T00:00:00') : undefined });
+    setCustomFieldValues(((c as any).custom_fields as Record<string, unknown>) ?? {});
     setShowDialog(true);
   };
 
@@ -87,6 +94,7 @@ export default function ContactsPage() {
       status: form.status,
       tags: form.tags,
       birth_date: form.birth_date ? format(form.birth_date, 'yyyy-MM-dd') : null,
+      custom_fields: customFieldValues as any,
     };
 
     if (editingContact) {
@@ -285,6 +293,39 @@ export default function ContactsPage() {
               </Popover>
             </div>
             <div className="space-y-1.5"><Label className="text-[13px]">Tags</Label><TagInput value={form.tags} onChange={tags => setForm(f => ({ ...f, tags }))} /></div>
+            {customFieldDefs.length > 0 && (
+              <div className="space-y-3 pt-2 border-t border-border/50">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Campos Personalizados</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {customFieldDefs.map(fd => (
+                    <div key={fd.key} className="space-y-1.5">
+                      <Label className="text-xs">{fd.label}</Label>
+                      {fd.type === 'text' && (
+                        <Input value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value }))} className="h-9" />
+                      )}
+                      {fd.type === 'number' && (
+                        <Input type="number" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value ? parseFloat(e.target.value) : '' }))} className="h-9" />
+                      )}
+                      {fd.type === 'date' && (
+                        <Input type="date" value={String(customFieldValues[fd.key] ?? '')} onChange={e => setCustomFieldValues(p => ({ ...p, [fd.key]: e.target.value }))} className="h-9" />
+                      )}
+                      {fd.type === 'select' && (
+                        <Select value={String(customFieldValues[fd.key] ?? '')} onValueChange={v => setCustomFieldValues(p => ({ ...p, [fd.key]: v }))}>
+                          <SelectTrigger className="h-9"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                          <SelectContent>{fd.options?.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+                        </Select>
+                      )}
+                      {fd.type === 'boolean' && (
+                        <div className="flex items-center gap-2 h-9">
+                          <Checkbox checked={!!customFieldValues[fd.key]} onCheckedChange={v => setCustomFieldValues(p => ({ ...p, [fd.key]: v }))} />
+                          <span className="text-sm text-muted-foreground">{customFieldValues[fd.key] ? 'Sim' : 'Não'}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <Button type="submit" className="w-full">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>
           </form>
         </DialogContent>
