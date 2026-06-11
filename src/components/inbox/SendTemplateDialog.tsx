@@ -259,7 +259,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
 
         <DialogFooter>
           <Button variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button className="rounded-xl" disabled={!selectedId || sending || missingCount > 0} onClick={handleSend}>
+          <Button className="rounded-xl" disabled={!selectedId || sending || missingCount > 0 || emptyTokenCount > 0} onClick={handleSend}>
             {sending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
             Enviar
           </Button>
