@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Trash2, Loader2, QrCode, Wifi, WifiOff, RefreshCw, LogOut, Settings2, Palette, Zap, Tag, Brain, Search, UserPlus, FileText, GitBranch, SlidersHorizontal, Users, BookOpen, Plug, GripVertical } from 'lucide-react';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
@@ -333,15 +334,14 @@ export default function SettingsPage() {
   const [aiGlobalKeyId, setAiGlobalKeyId] = useState('');
   const [globalApiKeys, setGlobalApiKeys] = useState<{ id: string; label: string; provider: string }[]>([]);
 
-  // Custom fields state
+  // Custom fields state (unified: each field can target Contact and/or Opportunity)
   const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
+  const [contactCustomFields, setContactCustomFields] = useState<CustomFieldDef[]>([]);
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['type']>('text');
   const [cfOptions, setCfOptions] = useState('');
-  const [contactCustomFields, setContactCustomFields] = useState<CustomFieldDef[]>([]);
-  const [ccfLabel, setCcfLabel] = useState('');
-  const [ccfType, setCcfType] = useState<CustomFieldDef['type']>('text');
-  const [ccfOptions, setCcfOptions] = useState('');
+  const [cfInContact, setCfInContact] = useState(true);
+  const [cfInOpportunity, setCfInOpportunity] = useState(true);
   const [activeTab, setActiveTab] = useState('general');
 
   useEffect(() => { if (tenant) { setTenantName(tenant.name); loadAll(); } }, [tenant]);
@@ -513,63 +513,76 @@ export default function SettingsPage() {
 
   const slugify = (text: string) => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
+  const persistCustomFields = async (
+    nextContact: CustomFieldDef[],
+    nextOpportunity: CustomFieldDef[],
+  ) => {
+    if (!tenant) return false;
+    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
+    const { error } = await supabase.from('tenants').update({
+      settings: {
+        ...currentSettings,
+        custom_contact_fields: nextContact,
+        custom_opportunity_fields: nextOpportunity,
+      } as any,
+    }).eq('id', tenant.id);
+    if (error) { toast.error(error.message); return false; }
+    setContactCustomFields(nextContact);
+    setCustomFields(nextOpportunity);
+    return true;
+  };
+
   const addCustomField = async () => {
     if (!tenant || !cfLabel.trim()) return;
+    if (!cfInContact && !cfInOpportunity) { toast.error('Selecione ao menos uma entidade'); return; }
     const key = slugify(cfLabel);
-    if (customFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
+    if (cfInContact && contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo de contato com essa chave'); return; }
+    if (cfInOpportunity && customFields.some(f => f.key === key)) { toast.error('Já existe um campo de oportunidade com essa chave'); return; }
     const newField: CustomFieldDef = { key, label: cfLabel.trim(), type: cfType };
     if (cfType === 'select' && cfOptions.trim()) {
       newField.options = cfOptions.split(',').map(o => o.trim()).filter(Boolean);
     }
-    const updated = [...customFields, newField];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setCustomFields(updated);
-    setCfLabel(''); setCfType('text'); setCfOptions('');
+    const nextContact = cfInContact ? [...contactCustomFields, newField] : contactCustomFields;
+    const nextOpp = cfInOpportunity ? [...customFields, newField] : customFields;
+    const ok = await persistCustomFields(nextContact, nextOpp);
+    if (!ok) return;
+    setCfLabel(''); setCfType('text'); setCfOptions(''); setCfInContact(true); setCfInOpportunity(true);
     toast.success('Campo adicionado');
+  };
+
+  const toggleCustomFieldScope = async (key: string, scope: 'contact' | 'opportunity', enabled: boolean) => {
+    if (!tenant) return;
+    // find the field def from whichever list has it
+    const def = contactCustomFields.find(f => f.key === key) ?? customFields.find(f => f.key === key);
+    if (!def) return;
+    let nextContact = contactCustomFields;
+    let nextOpp = customFields;
+    if (scope === 'contact') {
+      nextContact = enabled
+        ? (contactCustomFields.some(f => f.key === key) ? contactCustomFields : [...contactCustomFields, def])
+        : contactCustomFields.filter(f => f.key !== key);
+    } else {
+      nextOpp = enabled
+        ? (customFields.some(f => f.key === key) ? customFields : [...customFields, def])
+        : customFields.filter(f => f.key !== key);
+    }
+    if (!nextContact.some(f => f.key === key) && !nextOpp.some(f => f.key === key)) {
+      toast.error('O campo precisa estar em ao menos uma entidade. Use remover para excluir.');
+      return;
+    }
+    await persistCustomFields(nextContact, nextOpp);
   };
 
   const removeCustomField = async (key: string) => {
     if (!tenant) return;
-    const updated = customFields.filter(f => f.key !== key);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_opportunity_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setCustomFields(updated);
-    toast.success('Campo removido');
+    const nextContact = contactCustomFields.filter(f => f.key !== key);
+    const nextOpp = customFields.filter(f => f.key !== key);
+    const ok = await persistCustomFields(nextContact, nextOpp);
+    if (ok) toast.success('Campo removido');
   };
 
-  const addContactCustomField = async () => {
-    if (!tenant || !ccfLabel.trim()) return;
-    const key = slugify(ccfLabel);
-    if (contactCustomFields.some(f => f.key === key)) { toast.error('Já existe um campo com essa chave'); return; }
-    const newField: CustomFieldDef = { key, label: ccfLabel.trim(), type: ccfType };
-    if (ccfType === 'select' && ccfOptions.trim()) {
-      newField.options = ccfOptions.split(',').map(o => o.trim()).filter(Boolean);
-    }
-    const updated = [...contactCustomFields, newField];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setContactCustomFields(updated);
-    setCcfLabel(''); setCcfType('text'); setCcfOptions('');
-    toast.success('Campo adicionado');
-  };
 
-  const removeContactCustomField = async (key: string) => {
-    if (!tenant) return;
-    const updated = contactCustomFields.filter(f => f.key !== key);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
-    const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
-    const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, custom_contact_fields: updated } as any }).eq('id', tenant.id);
-    if (error) { toast.error(error.message); return; }
-    setContactCustomFields(updated);
-    toast.success('Campo removido');
-  };
 
 
 
@@ -818,28 +831,46 @@ export default function SettingsPage() {
         <TabsContent value="custom_fields" className="space-y-4 pt-4">
           <Card className="glass-card rounded-2xl">
             <CardHeader>
-              <CardTitle>Campos Personalizados de Oportunidade</CardTitle>
-              <CardDescription>Defina campos extras que aparecerão nos cards do pipeline e no detalhe da oportunidade</CardDescription>
+              <CardTitle>Campos Personalizados</CardTitle>
+              <CardDescription>Defina campos extras e escolha em quais entidades aparecem. Valores ficam em cada entidade de forma independente.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {customFields.length > 0 ? (
-                <Table>
-                  <TableHeader><TableRow className="hover:bg-transparent">
-                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {customFields.map(f => (
-                      <TableRow key={f.key}>
-                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
-                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
-                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado definido.</p>}
+              {(() => {
+                const merged = new Map<string, { def: CustomFieldDef; inContact: boolean; inOpportunity: boolean }>();
+                for (const f of contactCustomFields) merged.set(f.key, { def: f, inContact: true, inOpportunity: false });
+                for (const f of customFields) {
+                  const ex = merged.get(f.key);
+                  if (ex) ex.inOpportunity = true;
+                  else merged.set(f.key, { def: f, inContact: false, inOpportunity: true });
+                }
+                const rows = Array.from(merged.values());
+                if (rows.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado definido.</p>;
+                return (
+                  <Table>
+                    <TableHeader><TableRow className="hover:bg-transparent">
+                      <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead>
+                      <TableHead className="text-center">Contato</TableHead><TableHead className="text-center">Oportunidade</TableHead><TableHead></TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {rows.map(({ def: f, inContact, inOpportunity }) => (
+                        <TableRow key={f.key}>
+                          <TableCell className="font-medium text-foreground">{f.label}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
+                          <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
+                          <TableCell className="text-center">
+                            <Checkbox checked={inContact} disabled={!isAdmin} onCheckedChange={(v) => toggleCustomFieldScope(f.key, 'contact', !!v)} />
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Checkbox checked={inOpportunity} disabled={!isAdmin} onCheckedChange={(v) => toggleCustomFieldScope(f.key, 'opportunity', !!v)} />
+                          </TableCell>
+                          <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                );
+              })()}
 
               {isAdmin && (
                 <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
@@ -847,7 +878,7 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Nome do campo</Label>
-                      <Input value={cfLabel} onChange={e => setCfLabel(e.target.value)} placeholder="Ex: Produto" className="rounded-xl" />
+                      <Input value={cfLabel} onChange={e => setCfLabel(e.target.value)} placeholder="Ex: CPF, Produto" className="rounded-xl" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Tipo</Label>
@@ -869,68 +900,18 @@ export default function SettingsPage() {
                       <Input value={cfOptions} onChange={e => setCfOptions(e.target.value)} placeholder="Ex: Baixa, Média, Alta" className="rounded-xl" />
                     </div>
                   )}
-                  <Button onClick={addCustomField} disabled={!cfLabel.trim()} className="rounded-xl">
-                    <Plus className="h-4 w-4 mr-1" />Adicionar Campo
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="glass-card rounded-2xl">
-            <CardHeader>
-              <CardTitle>Campos Personalizados de Contato</CardTitle>
-              <CardDescription>Definidos no contato e disponíveis como variáveis em templates/disparos antes mesmo de virar oportunidade</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {contactCustomFields.length > 0 ? (
-                <Table>
-                  <TableHeader><TableRow className="hover:bg-transparent">
-                    <TableHead>Nome</TableHead><TableHead>Chave</TableHead><TableHead>Tipo</TableHead><TableHead>Opções</TableHead><TableHead></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {contactCustomFields.map(f => (
-                      <TableRow key={f.key}>
-                        <TableCell className="font-medium text-foreground">{f.label}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{f.key}</TableCell>
-                        <TableCell><Badge variant="secondary" className="rounded-full">{CF_TYPE_LABELS[f.type] ?? f.type}</Badge></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{f.options?.join(', ') || '—'}</TableCell>
-                        <TableCell>{isAdmin && <Button variant="ghost" size="icon" onClick={() => removeContactCustomField(f.key)}><Trash2 className="h-4 w-4 text-destructive" /></Button>}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : <p className="text-sm text-muted-foreground text-center py-4">Nenhum campo personalizado de contato.</p>}
-
-              {isAdmin && (
-                <div className="space-y-3 rounded-2xl border border-border/50 p-4 bg-card/50">
-                  <p className="text-sm font-medium text-foreground">Novo campo</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Nome do campo</Label>
-                      <Input value={ccfLabel} onChange={e => setCcfLabel(e.target.value)} placeholder="Ex: CPF" className="rounded-xl" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Tipo</Label>
-                      <Select value={ccfType} onValueChange={v => setCcfType(v as CustomFieldDef['type'])}>
-                        <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="text">Texto</SelectItem>
-                          <SelectItem value="number">Número</SelectItem>
-                          <SelectItem value="select">Seleção</SelectItem>
-                          <SelectItem value="date">Data</SelectItem>
-                          <SelectItem value="boolean">Sim/Não</SelectItem>
-                        </SelectContent>
-                      </Select>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Aparece em</Label>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={cfInContact} onCheckedChange={(v) => setCfInContact(!!v)} /> Contato
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={cfInOpportunity} onCheckedChange={(v) => setCfInOpportunity(!!v)} /> Oportunidade
+                      </label>
                     </div>
                   </div>
-                  {ccfType === 'select' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Opções (separadas por vírgula)</Label>
-                      <Input value={ccfOptions} onChange={e => setCcfOptions(e.target.value)} placeholder="Ex: A, B, C" className="rounded-xl" />
-                    </div>
-                  )}
-                  <Button onClick={addContactCustomField} disabled={!ccfLabel.trim()} className="rounded-xl">
+                  <Button onClick={addCustomField} disabled={!cfLabel.trim() || (!cfInContact && !cfInOpportunity)} className="rounded-xl">
                     <Plus className="h-4 w-4 mr-1" />Adicionar Campo
                   </Button>
                 </div>
@@ -938,6 +919,9 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+
+
 
 
         <TabsContent value="team" className="space-y-4 pt-4">
