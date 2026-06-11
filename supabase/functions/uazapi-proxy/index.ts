@@ -49,9 +49,18 @@ serve(async (req) => {
       .limit(1)
       .single();
 
+    // Check if caller is SaaS admin (allowed to act on any tenant)
+    const { data: saasAdmin } = await supabaseAdmin.from('saas_admins')
+      .select('user_id').eq('user_id', userId).maybeSingle();
+    const isSaasAdmin = !!saasAdmin;
+
     const effectiveTenantId = tenant_id || membership?.tenant_id;
     if (!effectiveTenantId) {
       return jsonResponse({ error: 'No tenant found' }, 400);
+    }
+    // Forbid cross-tenant access unless caller is SaaS admin
+    if (!isSaasAdmin && effectiveTenantId !== membership?.tenant_id) {
+      return jsonResponse({ error: 'Forbidden' }, 403);
     }
 
     // Get UAZAPI global key (admin token + base_url)
