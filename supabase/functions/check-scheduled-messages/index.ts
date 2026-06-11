@@ -10,9 +10,19 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  // Auth: allow service role or CRON_SECRET
+  const authHeader = req.headers.get('Authorization') || ''
+  const token = authHeader.replace('Bearer ', '').trim()
+  const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  const cronSecret = Deno.env.get('CRON_SECRET') || ''
+  if (token !== SERVICE_ROLE && (!cronSecret || token !== cronSecret)) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
   try {
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-    const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE)
 
     // Find pending scheduled messages that are due
