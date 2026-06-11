@@ -9,6 +9,29 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
 
+// Parses DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY or ISO YYYY-MM-DD. Returns 'YYYY-MM-DD' or null.
+function parseDateBR(input: string): string | null {
+  if (!input) return null;
+  const s = input.trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const y = +iso[1], m = +iso[2], d = +iso[3];
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+    return s;
+  }
+  const dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (dmy) {
+    let d = +dmy[1], m = +dmy[2], y = +dmy[3];
+    if (y < 100) y += 2000;
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+    return `${y.toString().padStart(4, '0')}-${m.toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
+  }
+  return null;
+}
+
 interface ImportContactsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
