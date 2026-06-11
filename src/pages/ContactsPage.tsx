@@ -33,6 +33,8 @@ export default function ContactsPage() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', status: 'lead' as const, tags: [] as string[], birth_date: undefined as Date | undefined });
+  const [customFieldDefs, setCustomFieldDefs] = useState<Array<{ key: string; label: string; type: 'text'|'number'|'date'|'select'|'boolean'; options?: string[] }>>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, unknown>>({});
   const [showImport, setShowImport] = useState(false);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [registeredTags, setRegisteredTags] = useState<TagDef[]>([]);
