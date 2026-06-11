@@ -11,28 +11,30 @@ import {
   type VariableScope,
 } from '@/lib/systemVariables';
 
-// Cache em memória — chaves de custom_fields raramente mudam dentro da sessão.
-const cache = new Map<string, { contact: string[]; opportunity: string[]; ts: number }>();
-const CACHE_MS = 5 * 60 * 1000;
+// Cache em memória — definições raramente mudam, mas TTL curto evita prender
+// chaves recém-criadas em Configurações por muito tempo.
+type CustomDef = { key: string; label?: string };
+const cache = new Map<string, { contact: CustomDef[]; opportunity: CustomDef[]; ts: number }>();
+const CACHE_MS = 30 * 1000;
 
 async function discoverCustomKeys(tenantId: string) {
   const cached = cache.get(tenantId);
   if (cached && Date.now() - cached.ts < CACHE_MS) return cached;
 
-  const [{ data: cs }, { data: os }] = await Promise.all([
-    supabase.from('contacts').select('custom_fields').eq('tenant_id', tenantId).neq('custom_fields', '{}').limit(500),
-    supabase.from('opportunities').select('custom_fields').eq('tenant_id', tenantId).neq('custom_fields', '{}').limit(500),
-  ]);
+  // Fonte oficial: definições salvas em tenants.settings pelo painel de Configurações.
+  const { data: t } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
+  const settings = (t?.settings && typeof t.settings === 'object' && !Array.isArray(t.settings))
+    ? (t.settings as Record<string, any>) : {};
 
-  const collect = (rows: any[] | null) => {
-    const set = new Set<string>();
-    (rows ?? []).forEach((r) => {
-      const cf = r?.custom_fields;
-      if (cf && typeof cf === 'object') Object.keys(cf).forEach((k) => set.add(k));
-    });
-    return [...set];
+  const normalize = (arr: any): CustomDef[] => Array.isArray(arr)
+    ? arr.filter((f) => f && typeof f.key === 'string').map((f) => ({ key: f.key, label: f.label }))
+    : [];
+
+  const value = {
+    contact: normalize(settings.custom_contact_fields),
+    opportunity: normalize(settings.custom_opportunity_fields),
+    ts: Date.now(),
   };
-  const value = { contact: collect(cs), opportunity: collect(os), ts: Date.now() };
   cache.set(tenantId, value);
   return value;
 }
@@ -45,7 +47,7 @@ interface Args {
 }
 
 export function useSystemVariables({ tenantId, scope, templateComponents }: Args) {
-  const [custom, setCustom] = useState<{ contact: string[]; opportunity: string[] }>({ contact: [], opportunity: [] });
+  const [custom, setCustom] = useState<{ contact: CustomDef[]; opportunity: CustomDef[] }>({ contact: [], opportunity: [] });
 
   useEffect(() => {
     if (!tenantId) return;
@@ -56,20 +58,23 @@ export function useSystemVariables({ tenantId, scope, templateComponents }: Args
 
   return useMemo<SystemVariable[]>(() => {
     const all: SystemVariable[] = [];
+    const contactKeys = custom.contact.map((d) => d.key);
+    const oppKeys = custom.opportunity.map((d) => d.key);
+
     if (scope === 'template-meta') {
-      // Template Meta usa apenas slots declarados no template + nomeados via {{contact.*}} (interpolados pelo wa-meta-send.interp)
       all.push(...templateSlotVars(templateComponents));
       all.push(...CONTACT_VARS_DOTTED);
-      all.push(...customFieldVars('contact.custom', custom.contact, ['template-meta']));
+      all.push(...customFieldVars('contact.custom', contactKeys, ['template-meta']));
+      all.push(...customFieldVars('opportunity.custom', oppKeys, ['template-meta']));
     } else if (scope === 'inbox-composer' || scope === 'quick-reply') {
       all.push(...CONTACT_VARS_SHORT);
-      all.push(...customFieldVars('contact.custom', custom.contact, [scope]));
+      all.push(...customFieldVars('contact.custom', contactKeys, [scope]));
     } else {
-      // flow / campaign — escopos onde o worker resolve dot-notation
+      // flow / campaign
       all.push(...CONTACT_VARS_DOTTED);
       all.push(...OPPORTUNITY_VARS);
-      all.push(...customFieldVars('contact.custom', custom.contact, [scope]));
-      all.push(...customFieldVars('opportunity.custom', custom.opportunity, [scope]));
+      all.push(...customFieldVars('contact.custom', contactKeys, [scope]));
+      all.push(...customFieldVars('opportunity.custom', oppKeys, [scope]));
     }
     return filterByScope(all, scope);
   }, [scope, templateComponents, custom]);
