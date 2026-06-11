@@ -125,7 +125,22 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
     return out;
   }, [slots, values, realData]);
 
+  const tokenOnlyRe = /^\s*\{\{\s*([A-Za-z0-9_.]+)\s*\}\}\s*$/;
+  const emptyTokenSlots = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of slots) {
+      const raw = values[s.id];
+      if (!raw) continue;
+      const m = raw.match(tokenOnlyRe);
+      if (!m) continue;
+      const resolved = resolveToken(m[1]);
+      if (resolved === null) out[s.id] = m[1];
+    }
+    return out;
+  }, [slots, values, realData]);
+
   const missingCount = slots.filter(s => !values[s.id]?.trim()).length;
+  const emptyTokenCount = Object.keys(emptyTokenSlots).length;
   const tplVars = useSystemVariables({ tenantId, scope: 'template-meta', templateComponents: (selected?.components as any[]) ?? null });
 
   const handleSend = async () => {
