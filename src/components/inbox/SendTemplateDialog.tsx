@@ -149,6 +149,10 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
       toast.error(`Preencha as ${missingCount} variável(is) restantes`);
       return;
     }
+    if (emptyTokenCount > 0) {
+      toast.error('Há variáveis selecionadas sem valor para este contato. A Meta vai rejeitar o envio.');
+      return;
+    }
     setSending(true);
     try {
       const components = buildMetaComponents(slots, values);
