@@ -22,115 +22,23 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // Job handlers registry
 const handlers = {
   async process_form_webhook(payload) {
-    const { tenant_id, data } = payload;
-    const phone = normalizePhone(data.phone || data.telefone || data.whatsapp);
-    const email = data.email || null;
-    const name = data.name || data.nome || data.full_name || 'Lead sem nome';
-
-    const utm = {
-      utm_source: data.utm_source || null,
-      utm_medium: data.utm_medium || null,
-      utm_campaign: data.utm_campaign || null,
-      utm_content: data.utm_content || null,
-      utm_term: data.utm_term || null,
-    };
-
-    let contact = await findContact(tenant_id, phone, email);
-    if (!contact) {
-      const ins = await supabase.from('contacts').insert({
-        tenant_id, name, phone, email, source: 'form_webhook',
-        status: 'lead', ...utm,
-      }).select().single();
-      if (ins.error && ins.error.code === '23505' && phone) {
-        const { data: race } = await supabase.from('contacts').select('*')
-          .eq('tenant_id', tenant_id).eq('phone', phone).single();
-        contact = race;
-      } else {
-        contact = ins.data;
-      }
-    } else {
-      await supabase.from('contacts').update({ ...utm, source: 'form_webhook' }).eq('id', contact.id);
-    }
-
-    const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
-    if (pipeline) {
-      const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-      if (stage) {
-        await supabase.from('opportunities').insert({
-          tenant_id, contact_id: contact.id, pipeline_id: pipeline.id, stage_id: stage.id,
-          title: `Lead: ${name}`, source: 'form_webhook', ...utm,
-        });
-      }
-    }
-
-    await supabase.from('activities').insert({
-      tenant_id, type: 'note', title: 'Lead via formulário',
-      description: `Novo lead recebido via webhook de formulário.`,
-      contact_id: contact.id,
+    return processLeadIntake({
+      tenant_id: payload.tenant_id,
+      event_id: payload.event_id,
+      source_default: 'form_webhook',
+      raw: payload.data || {},
     });
-
-    // Trigger automations + flows
-    await executeAutomations(supabase, tenant_id, 'lead_created', {
-      contact_id: contact.id, source: 'form_webhook',
-    });
-    await triggerLeadCreatedFlows(tenant_id, { ...contact, source: 'form_webhook' });
-
-    return { contact_id: contact.id };
   },
 
   async process_meta_lead(payload) {
-    const { tenant_id, data } = payload;
-    const entry = data.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const leadData = changes?.value || data;
-
-    const name = leadData.full_name || leadData.name || 'Lead Facebook';
-    const phone = normalizePhone(leadData.phone_number || leadData.phone);
-    const email = leadData.email || null;
-
-    const utm = {
-      utm_source: leadData.utm_source || 'facebook_lead_ads',
-      utm_medium: leadData.utm_medium || 'paid',
-      utm_campaign: leadData.campaign_name || leadData.utm_campaign || null,
-      campaign_id: leadData.campaign_id || null,
-      adset_id: leadData.adset_id || null,
-      ad_id: leadData.ad_id || null,
-    };
-
-    let contact = await findContact(tenant_id, phone, email);
-    if (!contact) {
-      const ins = await supabase.from('contacts').insert({
-        tenant_id, name, phone, email, source: 'facebook_lead_ads',
-        status: 'lead', ...utm,
-      }).select().single();
-      if (ins.error && ins.error.code === '23505' && phone) {
-        const { data: race } = await supabase.from('contacts').select('*')
-          .eq('tenant_id', tenant_id).eq('phone', phone).single();
-        contact = race;
-      } else {
-        contact = ins.data;
-      }
-    }
-
-    const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
-    if (pipeline) {
-      const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-      if (stage) {
-        await supabase.from('opportunities').insert({
-          tenant_id, contact_id: contact.id, pipeline_id: pipeline.id, stage_id: stage.id,
-          title: `Lead FB: ${name}`, source: 'facebook_lead_ads',
-        });
-      }
-    }
-
-    // Trigger automations + flows
-    await executeAutomations(supabase, tenant_id, 'lead_created', {
-      contact_id: contact.id, source: 'facebook_lead_ads',
+    return processLeadIntake({
+      tenant_id: payload.tenant_id,
+      event_id: payload.event_id,
+      source_default: 'facebook_lead_ads',
+      raw: payload.data || {},
     });
-    await triggerLeadCreatedFlows(tenant_id, { ...contact, source: 'facebook_lead_ads' });
-
-    return { contact_id: contact.id };
   },
+
 
   async process_uazapi_message(payload) {
     const { tenant_id, conversation_id, contact_id, message_text, message_id, already_saved, data } = payload;
@@ -1960,6 +1868,171 @@ async function findContact(tenantId, phone, email) {
   }
   return null;
 }
+
+// Lead intake unificado: Facebook Lead Ads (Make) + formulário genérico.
+// Contrato flat: { name, phone, email?, source?, campaign?, lead_id?, extra? }
+// Fallback: payload cru da Graph API do Facebook.
+async function processLeadIntake({ tenant_id, event_id, source_default, raw }) {
+  if (!tenant_id) throw new Error('processLeadIntake: tenant_id required');
+
+  // Idempotência: se o evento já foi processado, skip.
+  if (event_id) {
+    const { data: ev } = await supabase
+      .from('webhook_events')
+      .select('processed')
+      .eq('id', event_id)
+      .maybeSingle();
+    if (ev?.processed) {
+      console.log(`[Lead] event ${event_id} já processado, skip`);
+      return { skipped: true };
+    }
+  }
+
+  try {
+    // Parser flat com fallback para Graph API.
+    const flat = (raw && (raw.name || raw.phone || raw.email || raw.lead_id))
+      ? raw
+      : (() => {
+          const value = raw?.entry?.[0]?.changes?.[0]?.value || {};
+          return {
+            name: value.full_name || value.name || raw?.full_name || raw?.name,
+            phone: value.phone_number || value.phone || raw?.phone_number,
+            email: value.email || raw?.email,
+            campaign: value.campaign_name || raw?.campaign_name,
+            lead_id: value.leadgen_id || raw?.leadgen_id,
+            extra: value,
+          };
+        })();
+
+    const name = String(flat.name || raw?.nome || raw?.full_name || 'Lead sem nome').trim();
+    const phoneRaw = flat.phone || raw?.telefone || raw?.whatsapp || null;
+    const phone = normalizePhone(phoneRaw);
+    const email = flat.email || null;
+    const source = flat.source || source_default;
+    const campaign = flat.campaign || flat.utm_campaign || raw?.utm_campaign || null;
+    const extra = flat.extra && typeof flat.extra === 'object' ? flat.extra : {};
+
+    if (!phone && !email) {
+      throw new Error('Lead sem phone nem email — payload inválido');
+    }
+
+    // Find-or-create contato (não sobrescreve existente).
+    let contact = await findContact(tenant_id, phone, email);
+    if (!contact) {
+      const ins = await supabase.from('contacts').insert({
+        tenant_id,
+        name,
+        phone,
+        email,
+        source,
+        status: 'lead',
+        utm_source: source_default === 'facebook_lead_ads' ? 'facebook_lead_ads' : (raw?.utm_source || null),
+        utm_medium: raw?.utm_medium || (source_default === 'facebook_lead_ads' ? 'paid' : null),
+        utm_campaign: campaign,
+        utm_content: raw?.utm_content || null,
+        utm_term: raw?.utm_term || null,
+      }).select('*').single();
+
+      if (ins.error) {
+        if (ins.error.code === '23505' && phone) {
+          const { data: race } = await supabase.from('contacts').select('*')
+            .eq('tenant_id', tenant_id).eq('phone', phone).single();
+          contact = race;
+        } else {
+          throw new Error(`contact insert failed: ${ins.error.message}`);
+        }
+      } else {
+        contact = ins.data;
+      }
+    }
+    // contato existente: NÃO atualiza (preserva name, status, etc.)
+
+    // Resolve pipeline: settings.lead_default_pipeline_id → is_default → primeiro por position.
+    const { data: tenantRow } = await supabase
+      .from('tenants').select('settings').eq('id', tenant_id).maybeSingle();
+    const preferredPipelineId = tenantRow?.settings?.lead_default_pipeline_id || null;
+
+    let pipeline = null;
+    if (preferredPipelineId) {
+      const { data } = await supabase.from('pipelines')
+        .select('id').eq('tenant_id', tenant_id).eq('id', preferredPipelineId).maybeSingle();
+      pipeline = data;
+    }
+    if (!pipeline) {
+      const { data } = await supabase.from('pipelines')
+        .select('id').eq('tenant_id', tenant_id).eq('is_default', true).maybeSingle();
+      pipeline = data;
+    }
+    if (!pipeline) {
+      const { data } = await supabase.from('pipelines')
+        .select('id').eq('tenant_id', tenant_id).order('position').limit(1).maybeSingle();
+      pipeline = data;
+    }
+
+    if (pipeline) {
+      const { data: stage } = await supabase.from('stages')
+        .select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).maybeSingle();
+
+      if (stage) {
+        // Dedup: se já há oportunidade aberta, só registra atividade.
+        const { data: openOpp } = await supabase.from('opportunities')
+          .select('id')
+          .eq('tenant_id', tenant_id)
+          .eq('contact_id', contact.id)
+          .eq('status', 'open')
+          .limit(1)
+          .maybeSingle();
+
+        const extrasSummary = Object.keys(extra).length
+          ? `\nDados extras: ${JSON.stringify(extra)}`
+          : '';
+
+        if (openOpp) {
+          await supabase.from('activities').insert({
+            tenant_id,
+            type: 'note',
+            title: `Novo lead recebido (duplicado) — ${source}`,
+            description: `Contato já possui oportunidade aberta. Campanha: ${campaign || 'n/d'}.${extrasSummary}`,
+            contact_id: contact.id,
+            opportunity_id: openOpp.id,
+          });
+        } else {
+          await supabase.from('opportunities').insert({
+            tenant_id,
+            contact_id: contact.id,
+            pipeline_id: pipeline.id,
+            stage_id: stage.id,
+            title: `Lead: ${name}`,
+            source,
+            custom_fields: { campaign, lead_id: flat.lead_id || null, extra },
+          });
+        }
+      }
+    }
+
+    // Triggers downstream
+    await executeAutomations(supabase, tenant_id, 'lead_created', {
+      contact_id: contact.id, source,
+    });
+    await triggerLeadCreatedFlows(tenant_id, { ...contact, source });
+
+    if (event_id) {
+      await supabase.from('webhook_events')
+        .update({ processed: true, processing_error: null })
+        .eq('id', event_id);
+    }
+
+    return { contact_id: contact.id };
+  } catch (err) {
+    if (event_id) {
+      await supabase.from('webhook_events')
+        .update({ processing_error: String(err?.message || err) })
+        .eq('id', event_id);
+    }
+    throw err;
+  }
+}
+
 
 // Keyword Lead Creation
 function removeAccents(str) {
