@@ -25,6 +25,7 @@ import KnowledgeBaseSettings from '@/components/settings/KnowledgeBaseSettings';
 import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
 import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnectionsCard';
 import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
+import LeadWebhooksCard from '@/components/settings/LeadWebhooksCard';
 
 interface CustomFieldDef {
   key: string;
@@ -1075,13 +1076,7 @@ export default function SettingsPage() {
         <TabsContent value="integrations" className="space-y-4 pt-4">
           <WhatsAppIntegrationCard tenantId={tenant?.id} />
           <MetaCloudConnectionsCard />
-          <Card className="glass-card rounded-2xl">
-            <CardHeader><CardTitle>Webhooks</CardTitle><CardDescription>URLs de webhook para formulários e Facebook Lead Ads</CardDescription></CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <p><strong>Webhook genérico:</strong> <code className="bg-muted px-2 py-0.5 rounded-lg text-xs">{`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/webhook-form-intake`}</code></p>
-              <p><strong>Facebook Lead Ads:</strong> <code className="bg-muted px-2 py-0.5 rounded-lg text-xs">{`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/webhook-meta-leads`}</code></p>
-            </CardContent>
-          </Card>
+          <LeadWebhooksCard />
         </TabsContent>
 
         <TabsContent value="meta_templates" className="space-y-4 pt-4">
