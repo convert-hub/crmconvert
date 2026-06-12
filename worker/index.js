@@ -22,115 +22,23 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // Job handlers registry
 const handlers = {
   async process_form_webhook(payload) {
-    const { tenant_id, data } = payload;
-    const phone = normalizePhone(data.phone || data.telefone || data.whatsapp);
-    const email = data.email || null;
-    const name = data.name || data.nome || data.full_name || 'Lead sem nome';
-
-    const utm = {
-      utm_source: data.utm_source || null,
-      utm_medium: data.utm_medium || null,
-      utm_campaign: data.utm_campaign || null,
-      utm_content: data.utm_content || null,
-      utm_term: data.utm_term || null,
-    };
-
-    let contact = await findContact(tenant_id, phone, email);
-    if (!contact) {
-      const ins = await supabase.from('contacts').insert({
-        tenant_id, name, phone, email, source: 'form_webhook',
-        status: 'lead', ...utm,
-      }).select().single();
-      if (ins.error && ins.error.code === '23505' && phone) {
-        const { data: race } = await supabase.from('contacts').select('*')
-          .eq('tenant_id', tenant_id).eq('phone', phone).single();
-        contact = race;
-      } else {
-        contact = ins.data;
-      }
-    } else {
-      await supabase.from('contacts').update({ ...utm, source: 'form_webhook' }).eq('id', contact.id);
-    }
-
-    const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
-    if (pipeline) {
-      const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-      if (stage) {
-        await supabase.from('opportunities').insert({
-          tenant_id, contact_id: contact.id, pipeline_id: pipeline.id, stage_id: stage.id,
-          title: `Lead: ${name}`, source: 'form_webhook', ...utm,
-        });
-      }
-    }
-
-    await supabase.from('activities').insert({
-      tenant_id, type: 'note', title: 'Lead via formulário',
-      description: `Novo lead recebido via webhook de formulário.`,
-      contact_id: contact.id,
+    return processLeadIntake({
+      tenant_id: payload.tenant_id,
+      event_id: payload.event_id,
+      source_default: 'form_webhook',
+      raw: payload.data || {},
     });
-
-    // Trigger automations + flows
-    await executeAutomations(supabase, tenant_id, 'lead_created', {
-      contact_id: contact.id, source: 'form_webhook',
-    });
-    await triggerLeadCreatedFlows(tenant_id, { ...contact, source: 'form_webhook' });
-
-    return { contact_id: contact.id };
   },
 
   async process_meta_lead(payload) {
-    const { tenant_id, data } = payload;
-    const entry = data.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const leadData = changes?.value || data;
-
-    const name = leadData.full_name || leadData.name || 'Lead Facebook';
-    const phone = normalizePhone(leadData.phone_number || leadData.phone);
-    const email = leadData.email || null;
-
-    const utm = {
-      utm_source: leadData.utm_source || 'facebook_lead_ads',
-      utm_medium: leadData.utm_medium || 'paid',
-      utm_campaign: leadData.campaign_name || leadData.utm_campaign || null,
-      campaign_id: leadData.campaign_id || null,
-      adset_id: leadData.adset_id || null,
-      ad_id: leadData.ad_id || null,
-    };
-
-    let contact = await findContact(tenant_id, phone, email);
-    if (!contact) {
-      const ins = await supabase.from('contacts').insert({
-        tenant_id, name, phone, email, source: 'facebook_lead_ads',
-        status: 'lead', ...utm,
-      }).select().single();
-      if (ins.error && ins.error.code === '23505' && phone) {
-        const { data: race } = await supabase.from('contacts').select('*')
-          .eq('tenant_id', tenant_id).eq('phone', phone).single();
-        contact = race;
-      } else {
-        contact = ins.data;
-      }
-    }
-
-    const { data: pipeline } = await supabase.from('pipelines').select('id').eq('tenant_id', tenant_id).eq('is_default', true).single();
-    if (pipeline) {
-      const { data: stage } = await supabase.from('stages').select('id').eq('pipeline_id', pipeline.id).order('position').limit(1).single();
-      if (stage) {
-        await supabase.from('opportunities').insert({
-          tenant_id, contact_id: contact.id, pipeline_id: pipeline.id, stage_id: stage.id,
-          title: `Lead FB: ${name}`, source: 'facebook_lead_ads',
-        });
-      }
-    }
-
-    // Trigger automations + flows
-    await executeAutomations(supabase, tenant_id, 'lead_created', {
-      contact_id: contact.id, source: 'facebook_lead_ads',
+    return processLeadIntake({
+      tenant_id: payload.tenant_id,
+      event_id: payload.event_id,
+      source_default: 'facebook_lead_ads',
+      raw: payload.data || {},
     });
-    await triggerLeadCreatedFlows(tenant_id, { ...contact, source: 'facebook_lead_ads' });
-
-    return { contact_id: contact.id };
   },
+
 
   async process_uazapi_message(payload) {
     const { tenant_id, conversation_id, contact_id, message_text, message_id, already_saved, data } = payload;
