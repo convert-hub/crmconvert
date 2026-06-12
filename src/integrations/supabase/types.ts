@@ -2217,6 +2217,7 @@ export type Database = {
       webhook_events: {
         Row: {
           created_at: string
+          external_id: string | null
           id: string
           job_id: string | null
           processed: boolean | null
@@ -2227,6 +2228,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          external_id?: string | null
           id?: string
           job_id?: string | null
           processed?: boolean | null
@@ -2237,6 +2239,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          external_id?: string | null
           id?: string
           job_id?: string | null
           processed?: boolean | null
