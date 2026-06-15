@@ -155,7 +155,19 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
     }
     setSending(true);
     try {
-      const components = buildMetaComponents(slots, values);
+      // Replace any {{contact.*}} / {{opportunity.*}} tokens with real values
+      // BEFORE shipping to Meta. Without this, the literal token reaches the
+      // customer (regression seen on 2026-06-15 with contact.custom.*).
+      const VAR_TOKEN_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
+      const resolvedValues: Record<string, string> = {};
+      for (const s of slots) {
+        const raw = values[s.id] ?? '';
+        resolvedValues[s.id] = raw.replace(VAR_TOKEN_RE, (match, path) => {
+          const r = resolveToken(path);
+          return r ?? match;
+        });
+      }
+      const components = buildMetaComponents(slots, resolvedValues);
       const { data, error } = await supabase.functions.invoke('wa-meta-send', {
         body: {
           action: 'send',
