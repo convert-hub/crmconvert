@@ -24,6 +24,7 @@ import ImportContactsDialog from '@/components/contacts/ImportContactsDialog';
 import TagInput from '@/components/contacts/TagInput';
 import type { TagDef } from '@/components/settings/TagsSettings';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
+import StartConversationDialog from '@/components/crm/StartConversationDialog';
 
 export default function ContactsPage() {
   const { tenant, role } = useAuth();
