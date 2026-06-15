@@ -101,6 +101,13 @@ export default function InboxPage() {
   const [loadedCount, setLoadedCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [filterMode, setFilterMode] = useState<'all' | 'unread'>(() => {
+    try { return (localStorage.getItem('inbox:filter') as 'all' | 'unread') || 'all'; } catch { return 'all'; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('inbox:filter', filterMode); } catch {}
+  }, [filterMode]);
 
   const baseQuery = () => {
     let query = supabase
@@ -112,6 +119,7 @@ export default function InboxPage() {
     if (role === 'attendant' && membership && !canViewAll) {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
+    if (filterMode === 'unread') query = query.gt('unread_count', 0);
     return query;
   };
 
