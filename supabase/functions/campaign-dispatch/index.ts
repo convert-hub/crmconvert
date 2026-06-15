@@ -15,12 +15,35 @@ function jsonOk(data: unknown, status = 200) {
   });
 }
 
-function resolveTemplateVariable(template: string, contact: any): string {
-  if (!template) return "";
-  return template.replace(/\{\{\s*contact\.(\w+)\s*\}\}/g, (_, field) => {
-    const v = contact?.[field];
-    return v == null ? "" : String(v);
+// Token resolver — supports contact.{name,email,phone}, contact.custom.<key>,
+// opportunity.{title,value}, opportunity.custom.<key>. Returns { text, unresolved }
+// where `unresolved` is the first token that had no value (literal kept in text).
+const TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+function resolveTemplateVariable(
+  template: string,
+  contact: any,
+  opportunity: any,
+): { text: string; unresolved: string | null } {
+  if (!template) return { text: "", unresolved: null };
+  let firstUnresolved: string | null = null;
+  const cc = (contact?.custom_fields && typeof contact.custom_fields === "object") ? contact.custom_fields : {};
+  const oc = (opportunity?.custom_fields && typeof opportunity.custom_fields === "object") ? opportunity.custom_fields : {};
+  const text = template.replace(TOKEN_RE, (raw, path: string) => {
+    let v: unknown = undefined;
+    if (path === "contact.name") v = contact?.name;
+    else if (path === "contact.email") v = contact?.email;
+    else if (path === "contact.phone") v = contact?.phone;
+    else if (path.startsWith("contact.custom.")) v = cc[path.slice("contact.custom.".length)];
+    else if (path === "opportunity.title") v = opportunity?.title;
+    else if (path === "opportunity.value") v = opportunity?.value;
+    else if (path.startsWith("opportunity.custom.")) v = oc[path.slice("opportunity.custom.".length)];
+    if (v === undefined || v === null || v === "") {
+      if (!firstUnresolved) firstUnresolved = path;
+      return raw; // keep literal so failure is visible in variables_used
+    }
+    return String(v);
   });
+  return { text, unresolved: firstUnresolved };
 }
 
 serve(async (req) => {
