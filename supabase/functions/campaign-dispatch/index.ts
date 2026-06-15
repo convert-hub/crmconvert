@@ -199,11 +199,39 @@ serve(async (req) => {
         continue;
       }
 
+      // Hydrate latest open opportunity for richer variable resolution
+      let opportunity: any = null;
+      const { data: oppRow } = await supabase
+        .from("opportunities")
+        .select("title, value, custom_fields")
+        .eq("contact_id", contact.id)
+        .eq("status", "open")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      opportunity = oppRow ?? null;
+
       const resolved: Record<string, string> = {};
+      let unresolvedToken: string | null = null;
       for (const p of placeholders) {
         const tplVar = (campaign.template_variables as any)?.[p] ?? "";
-        resolved[p] = resolveTemplateVariable(tplVar, contact);
+        const r = resolveTemplateVariable(tplVar, contact, opportunity);
+        resolved[p] = r.text;
+        if (r.unresolved && !unresolvedToken) unresolvedToken = r.unresolved;
       }
+
+      if (unresolvedToken) {
+        // Do NOT ship a literal {{...}} to the customer. Mark recipient failed.
+        await supabase.from("campaign_recipients").update({
+          status: "failed",
+          variables_used: resolved,
+          error: `unresolved_variable:${unresolvedToken}`,
+        }).eq("id", rcp.id);
+        failed++;
+        processed++;
+        continue;
+      }
+
 
       let { data: conversation } = await supabase
         .from("conversations")
