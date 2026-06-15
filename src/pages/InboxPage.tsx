@@ -127,7 +127,7 @@ export default function InboxPage() {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
-    if (filterMode === 'unanswered') query = query.eq('status', 'waiting_agent');
+    if (filterMode === 'unanswered') query = query.eq('is_unanswered', true);
     return query;
   };
 
@@ -189,7 +189,7 @@ export default function InboxPage() {
         q = q.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
       }
       if (filterMode === 'unread') q = q.gt('unread_count', 0);
-      if (filterMode === 'unanswered') q = q.eq('status', 'waiting_agent');
+      if (filterMode === 'unanswered') q = q.eq('is_unanswered', true);
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
@@ -258,7 +258,7 @@ export default function InboxPage() {
   };
 
   const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);
-  const unansweredLoaded = conversations.reduce((n, c) => n + (c.status === 'waiting_agent' ? 1 : 0), 0);
+  const unansweredLoaded = conversations.reduce((n, c) => n + ((c as any).is_unanswered ? 1 : 0), 0);
   const filtered = conversations.filter(c => {
     if (!search) return true;
     const s = search.toLowerCase();

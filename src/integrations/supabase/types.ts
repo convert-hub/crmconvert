@@ -831,6 +831,7 @@ export type Database = {
           contact_id: string | null
           created_at: string
           id: string
+          is_unanswered: boolean | null
           last_agent_message_at: string | null
           last_customer_message_at: string | null
           last_message_at: string | null
@@ -849,6 +850,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string
           id?: string
+          is_unanswered?: boolean | null
           last_agent_message_at?: string | null
           last_customer_message_at?: string | null
           last_message_at?: string | null
@@ -867,6 +869,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string
           id?: string
+          is_unanswered?: boolean | null
           last_agent_message_at?: string | null
           last_customer_message_at?: string | null
           last_message_at?: string | null
