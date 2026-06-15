@@ -86,6 +86,8 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiAct
   );
 }
 
+const PAGE_SIZE = 300;
+
 export default function InboxPage() {
   const { tenant, membership, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -95,28 +97,92 @@ export default function InboxPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
   const [deleteConvId, setDeleteConvId] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [loadedCount, setLoadedCount] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searching, setSearching] = useState(false);
 
-  const loadConversations = () => {
-    if (!tenant) return;
-    let query = supabase.from('conversations').select('*, contact:contacts(*)').eq('tenant_id', tenant.id).order('last_message_at', { ascending: false }).limit(100);
-
-    // Attendants without "ver todas" only see unassigned + own conversations
+  const baseQuery = () => {
+    let query = supabase
+      .from('conversations')
+      .select('*, contact:contacts(*)', { count: 'exact' })
+      .eq('tenant_id', tenant!.id)
+      .order('last_message_at', { ascending: false });
     const canViewAll = (membership as any)?.can_view_all === true;
     if (role === 'attendant' && membership && !canViewAll) {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
+    return query;
+  };
 
-    query.then(({ data }) => {
-        const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
-        setConversations(convs);
-        const urlConv = searchParams.get('conv');
-        if (urlConv && convs.some(c => c.id === urlConv) && selectedConv !== urlConv) {
-          setSelectedConv(urlConv);
-        }
-      });
+  const loadConversations = async () => {
+    if (!tenant) return;
+    const { data, count } = await baseQuery().range(0, PAGE_SIZE - 1);
+    const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
+    setConversations(convs);
+    setLoadedCount(convs.length);
+    setTotalCount(count ?? null);
+    const urlConv = searchParams.get('conv');
+    if (urlConv && convs.some(c => c.id === urlConv) && selectedConv !== urlConv) {
+      setSelectedConv(urlConv);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!tenant || loadingMore) return;
+    setLoadingMore(true);
+    const from = loadedCount;
+    const to = from + PAGE_SIZE - 1;
+    const { data } = await baseQuery().range(from, to);
+    const more = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
+    setConversations(prev => {
+      const seen = new Set(prev.map(c => c.id));
+      return [...prev, ...more.filter(c => !seen.has(c.id))];
+    });
+    setLoadedCount(prev => prev + more.length);
+    setLoadingMore(false);
   };
 
   useEffect(() => { loadConversations(); }, [tenant?.id, role, membership?.id]);
+
+  // Server-side search: when user types, query DB directly so old conversations are findable.
+  useEffect(() => {
+    if (!tenant) return;
+    const term = search.trim();
+    if (term.length < 2) { setSearching(false); return; }
+    setSearching(true);
+    const handle = setTimeout(async () => {
+      const digits = term.replace(/\D/g, '');
+      // Find matching contacts first (by name or phone), then fetch their conversations.
+      const contactFilter = digits.length >= 3
+        ? `name.ilike.%${term}%,phone.ilike.%${digits}%`
+        : `name.ilike.%${term}%`;
+      const { data: contactIds } = await supabase
+        .from('contacts').select('id').eq('tenant_id', tenant.id).or(contactFilter).limit(500);
+      const ids = (contactIds ?? []).map((c: any) => c.id);
+      if (ids.length === 0) { setConversations([]); setLoadedCount(0); return; }
+      let q = supabase.from('conversations').select('*, contact:contacts(*)')
+        .eq('tenant_id', tenant.id).in('contact_id', ids)
+        .order('last_message_at', { ascending: false }).limit(500);
+      const canViewAll = (membership as any)?.can_view_all === true;
+      if (role === 'attendant' && membership && !canViewAll) {
+        q = q.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
+      }
+      const { data } = await q;
+      const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
+      setConversations(convs);
+      setLoadedCount(convs.length);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [search, tenant?.id, role, membership?.id]);
+
+  // Reload base list when search is cleared
+  useEffect(() => {
+    if (search.trim().length < 2 && searching) {
+      setSearching(false);
+      loadConversations();
+    }
+  }, [search]);
 
   // Keep ?conv= in URL in sync with selectedConv so the open chat survives remounts/refreshes.
   useEffect(() => {
@@ -134,20 +200,14 @@ export default function InboxPage() {
     if (!tenant) return;
     const channel = supabase.channel(`inbox-convs-${tenant.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        loadConversations();
+        if (!searching) loadConversations();
       })
-      // Fallback: if a new message arrives for a conversation NOT in our current list,
-      // it means either (a) the conversation INSERT event was missed, or (b) the conversation
-      // was created by a webhook just milliseconds before this message — either way, refetch the list.
-      // This avoids the bug where new conversations from new contacts don't appear until refresh.
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, payload => {
         const newMsg = payload.new as any;
         const convId = newMsg?.conversation_id;
         if (!convId) return;
-        // Use functional setState to read current conversations without stale closure
         setConversations(prev => {
-          if (!prev.some(c => c.id === convId)) {
-            // Unknown conversation — trigger a refetch
+          if (!prev.some(c => c.id === convId) && !searching) {
             loadConversations();
           }
           return prev;
@@ -155,7 +215,7 @@ export default function InboxPage() {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [tenant?.id, role, membership?.id]);
+  }, [tenant?.id, role, membership?.id, searching]);
 
   useEffect(() => {
     if (!selectedConv) return;
@@ -261,6 +321,16 @@ export default function InboxPage() {
             </div>
           ))}
           {filtered.length === 0 && <p className="text-center text-sm text-muted-foreground py-8">Nenhuma conversa</p>}
+          {!searching && totalCount !== null && loadedCount < totalCount && (
+            <div className="p-3 text-center">
+              <Button size="sm" variant="ghost" className="text-xs h-7" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? 'Carregando…' : `Carregar mais (${loadedCount}/${totalCount})`}
+              </Button>
+            </div>
+          )}
+          {!searching && totalCount !== null && loadedCount >= totalCount && totalCount > PAGE_SIZE && (
+            <p className="text-center text-[10px] text-muted-foreground py-2">{totalCount} conversas</p>
+          )}
         </div>
       </div>
 
