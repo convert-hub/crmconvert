@@ -176,7 +176,7 @@ serve(async (req) => {
     // Hydrate contact data preserving FIFO order.
     const { data: pending } = await supabase
       .from("campaign_recipients")
-      .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given)")
+      .select("id, contact_id, variables_used, contact:contacts(id, name, phone, email, do_not_contact, consent_given, custom_fields)")
       .in("id", claimedIds)
       .order("created_at", { ascending: true });
 
