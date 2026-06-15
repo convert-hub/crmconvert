@@ -183,7 +183,7 @@ export default function InboxPage() {
       setLoadedCount(convs.length);
     }, 300);
     return () => clearTimeout(handle);
-  }, [search, tenant?.id, role, membership?.id]);
+  }, [search, tenant?.id, role, membership?.id, filterMode]);
 
   // Reload base list when search is cleared
   useEffect(() => {
