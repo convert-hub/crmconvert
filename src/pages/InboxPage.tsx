@@ -101,8 +101,11 @@ export default function InboxPage() {
   const [loadedCount, setLoadedCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [filterMode, setFilterMode] = useState<'all' | 'unread'>(() => {
-    try { return (localStorage.getItem('inbox:filter') as 'all' | 'unread') || 'all'; } catch { return 'all'; }
+  const [filterMode, setFilterMode] = useState<'all' | 'unread' | 'unanswered'>(() => {
+    try {
+      const v = localStorage.getItem('inbox:filter');
+      return (v === 'unread' || v === 'unanswered') ? v : 'all';
+    } catch { return 'all'; }
   });
 
   useEffect(() => {
@@ -113,13 +116,18 @@ export default function InboxPage() {
     let query = supabase
       .from('conversations')
       .select('*, contact:contacts(*)', { count: 'exact' })
-      .eq('tenant_id', tenant!.id)
-      .order('last_message_at', { ascending: false });
+      .eq('tenant_id', tenant!.id);
+    if (filterMode === 'unanswered') {
+      query = query.order('last_customer_message_at', { ascending: true, nullsFirst: false });
+    } else {
+      query = query.order('last_message_at', { ascending: false });
+    }
     const canViewAll = (membership as any)?.can_view_all === true;
     if (role === 'attendant' && membership && !canViewAll) {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
+    if (filterMode === 'unanswered') query = query.eq('status', 'waiting_agent');
     return query;
   };
 
