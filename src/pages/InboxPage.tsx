@@ -178,13 +178,18 @@ export default function InboxPage() {
       const ids = (contactIds ?? []).map((c: any) => c.id);
       if (ids.length === 0) { setConversations([]); setLoadedCount(0); return; }
       let q = supabase.from('conversations').select('*, contact:contacts(*)')
-        .eq('tenant_id', tenant.id).in('contact_id', ids)
-        .order('last_message_at', { ascending: false }).limit(500);
+        .eq('tenant_id', tenant.id).in('contact_id', ids).limit(500);
+      if (filterMode === 'unanswered') {
+        q = q.order('last_customer_message_at', { ascending: true, nullsFirst: false });
+      } else {
+        q = q.order('last_message_at', { ascending: false });
+      }
       const canViewAll = (membership as any)?.can_view_all === true;
       if (role === 'attendant' && membership && !canViewAll) {
         q = q.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
       }
       if (filterMode === 'unread') q = q.gt('unread_count', 0);
+      if (filterMode === 'unanswered') q = q.eq('status', 'waiting_agent');
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
