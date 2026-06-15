@@ -258,7 +258,7 @@ export default function InboxPage() {
   };
 
   const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);
-  const unansweredLoaded = conversations.reduce((n, c) => n + (c.status === 'waiting_agent' ? 1 : 0), 0);
+  const unansweredLoaded = conversations.reduce((n, c) => n + ((c as any).is_unanswered ? 1 : 0), 0);
   const filtered = conversations.filter(c => {
     if (!search) return true;
     const s = search.toLowerCase();
