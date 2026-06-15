@@ -280,6 +280,28 @@ export default function InboxPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input className="pl-9 rounded-xl" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          <div className="flex items-center gap-1.5 mt-2">
+            <button
+              onClick={() => setFilterMode('all')}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
+                filterMode === 'all' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+              )}>Todas</button>
+            <button
+              onClick={() => setFilterMode('unread')}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border inline-flex items-center gap-1",
+                filterMode === 'unread' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+              )}>
+              Não lidas
+              {unreadLoaded > 0 && (
+                <span className={cn(
+                  "px-1.5 rounded-full text-[10px] font-bold",
+                  filterMode === 'unread' ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'
+                )}>{unreadLoaded}</span>
+              )}
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.map(conv => (
