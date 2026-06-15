@@ -127,7 +127,7 @@ export default function InboxPage() {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
-    if (filterMode === 'unanswered') query = query.eq('status', 'waiting_agent');
+    if (filterMode === 'unanswered') query = query.eq('is_unanswered', true);
     return query;
   };
 
