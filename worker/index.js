@@ -492,17 +492,43 @@ const handlers = {
       .select('*').eq('id', template_id).maybeSingle();
     if (!template) throw new Error('Template not found');
 
-    // Resolve contact for variable interpolation
+    // Resolve contact + latest open opportunity for variable interpolation
     let contact = null;
+    let opportunity = null;
     if (contact_id) {
       const { data } = await supabase.from('contacts').select('*').eq('id', contact_id).maybeSingle();
       contact = data;
+      const { data: oppRow } = await supabase
+        .from('opportunities')
+        .select('title, value, custom_fields')
+        .eq('contact_id', contact_id)
+        .eq('status', 'open')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      opportunity = oppRow || null;
     }
-    const interp = (s) => (typeof s === 'string' ? s
-      .replace(/\{\{contact\.name\}\}/g, contact?.name || '')
-      .replace(/\{\{contact\.email\}\}/g, contact?.email || '')
-      .replace(/\{\{contact\.phone\}\}/g, contact?.phone || '')
-      : s);
+    const cc = (contact?.custom_fields && typeof contact.custom_fields === 'object') ? contact.custom_fields : {};
+    const oc = (opportunity?.custom_fields && typeof opportunity.custom_fields === 'object') ? opportunity.custom_fields : {};
+    const TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+    const interp = (s) => {
+      if (typeof s !== 'string') return s;
+      return s.replace(TOKEN_RE, (raw, path) => {
+        let v;
+        if (path === 'contact.name') v = contact?.name;
+        else if (path === 'contact.email') v = contact?.email;
+        else if (path === 'contact.phone') v = contact?.phone;
+        else if (path.startsWith('contact.custom.')) v = cc[path.slice('contact.custom.'.length)];
+        else if (path === 'opportunity.title') v = opportunity?.title;
+        else if (path === 'opportunity.value') v = opportunity?.value;
+        else if (path.startsWith('opportunity.custom.')) v = oc[path.slice('opportunity.custom.'.length)];
+        if (v === undefined || v === null || v === '') {
+          console.warn(`[send_whatsapp_template] unresolved variable ${path} for contact ${contact_id}`);
+          return raw;
+        }
+        return String(v);
+      });
+    };
 
     // Build components for HEADER (text), BODY and URL BUTTONS — supports
     // both positional ({{1}}) and named ({{nome}}) placeholders.
