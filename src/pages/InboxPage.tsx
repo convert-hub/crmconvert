@@ -101,8 +101,11 @@ export default function InboxPage() {
   const [loadedCount, setLoadedCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [filterMode, setFilterMode] = useState<'all' | 'unread'>(() => {
-    try { return (localStorage.getItem('inbox:filter') as 'all' | 'unread') || 'all'; } catch { return 'all'; }
+  const [filterMode, setFilterMode] = useState<'all' | 'unread' | 'unanswered'>(() => {
+    try {
+      const v = localStorage.getItem('inbox:filter');
+      return (v === 'unread' || v === 'unanswered') ? v : 'all';
+    } catch { return 'all'; }
   });
 
   useEffect(() => {
@@ -113,13 +116,18 @@ export default function InboxPage() {
     let query = supabase
       .from('conversations')
       .select('*, contact:contacts(*)', { count: 'exact' })
-      .eq('tenant_id', tenant!.id)
-      .order('last_message_at', { ascending: false });
+      .eq('tenant_id', tenant!.id);
+    if (filterMode === 'unanswered') {
+      query = query.order('last_customer_message_at', { ascending: true, nullsFirst: false });
+    } else {
+      query = query.order('last_message_at', { ascending: false });
+    }
     const canViewAll = (membership as any)?.can_view_all === true;
     if (role === 'attendant' && membership && !canViewAll) {
       query = query.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
+    if (filterMode === 'unanswered') query = query.eq('status', 'waiting_agent');
     return query;
   };
 
@@ -170,13 +178,18 @@ export default function InboxPage() {
       const ids = (contactIds ?? []).map((c: any) => c.id);
       if (ids.length === 0) { setConversations([]); setLoadedCount(0); return; }
       let q = supabase.from('conversations').select('*, contact:contacts(*)')
-        .eq('tenant_id', tenant.id).in('contact_id', ids)
-        .order('last_message_at', { ascending: false }).limit(500);
+        .eq('tenant_id', tenant.id).in('contact_id', ids).limit(500);
+      if (filterMode === 'unanswered') {
+        q = q.order('last_customer_message_at', { ascending: true, nullsFirst: false });
+      } else {
+        q = q.order('last_message_at', { ascending: false });
+      }
       const canViewAll = (membership as any)?.can_view_all === true;
       if (role === 'attendant' && membership && !canViewAll) {
         q = q.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
       }
       if (filterMode === 'unread') q = q.gt('unread_count', 0);
+      if (filterMode === 'unanswered') q = q.eq('status', 'waiting_agent');
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
@@ -245,6 +258,7 @@ export default function InboxPage() {
   };
 
   const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);
+  const unansweredLoaded = conversations.reduce((n, c) => n + (c.status === 'waiting_agent' ? 1 : 0), 0);
   const filtered = conversations.filter(c => {
     if (!search) return true;
     const s = search.toLowerCase();
@@ -299,6 +313,20 @@ export default function InboxPage() {
                   "px-1.5 rounded-full text-[10px] font-bold",
                   filterMode === 'unread' ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'
                 )}>{unreadLoaded}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setFilterMode('unanswered')}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border inline-flex items-center gap-1",
+                filterMode === 'unanswered' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+              )}>
+              Sem resposta
+              {unansweredLoaded > 0 && (
+                <span className={cn(
+                  "px-1.5 rounded-full text-[10px] font-bold",
+                  filterMode === 'unanswered' ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'
+                )}>{unansweredLoaded}</span>
               )}
             </button>
           </div>
