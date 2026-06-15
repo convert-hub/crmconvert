@@ -244,6 +244,7 @@ export default function InboxPage() {
     setCascadeData(linked);
   };
 
+  const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);
   const filtered = conversations.filter(c => {
     if (!search) return true;
     const s = search.toLowerCase();
