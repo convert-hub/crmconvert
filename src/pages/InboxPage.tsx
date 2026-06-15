@@ -176,6 +176,7 @@ export default function InboxPage() {
       if (role === 'attendant' && membership && !canViewAll) {
         q = q.or(`assigned_to.is.null,assigned_to.eq.${membership.id}`);
       }
+      if (filterMode === 'unread') q = q.gt('unread_count', 0);
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
