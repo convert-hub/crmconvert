@@ -42,6 +42,7 @@ export default function ContactsPage() {
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [oppContact, setOppContact] = useState<Contact | null>(null);
   const [deleteContactId, setDeleteContactId] = useState<string | null>(null);
+  const [convContact, setConvContact] = useState<Contact | null>(null);
   const [contactCascadeData, setContactCascadeData] = useState<ContactLinked | null>(null);
   const { getContactLinked, deleteContactCascade, loading: cascadeLoading } = useCascadeDelete();
 
@@ -244,6 +245,7 @@ export default function ContactsPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => openEdit(c)}><Edit className="h-3.5 w-3.5 mr-2" />Editar</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setConvContact(c); }}><MessageSquare className="h-3.5 w-3.5 mr-2" />Iniciar Conversa</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setOppContact(c); }}><Kanban className="h-3.5 w-3.5 mr-2" />Criar Oportunidade</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleDelete(c.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5 mr-2" />Excluir</DropdownMenuItem>
                         </DropdownMenuContent>
@@ -327,6 +329,11 @@ export default function ContactsPage() {
                 </div>
               </div>
             )}
+            {editingContact && (
+              <Button type="button" variant="outline" className="w-full" onClick={() => { setConvContact(editingContact); setShowDialog(false); }}>
+                <MessageSquare className="h-4 w-4 mr-2" />Iniciar conversa
+              </Button>
+            )}
             <Button type="submit" className="w-full">{editingContact ? 'Salvar' : 'Criar Contato'}</Button>
           </form>
         </DialogContent>
@@ -369,6 +376,14 @@ export default function ContactsPage() {
         }}
         isLoading={cascadeLoading}
       />
+
+      {convContact && (
+        <StartConversationDialog
+          open={!!convContact}
+          onOpenChange={(o) => { if (!o) setConvContact(null); }}
+          preselectedContact={convContact}
+        />
+      )}
     </div>
   );
 }
