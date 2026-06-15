@@ -670,6 +670,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                 </div>
               )}
             </div>
+            </div>
           );
         })}
         <div ref={messagesEndRef} />
