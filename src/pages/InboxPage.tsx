@@ -112,6 +112,14 @@ export default function InboxPage() {
     try { localStorage.setItem('inbox:filter', filterMode); } catch {}
   }, [filterMode]);
 
+  const changeFilterMode = (next: 'all' | 'unread' | 'unanswered') => {
+    if (next === filterMode) return;
+    setConversations([]);
+    setLoadedCount(0);
+    setTotalCount(null);
+    setFilterMode(next);
+  };
+
   const baseQuery = () => {
     let query = supabase
       .from('conversations')
@@ -260,6 +268,8 @@ export default function InboxPage() {
   const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);
   const unansweredLoaded = conversations.reduce((n, c) => n + ((c as any).is_unanswered ? 1 : 0), 0);
   const filtered = conversations.filter(c => {
+    if (filterMode === 'unanswered' && (c as any).is_unanswered !== true) return false;
+    if (filterMode === 'unread' && c.unread_count <= 0) return false;
     if (!search) return true;
     const s = search.toLowerCase();
     const digitsOnly = s.replace(/\D/g, '');
@@ -296,13 +306,13 @@ export default function InboxPage() {
           </div>
           <div className="flex items-center gap-1.5 mt-2">
             <button
-              onClick={() => setFilterMode('all')}
+              onClick={() => changeFilterMode('all')}
               className={cn(
                 "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
                 filterMode === 'all' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
               )}>Todas</button>
             <button
-              onClick={() => setFilterMode('unread')}
+              onClick={() => changeFilterMode('unread')}
               className={cn(
                 "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border inline-flex items-center gap-1",
                 filterMode === 'unread' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
@@ -316,7 +326,7 @@ export default function InboxPage() {
               )}
             </button>
             <button
-              onClick={() => setFilterMode('unanswered')}
+              onClick={() => changeFilterMode('unanswered')}
               className={cn(
                 "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border inline-flex items-center gap-1",
                 filterMode === 'unanswered' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
