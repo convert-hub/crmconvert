@@ -831,7 +831,7 @@ export type Database = {
           contact_id: string | null
           created_at: string
           id: string
-          is_unanswered: boolean | null
+          is_unanswered: boolean
           last_agent_message_at: string | null
           last_customer_message_at: string | null
           last_message_at: string | null
@@ -850,7 +850,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string
           id?: string
-          is_unanswered?: boolean | null
+          is_unanswered?: boolean
           last_agent_message_at?: string | null
           last_customer_message_at?: string | null
           last_message_at?: string | null
@@ -869,7 +869,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string
           id?: string
-          is_unanswered?: boolean | null
+          is_unanswered?: boolean
           last_agent_message_at?: string | null
           last_customer_message_at?: string | null
           last_message_at?: string | null
@@ -2511,6 +2511,10 @@ export type Database = {
       complete_job: {
         Args: { _job_id: string; _result?: Json }
         Returns: undefined
+      }
+      conversation_needs_company_reply: {
+        Args: { _conversation_id: string }
+        Returns: boolean
       }
       enqueue_job: {
         Args: {
