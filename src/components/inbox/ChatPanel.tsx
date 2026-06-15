@@ -12,7 +12,19 @@ import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { conversationStatusLabels } from '@/lib/labels';
-import { format } from 'date-fns';
+import { format, isSameDay, isToday, isYesterday, differenceInCalendarDays } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+
+function formatDateSeparator(date: Date): string {
+  if (isToday(date)) return 'Hoje';
+  if (isYesterday(date)) return 'Ontem';
+  const diff = Math.abs(differenceInCalendarDays(new Date(), date));
+  if (diff < 7) {
+    const label = format(date, 'EEEE', { locale: ptBR });
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+  return format(date, "d 'de' MMMM 'de' yyyy", { locale: ptBR });
+}
 import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
@@ -587,7 +599,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         </div>
       )}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">
-        {messages.map(msg => {
+        {messages.map((msg, idx) => {
+          const msgDate = new Date(msg.created_at);
+          const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at) : null;
+          const showDateSeparator = !prevDate || !isSameDay(msgDate, prevDate);
           const pmeta = (msg as any).provider_metadata ?? {};
           const msgStatus = pmeta.status ?? pmeta.last_status;
           const isFailed = msgStatus === 'failed';
@@ -603,7 +618,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const msgIsInternal = (msg as any).is_internal === true;
           const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
           return (
-            <div key={msg.id} className={cn("flex flex-col", msg.direction === 'outbound' ? 'items-end' : 'items-start')}>
+            <div key={msg.id} className="contents">
+            {showDateSeparator && (
+              <div className="flex justify-center my-2">
+                <span className="bg-muted/70 text-muted-foreground text-[11px] px-3 py-1 rounded-full shadow-sm">
+                  {formatDateSeparator(msgDate)}
+                </span>
+              </div>
+            )}
+            <div className={cn("flex flex-col", msg.direction === 'outbound' ? 'items-end' : 'items-start')}>
               <div className={cn("max-w-[75%] rounded-2xl px-4 py-2.5 text-sm",
                 msgIsInternal
                   ? 'bg-warning/10 border border-warning/30 text-foreground'
@@ -646,6 +669,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                   )}
                 </div>
               )}
+            </div>
             </div>
           );
         })}
