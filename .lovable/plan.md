@@ -1,32 +1,35 @@
-## Filtro de "Não lidas" na Inbox
+## Filtro "Sem resposta" na Inbox
 
-Adicionar um toggle simples no topo da lista de conversas (`src/pages/InboxPage.tsx`) para mostrar apenas conversas com `unread_count > 0`.
+Adicionar terceiro chip ao filtro da lista de conversas (`src/pages/InboxPage.tsx`), usando `status = 'waiting_agent'` — sinal canônico que os webhooks já mantêm: marcado quando o cliente envia mensagem, limpo para `open` quando o atendente responde.
 
 ### UX
 
-Logo abaixo do campo de busca, dois chips minimalistas lado a lado:
+Chip extra na mesma linha dos atuais:
 
 ```
-[ Todas ]  [ Não lidas (12) ]
+[ Todas ]  [ Não lidas (12) ]  [ Sem resposta (8) ]
 ```
 
-- O contador em "Não lidas" mostra o total de conversas com `unread_count > 0` carregadas.
-- Estado ativo destacado (mesmo padrão visual dos badges já existentes).
-- Persistir escolha em `localStorage` (`inbox:filter`) para a Patrícia não ter que reativar a cada visita.
+- Mesma persistência em `localStorage` (`inbox:filter`).
+- Mutuamente exclusivos (mesmo `filterMode`).
+- Contador = conversas com `status='waiting_agent'` dentro das carregadas.
 
 ### Comportamento
 
-- **Filtro client-side por padrão**: aplicado sobre `conversations` já carregadas (mesma lista paginada de 300), combinando com busca textual quando houver.
-- **Quando "Não lidas" está ativo + busca vazia**: a query base ganha `.gt('unread_count', 0)` no Supabase, para que a paginação ("Carregar mais") traga apenas não lidas e o contador `totalCount` reflita o total real de não lidas no tenant — evita o caso "tenho 50 não lidas mas só vejo 8 nas 300 carregadas".
-- **Quando "Não lidas" + busca ativa**: mantém busca server-side por contato e aplica `unread_count > 0` no filtro de conversas.
-- **Realtime**: ao receber update de `conversations`, recarrega respeitando o filtro atual (já existe esse fluxo, só precisa repassar o flag).
-- **Abrir conversa**: ao zerar `unread_count` (linha 223), se filtro "Não lidas" estiver ativo a conversa **permanece visível** enquanto selecionada, mas some da lista ao trocar de seleção (evita "pular" item embaixo do cursor da usuária).
+- `filterMode` passa a aceitar `'all' | 'unread' | 'unanswered'`.
+- `baseQuery()` e a query de busca por contato aplicam `.eq('status', 'waiting_agent')` quando `'unanswered'`.
+- **Ordenação muda no modo "Sem resposta"**: por `last_customer_message_at asc` (quem está esperando há mais tempo aparece primeiro). Nos demais modos mantém `last_message_at desc` (atividade mais recente no topo).
+- "Carregar mais" e contador total respeitam o filtro.
 
-### Arquivos
+### Diferença vs. "Não lidas"
 
-- `src/pages/InboxPage.tsx` — único arquivo alterado. Novo estado `filterMode: 'all' | 'unread'`, ajuste em `baseQuery()`/`loadConversations`, no `useMemo` de `filtered`, e UI dos chips.
+- **Não lidas**: `unread_count > 0` — atendente ainda não abriu.
+- **Sem resposta**: `status = 'waiting_agent'` — pode ter aberto (zerou unread) mas ainda não respondeu.
+
+### Arquivo
+
+- `src/pages/InboxPage.tsx` — única alteração: expandir `filterMode`, ajustar `baseQuery()`/busca, alternar ordenação, adicionar chip.
 
 ### Fora de escopo
 
-- Filtros adicionais (por status, por responsável, por tag) — pode virar próximo passo se a Patrícia pedir.
-- Notificação sonora / badge no menu lateral.
+- Badge/alerta de SLA estourado (ex: vermelho se >1h sem resposta).
