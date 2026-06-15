@@ -321,6 +321,16 @@ export default function InboxPage() {
             </div>
           ))}
           {filtered.length === 0 && <p className="text-center text-sm text-muted-foreground py-8">Nenhuma conversa</p>}
+          {!searching && totalCount !== null && loadedCount < totalCount && (
+            <div className="p-3 text-center">
+              <Button size="sm" variant="ghost" className="text-xs h-7" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? 'Carregando…' : `Carregar mais (${loadedCount}/${totalCount})`}
+              </Button>
+            </div>
+          )}
+          {!searching && totalCount !== null && loadedCount >= totalCount && totalCount > PAGE_SIZE && (
+            <p className="text-center text-[10px] text-muted-foreground py-2">{totalCount} conversas</p>
+          )}
         </div>
       </div>
 
