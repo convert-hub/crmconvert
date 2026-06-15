@@ -315,6 +315,20 @@ export default function InboxPage() {
                 )}>{unreadLoaded}</span>
               )}
             </button>
+            <button
+              onClick={() => setFilterMode('unanswered')}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border inline-flex items-center gap-1",
+                filterMode === 'unanswered' ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+              )}>
+              Sem resposta
+              {unansweredLoaded > 0 && (
+                <span className={cn(
+                  "px-1.5 rounded-full text-[10px] font-bold",
+                  filterMode === 'unanswered' ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'
+                )}>{unansweredLoaded}</span>
+              )}
+            </button>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin">
