@@ -235,6 +235,7 @@ export default function CampaignsPage() {
                 <div className="space-y-1.5">
                   <Label className="text-xs">Throttle (msgs/min)</Label>
                   <Input type="number" min={1} max={200} value={throttle} onChange={e => setThrottle(Number(e.target.value))} className="h-9 text-sm" />
+                  <p className="text-[10px] text-muted-foreground">Distribuído uniformemente. Ex.: 60 = 1 msg/seg.</p>
                 </div>
               </div>
               <div className="space-y-1.5">
