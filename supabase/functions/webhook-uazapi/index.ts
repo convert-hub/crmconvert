@@ -486,7 +486,21 @@ async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {
       await supabase.from('messages')
         .update({ provider_metadata: metadata })
         .eq('id', msg.id);
-      
+
+      // Mirror status onto campaign_recipients (delivered/read/failed) for outbound campaign sends
+      const lower = String(statusType || '').toLowerCase();
+      const nowIso = new Date().toISOString();
+      const rcpUpdate: Record<string, any> = {};
+      if (lower === 'delivered') { rcpUpdate.status = 'delivered'; rcpUpdate.delivered_at = nowIso; }
+      else if (lower === 'read' || lower === 'played') { rcpUpdate.status = 'read'; rcpUpdate.read_at = nowIso; }
+      else if (lower === 'failed' || lower === 'error') { rcpUpdate.status = 'failed'; rcpUpdate.error = 'uazapi_failed'; }
+      if (Object.keys(rcpUpdate).length > 0) {
+        await supabase.from('campaign_recipients')
+          .update(rcpUpdate)
+          .eq('tenant_id', tenantId)
+          .eq('provider_message_id', msgId);
+      }
+
       console.log(`webhook-uazapi: updated message ${msg.id} status to ${statusType}`);
 
       // Re-enqueue AI processing for audio messages when FileDownloaded arrives
