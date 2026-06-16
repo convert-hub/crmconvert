@@ -193,6 +193,23 @@ serve(async (req) => {
     let failed = 0;
 
     for (const rcp of (pending ?? [])) {
+      // Re-check campaign status before each send so a click on "Pausar" / "Cancelar"
+      // stops the loop within seconds instead of waiting for the full throttle batch.
+      const { data: liveStatus } = await supabase
+        .from("campaigns")
+        .select("status")
+        .eq("id", campaignId)
+        .maybeSingle();
+      if (liveStatus && ["paused", "cancelled", "completed"].includes(liveStatus.status)) {
+        // Release this recipient (still 'sending' from the atomic claim) back to 'pending'
+        // so the next run picks it up. The reaper would do this in 10min — we do it now.
+        await supabase.from("campaign_recipients")
+          .update({ status: "pending" })
+          .eq("id", rcp.id)
+          .eq("status", "sending");
+        break;
+      }
+
       const contact = (rcp as any).contact;
       if (!contact?.phone || contact.do_not_contact) {
         await supabase.from("campaign_recipients").update({
@@ -268,42 +285,86 @@ serve(async (req) => {
         variables_used: resolved,
       }).eq("id", rcp.id);
 
-      const components: any[] = [];
-      if (placeholders.length > 0) {
-        components.push({
-          type: "body",
-          parameters: placeholders.map(p => ({ type: "text", text: resolved[p] ?? "" })),
-        });
-      }
-
       try {
-        const { data: sendRes, error: sendErr } = await supabase.functions.invoke("wa-meta-send", {
-          body: {
-            action: "send",
-            conversation_id: conversation?.id,
-            whatsapp_instance_id: instance.id,
-            type: "template",
-            template: {
-              name: template.name,
-              language: template.language,
-              components,
-            },
-          },
-        });
+        let sendOk = false;
+        let providerMessageId: string | null = null;
+        let messageRowId: string | null = null;
+        let errMsg: string | null = null;
 
-        if (sendErr || !sendRes?.ok) {
-          const errMsg = sendErr?.message ?? sendRes?.error ?? "unknown_error";
+        if (instance.provider === "meta_cloud") {
+          const components: any[] = [];
+          if (placeholders.length > 0) {
+            components.push({
+              type: "body",
+              parameters: placeholders.map(p => ({ type: "text", text: resolved[p] ?? "" })),
+            });
+          }
+          const { data: sendRes, error: sendErr } = await supabase.functions.invoke("wa-meta-send", {
+            body: {
+              action: "send",
+              conversation_id: conversation?.id,
+              whatsapp_instance_id: instance.id,
+              type: "template",
+              template: {
+                name: template.name,
+                language: template.language,
+                components,
+              },
+            },
+          });
+          if (sendErr || !sendRes?.ok) {
+            errMsg = sendErr?.message ?? sendRes?.error ?? "unknown_error";
+          } else {
+            sendOk = true;
+            providerMessageId = sendRes?.provider_message_id ?? null;
+            messageRowId = sendRes?.message_id ?? null;
+          }
+        } else {
+          // UAZAPI: render the template body locally and send as plain text.
+          const bodyText = (bodyComp?.text as string) ?? "";
+          const rendered = bodyText.replace(/\{\{(\d+)\}\}/g, (_m, n) => resolved[n] ?? "");
+          const { data: sendRes, error: sendErr } = await supabase.functions.invoke("uazapi-proxy", {
+            body: {
+              action: "send_message",
+              tenant_id: campaign.tenant_id,
+              phone: contact.phone,
+              message: rendered,
+              conversation_id: conversation?.id,
+            },
+          });
+          if (sendErr || sendRes?.ok === false || sendRes?.error) {
+            errMsg = sendRes?.error ?? sendErr?.message ?? "unknown_error";
+          } else {
+            sendOk = true;
+            providerMessageId = sendRes?.provider_message_id ?? null;
+            // Persist outbound message so it appears in the conversation thread
+            // (webhook-uazapi skips wasSentByApi callbacks).
+            if (conversation?.id) {
+              const { data: persisted } = await supabase.from("messages").insert({
+                tenant_id: campaign.tenant_id,
+                conversation_id: conversation.id,
+                direction: "outbound",
+                content: rendered,
+                provider_message_id: providerMessageId,
+                provider_metadata: { source: "campaign", campaign_id: campaignId },
+              }).select("id").single();
+              messageRowId = persisted?.id ?? null;
+            }
+          }
+        }
+
+        if (!sendOk) {
           await supabase.from("campaign_recipients").update({
             status: "failed",
-            error: String(errMsg).slice(0, 500),
+            error: String(errMsg ?? "unknown_error").slice(0, 500),
           }).eq("id", rcp.id);
           failed++;
         } else {
           await supabase.from("campaign_recipients").update({
             status: "sent",
             sent_at: new Date().toISOString(),
-            provider_message_id: sendRes?.provider_message_id ?? null,
-            message_id: sendRes?.message_id ?? null,
+            provider_message_id: providerMessageId,
+            message_id: messageRowId,
           }).eq("id", rcp.id);
           sent++;
         }
@@ -318,23 +379,8 @@ serve(async (req) => {
       processed++;
     }
 
-    // Update aggregate counters on the campaign
-    const { data: counts } = await supabase
-      .from("campaign_recipients")
-      .select("status")
-      .eq("campaign_id", campaignId);
-    const tally = (counts ?? []).reduce((acc: any, r: any) => {
-      acc[r.status] = (acc[r.status] ?? 0) + 1;
-      return acc;
-    }, {});
-
-    await supabase.from("campaigns").update({
-      sent_count: (tally.sent ?? 0) + (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
-      delivered_count: (tally.delivered ?? 0) + (tally.read ?? 0) + (tally.replied ?? 0),
-      read_count: (tally.read ?? 0) + (tally.replied ?? 0),
-      replied_count: tally.replied ?? 0,
-      failed_count: tally.failed ?? 0,
-    }).eq("id", campaignId);
+    // Counters are maintained by tg_campaign_recipients_counters trigger — do NOT
+    // recompute/overwrite here (would race with webhook delivered/read updates).
 
     // Auto-complete if no pending/sending left
     const { count: stillPending } = await supabase
