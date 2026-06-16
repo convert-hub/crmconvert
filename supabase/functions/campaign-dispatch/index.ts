@@ -403,6 +403,26 @@ serve(async (req) => {
       }
 
       processed++;
+
+      // Throttle: distribute sends uniformly across the minute.
+      // Sleep the remainder of intervalMs, but in small slices so a pause/cancel
+      // mid-sleep aborts within ~500ms instead of waiting the full interval.
+      const remaining = intervalMs - (Date.now() - sendStart);
+      if (remaining > 0) {
+        const SLICE = 500;
+        let slept = 0;
+        while (slept < remaining) {
+          await sleep(Math.min(SLICE, remaining - slept));
+          slept += SLICE;
+          const { data: midStatus } = await supabase
+            .from("campaigns").select("status").eq("id", campaignId).maybeSingle();
+          if (midStatus && ["paused", "cancelled", "completed"].includes(midStatus.status)) {
+            aborted = true;
+            break;
+          }
+        }
+        if (aborted) break;
+      }
     }
 
     // Counters are maintained by tg_campaign_recipients_counters trigger — do NOT
