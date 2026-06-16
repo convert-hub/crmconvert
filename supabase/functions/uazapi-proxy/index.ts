@@ -42,24 +42,37 @@ serve(async (req) => {
     const body = await req.json();
     const { action, tenant_id, instance_name } = body;
 
-    const { data: membership } = await supabaseAdmin.from('tenant_memberships')
-      .select('id, role, tenant_id')
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .limit(1)
-      .single();
-
     // Check if caller is SaaS admin (allowed to act on any tenant)
     const { data: saasAdmin } = await supabaseAdmin.from('saas_admins')
       .select('user_id').eq('user_id', userId).maybeSingle();
     const isSaasAdmin = !!saasAdmin;
 
-    const effectiveTenantId = tenant_id || membership?.tenant_id;
+    // Resolve effective tenant: prefer the one the caller explicitly asked for.
+    // Fallback to ANY active membership only when no tenant_id is provided.
+    let effectiveTenantId: string | undefined = tenant_id;
+    if (!effectiveTenantId) {
+      const { data: anyMembership } = await supabaseAdmin.from('tenant_memberships')
+        .select('tenant_id')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+      effectiveTenantId = anyMembership?.tenant_id;
+    }
     if (!effectiveTenantId) {
       return jsonResponse({ error: 'No tenant found' }, 400);
     }
-    // Forbid cross-tenant access unless caller is SaaS admin
-    if (!isSaasAdmin && effectiveTenantId !== membership?.tenant_id) {
+
+    // Validate membership against the EFFECTIVE tenant (not "any" membership).
+    // Users can belong to multiple tenants, so we must scope the lookup.
+    const { data: membership } = await supabaseAdmin.from('tenant_memberships')
+      .select('id, role, tenant_id')
+      .eq('user_id', userId)
+      .eq('tenant_id', effectiveTenantId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (!isSaasAdmin && !membership) {
       return jsonResponse({ error: 'Forbidden' }, 403);
     }
 

@@ -611,9 +611,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             : null;
           const failedCode = failedErr?.code;
           const isOutsideWindow = failedCode === 131047;
+          const providerLabel = providerInfo?.provider === 'meta_cloud' ? 'WhatsApp Oficial' : 'WhatsApp';
           const failedMsg = isOutsideWindow
             ? 'Cliente fora da janela de 24h. Envie um template para reativar a conversa.'
-            : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || 'Falha no envio pela Meta.');
+            : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || pmeta.error_message || `Falha no envio via ${providerLabel}.`);
           const isMedia = hasMedia(msg);
           const msgIsInternal = (msg as any).is_internal === true;
           const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
