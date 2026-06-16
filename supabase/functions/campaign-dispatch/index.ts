@@ -150,6 +150,11 @@ serve(async (req) => {
   }
 
   const throttle = Math.max(1, Math.min(campaign.throttle_per_minute ?? 60, 200));
+  const intervalMs = Math.max(50, Math.round(60_000 / throttle));
+  // Reserve ~55s per tick so we finish before the next cron call (cron runs every minute).
+  const TICK_BUDGET_MS = 55_000;
+  const perTickLimit = Math.max(1, Math.min(throttle, Math.floor(TICK_BUDGET_MS / intervalMs) || 1));
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
   // Concurrency safety: multiple invocations (cron + manual click) are expected.
   // Protected by a row-level lease on campaigns.tick_lock_until + atomic claim
