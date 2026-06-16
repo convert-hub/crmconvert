@@ -150,6 +150,11 @@ serve(async (req) => {
   }
 
   const throttle = Math.max(1, Math.min(campaign.throttle_per_minute ?? 60, 200));
+  const intervalMs = Math.max(50, Math.round(60_000 / throttle));
+  // Reserve ~55s per tick so we finish before the next cron call (cron runs every minute).
+  const TICK_BUDGET_MS = 55_000;
+  const perTickLimit = Math.max(1, Math.min(throttle, Math.floor(TICK_BUDGET_MS / intervalMs) || 1));
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
   // Concurrency safety: multiple invocations (cron + manual click) are expected.
   // Protected by a row-level lease on campaigns.tick_lock_until + atomic claim
@@ -167,7 +172,7 @@ serve(async (req) => {
     // Atomic claim — guarantees no two invocations grab the same recipient.
     const { data: claimed } = await supabase.rpc('claim_campaign_recipients', {
       _campaign_id: campaignId,
-      _limit: throttle,
+      _limit: perTickLimit,
     });
 
     const claimedIds = (claimed ?? []).map((r: any) => r.id);
@@ -202,7 +207,18 @@ serve(async (req) => {
     let sent = 0;
     let failed = 0;
 
+    const loopStart = Date.now();
+    let aborted = false;
     for (const rcp of (pending ?? [])) {
+      // Respect tick budget so the next cron run can pick up the remainder.
+      if (Date.now() - loopStart > TICK_BUDGET_MS) {
+        await supabase.from("campaign_recipients")
+          .update({ status: "pending" })
+          .eq("id", rcp.id)
+          .eq("status", "sending");
+        break;
+      }
+      const sendStart = Date.now();
       // Re-check campaign status before each send so a click on "Pausar" / "Cancelar"
       // stops the loop within seconds instead of waiting for the full throttle batch.
       const { data: liveStatus } = await supabase
@@ -387,6 +403,26 @@ serve(async (req) => {
       }
 
       processed++;
+
+      // Throttle: distribute sends uniformly across the minute.
+      // Sleep the remainder of intervalMs, but in small slices so a pause/cancel
+      // mid-sleep aborts within ~500ms instead of waiting the full interval.
+      const remaining = intervalMs - (Date.now() - sendStart);
+      if (remaining > 0) {
+        const SLICE = 500;
+        let slept = 0;
+        while (slept < remaining) {
+          await sleep(Math.min(SLICE, remaining - slept));
+          slept += SLICE;
+          const { data: midStatus } = await supabase
+            .from("campaigns").select("status").eq("id", campaignId).maybeSingle();
+          if (midStatus && ["paused", "cancelled", "completed"].includes(midStatus.status)) {
+            aborted = true;
+            break;
+          }
+        }
+        if (aborted) break;
+      }
     }
 
     // Counters are maintained by tg_campaign_recipients_counters trigger — do NOT
