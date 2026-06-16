@@ -126,9 +126,13 @@ serve(async (req) => {
 
   const instance = (campaign as any).whatsapp_instance;
   const template = (campaign as any).template;
-  if (!instance || instance.provider !== "meta_cloud") {
+  if (!instance) {
     await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
-    return jsonOk({ ok: false, error: "instance must be meta_cloud" }, 400);
+    return jsonOk({ ok: false, error: "instance_missing" }, 400);
+  }
+  if (!["meta_cloud", "uazapi"].includes(instance.provider)) {
+    await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
+    return jsonOk({ ok: false, error: `unsupported_provider:${instance.provider}` }, 400);
   }
   if (!template) {
     await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
