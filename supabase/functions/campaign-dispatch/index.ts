@@ -207,7 +207,18 @@ serve(async (req) => {
     let sent = 0;
     let failed = 0;
 
+    const loopStart = Date.now();
+    let aborted = false;
     for (const rcp of (pending ?? [])) {
+      // Respect tick budget so the next cron run can pick up the remainder.
+      if (Date.now() - loopStart > TICK_BUDGET_MS) {
+        await supabase.from("campaign_recipients")
+          .update({ status: "pending" })
+          .eq("id", rcp.id)
+          .eq("status", "sending");
+        break;
+      }
+      const sendStart = Date.now();
       // Re-check campaign status before each send so a click on "Pausar" / "Cancelar"
       // stops the loop within seconds instead of waiting for the full throttle batch.
       const { data: liveStatus } = await supabase
