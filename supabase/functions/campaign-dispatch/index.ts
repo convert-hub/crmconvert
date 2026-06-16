@@ -172,7 +172,7 @@ serve(async (req) => {
     // Atomic claim — guarantees no two invocations grab the same recipient.
     const { data: claimed } = await supabase.rpc('claim_campaign_recipients', {
       _campaign_id: campaignId,
-      _limit: throttle,
+      _limit: perTickLimit,
     });
 
     const claimedIds = (claimed ?? []).map((r: any) => r.id);
