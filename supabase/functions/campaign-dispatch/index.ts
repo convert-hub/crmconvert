@@ -62,20 +62,30 @@ serve(async (req) => {
 
   if (!campaignId) return jsonOk({ ok: false, error: "campaign_id required" }, 400);
 
-  // Auth: allow service role (cron/internal) or admin/manager of campaign tenant
+  // Auth: three accepted callers
+  //   1) service role token (internal/admin invocations)
+  //   2) pg_cron via anon token (only allowed for non-destructive actions: 'tick', 'start')
+  //   3) authenticated user that is admin/manager of the campaign's tenant
   const authHeader = req.headers.get("Authorization") || "";
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
 
+  const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
   let isServiceRole = token === SERVICE_ROLE;
+  let isCronAnon = !isServiceRole && token === ANON_KEY;
   let callerUserId: string | null = null;
-  if (!isServiceRole) {
-    const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
+  if (!isServiceRole && !isCronAnon) {
+    const userClient = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
     const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
+    if (claimsErr || !claimsData?.claims?.sub) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
     callerUserId = claimsData.claims.sub;
+  }
+
+  // Cron caller may only kick the dispatcher; never pause/cancel.
+  if (isCronAnon && !["tick", "start"].includes(action)) {
+    return jsonOk({ ok: false, error: "Forbidden" }, 403);
   }
 
   const { data: campaign, error: campErr } = await supabase
@@ -86,8 +96,8 @@ serve(async (req) => {
 
   if (campErr || !campaign) return jsonOk({ ok: false, error: "campaign_not_found" }, 404);
 
-  // Tenant authorization: non-service callers must be admin/manager of the campaign's tenant
-  if (!isServiceRole) {
+  // Tenant authorization: end-user callers must be admin/manager of the campaign's tenant
+  if (!isServiceRole && !isCronAnon) {
     const { data: membership } = await supabase
       .from("tenant_memberships")
       .select("role")
