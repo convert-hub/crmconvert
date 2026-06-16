@@ -1,49 +1,107 @@
-Diagnóstico forense
+# Diagnóstico forense
 
-- A regra atual do filtro ainda depende da coluna `conversations.is_unanswered`, calculada por timestamps:
-  - `last_customer_message_at IS NOT NULL`
-  - e `last_agent_message_at IS NULL OR last_customer_message_at > last_agent_message_at`
-- Isso corrigiu parte dos dados, mas ainda é frágil porque não olha a mensagem real mais recente da conversa.
-- No banco, as conversas dos prints `35450 - Thiago` e `35447 - Raissa` já aparecem hoje como `is_unanswered = false`, com última mensagem `outbound`, então elas não deveriam mais entrar no filtro se a lista estiver recarregada.
-- O problema restante é que a tela ainda consulta exatamente `is_unanswered=eq.true`; se algum timestamp ficar errado, se a aba estiver com estado antigo, ou se um webhook registrar um template com direção errada, a conversa volta a aparecer indevidamente.
-- Também encontrei um caso real no filtro em que a última mensagem é `TemplateMessage` com `direction = inbound`. Pela definição desejada, template não deve ser usado para classificar “Sem resposta” como cliente aguardando atendimento; precisamos excluir templates dessa regra.
+**Mensagem afetada:** `b678739e-67e6-4589-8d54-d49484dbedbc` (conversa `9a9bdf01...`, contato Regiane, tenant Instituto Bignoto, instância UAZAPI ativa `tenant_fdeec040` conectada em `converthub.uazapi.com`).
 
-Sobre o erro “In order to...”
+**O que a UI mostra:** "Falha no envio pela Meta."
 
-- Não é erro SQL nem erro do sistema.
-- É uma resposta da Meta/WhatsApp Cloud API, código `131049`:
-  - `In order to maintain a healthy ecosystem engagement, the message failed to be delivered.`
-- Em português: a Meta bloqueou a entrega para preservar a qualidade/engajamento do ecossistema.
-- Na prática, o WhatsApp aceitou a tentativa inicialmente, mas depois marcou a mensagem como `failed`. Isso pode acontecer por qualidade/engajamento baixo, políticas anti-spam, limite de envio, baixa probabilidade de interação ou proteção do usuário.
-- Essa mensagem não significa que o CRM classificou errado por si só; ela é só o motivo de falha de entrega retornado pela Meta e exibido no balão vermelho.
+**O que está salvo em `provider_metadata`:**
+```json
+{ "status": "failed", "error_message": "Edge Function returned a non-2xx status code" }
+```
 
-Plano de correção
+Essa string é o `error.message` genérico do `supabase.functions.invoke` — significa que `uazapi-proxy` respondeu com status HTTP 4xx/5xx, e o SDK não expôs o corpo JSON, então o roteador caiu no fallback `error?.message`.
 
-1. Substituir a fonte da verdade do filtro
-   - Criar uma função no banco que responda: “esta conversa precisa de resposta da empresa?”
-   - A função vai olhar a última mensagem real da tabela `messages`, não apenas timestamps agregados.
-   - Ela só retorna verdadeiro quando a última mensagem relevante for do cliente.
+## Por que o uazapi-proxy retorna 4xx para a Clara
 
-2. Excluir templates da regra “Sem resposta”
-   - Mensagens com `media_type = TemplateMessage` não devem fazer a conversa entrar em “Sem resposta”.
-   - Templates enviados pela empresa ficam como `waiting_customer`, mas fora do filtro.
-   - Templates recebidos/registrados por webhook também não entram sozinhos no filtro.
+A usuária Clara (`mktbignoto@gmail.com`, user `482aa42d-...`) tem **duas memberships ativas**:
 
-3. Atualizar `conversations.is_unanswered`
-   - Trocar a coluna gerada por uma coluna normal sincronizada por trigger.
-   - A trigger em `messages` recalcula `is_unanswered` após cada mensagem nova.
-   - A regra passa a ser baseada na última mensagem relevante, não em `last_customer_message_at > last_agent_message_at`.
+- `24f0883f-0580-4bc0-92f1-9990cb8f089d` (outro tenant)
+- `fdeec040-7dba-4fa5-b786-0b5a19ce5b07` (Instituto Bignoto)
 
-4. Fazer backfill dos dados atuais
-   - Recalcular `is_unanswered` para todas as conversas existentes.
-   - Remover imediatamente do filtro conversas cuja última mensagem seja template/outbound/falha de entrega da empresa.
+Em `supabase/functions/uazapi-proxy/index.ts` (linhas 45–63) a checagem de autorização faz:
 
-5. Ajustar a tela do Inbox
-   - Manter o filtro usando `is_unanswered = true`, mas agora com a coluna corrigida.
-   - Ajustar o contador para refletir a lista recarregada.
-   - Opcionalmente forçar reload ao trocar para “Sem resposta” para evitar estado antigo na aba.
+```ts
+const { data: membership } = await supabaseAdmin.from('tenant_memberships')
+  .select('id, role, tenant_id')
+  .eq('user_id', userId)
+  .eq('is_active', true)
+  .limit(1)
+  .single();                           // pega UMA membership "qualquer"
 
-6. Verificar com casos reais
-   - Confirmar que `35450 - Thiago` e `35447 - Raissa` não aparecem mais no filtro.
-   - Confirmar que conversas onde o cliente mandou a última mensagem normal continuam aparecendo.
-   - Confirmar que templates falhados da Meta continuam visíveis no chat, mas não contam como “Sem resposta”.
+const effectiveTenantId = tenant_id || membership?.tenant_id;
+if (!isSaasAdmin && effectiveTenantId !== membership?.tenant_id) {
+  return jsonResponse({ error: 'Forbidden' }, 403);
+}
+```
+
+Sem `order by`, o Postgres devolve as duas linhas em ordem indeterminada. Quando a primeira linha é a do outro tenant, `membership.tenant_id` vira `24f0883f...`, `effectiveTenantId` é Bignoto (vindo do body) e a comparação falha — a função devolve **403 Forbidden** para uma usuária que de fato é admin do tenant alvo.
+
+Isso explica por que o erro só acontece em conversas "Novo Lead": são conversas criadas com `whatsapp_instance_id = NULL` (confirmado nessa conversa), então o `whatsappRouter` cai no caminho UAZAPI e chama exatamente esse endpoint. Conversas que já têm instância vinculada também usariam UAZAPI, mas o gatilho prático foi a Clara abrir um lead novo.
+
+## Por que aparece "pela Meta"
+
+`src/components/inbox/ChatPanel.tsx` linha 616:
+
+```ts
+: (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || 'Falha no envio pela Meta.');
+```
+
+O texto é **hardcoded** para todo `direction='outbound'` com `provider_metadata.status='failed'`, sem checar `providerInfo.provider`. Em tenants UAZAPI o rótulo fica enganoso.
+
+# Correção
+
+## 1. Backend — `supabase/functions/uazapi-proxy/index.ts`
+
+Trocar a busca de membership "qualquer" pela busca da membership do **tenant alvo**:
+
+```ts
+const effectiveTenantId = tenant_id || /* fallback */ (
+  await supabaseAdmin.from('tenant_memberships')
+    .select('tenant_id').eq('user_id', userId).eq('is_active', true)
+    .limit(1).maybeSingle()
+).data?.tenant_id;
+
+if (!effectiveTenantId) return jsonResponse({ error: 'No tenant found' }, 400);
+
+const { data: membership } = await supabaseAdmin.from('tenant_memberships')
+  .select('id, role, tenant_id')
+  .eq('user_id', userId)
+  .eq('tenant_id', effectiveTenantId)   // <-- chave da correção
+  .eq('is_active', true)
+  .maybeSingle();
+
+if (!isSaasAdmin && !membership) {
+  return jsonResponse({ error: 'Forbidden' }, 403);
+}
+```
+
+Assim qualquer usuário multi-tenant é validado contra o tenant que ele está realmente operando.
+
+## 2. Mesma auditoria nas demais edge functions
+
+Rodar o mesmo padrão de correção em `wa-meta-send`, `webhook-uazapi` (parte autenticada), `ai-generate`, `invite-member`, `campaign-dispatch` e qualquer outra que use `.from('tenant_memberships').eq('user_id', userId).limit(1).single()`. Vou listar e corrigir só as que tiverem o anti-padrão.
+
+## 3. Frontend — rótulo do balão de falha
+
+`src/components/inbox/ChatPanel.tsx` (linha 616): trocar o texto fixo "Falha no envio pela Meta." por algo neutro e contextual:
+
+```ts
+const providerLabel = providerInfo?.provider === 'meta_cloud' ? 'WhatsApp Oficial' : 'WhatsApp';
+const failedMsg = isOutsideWindow
+  ? 'Cliente fora da janela de 24h. Envie um template para reativar a conversa.'
+  : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title
+     || (msg as any)?.provider_metadata?.error_message
+     || `Falha no envio via ${providerLabel}.`);
+```
+
+Bônus: agora o `error_message` salvo em `provider_metadata` (ex.: "Forbidden", "Nenhuma instância WhatsApp ativa") aparece no balão, em vez de ficar invisível.
+
+## 4. Limpeza da mensagem travada
+
+Não vou apagar a mensagem `b678739e...` do banco — ela continua marcada como falha. Após o deploy, a Clara pode reenviar normalmente. Se preferir, posso marcar essa única linha como excluída/oculta.
+
+# Fora de escopo
+
+- Não vou mexer no `whatsappRouter` nem na lógica de seleção de provider — está correta.
+- Não vou alterar a tabela `whatsapp_instances` nem a instância UAZAPI já conectada.
+- Sem migração SQL: a correção é puramente de código (edge function + componente React).
