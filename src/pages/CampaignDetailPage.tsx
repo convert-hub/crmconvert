@@ -251,6 +251,20 @@ export default function CampaignDetailPage() {
         <Progress value={progressPct} className="h-2" />
       </div>
 
+      <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground border-t border-border pt-2.5">
+        <span className="text-foreground/70 font-medium">Distribuição:</span>
+        <span>Pendentes <strong className="text-foreground">{distribution.pending ?? 0}</strong></span>
+        <span>·</span>
+        <span>Em envio <strong className="text-foreground">{distribution.sending ?? 0}</strong></span>
+        <span>·</span>
+        <span>Puladas <strong className="text-foreground">{distribution.skipped ?? 0}</strong></span>
+        <span>·</span>
+        <span>Falhas <strong className="text-foreground">{distribution.failed ?? 0}</strong></span>
+        <span>·</span>
+        <span>Total <strong className="text-foreground">{totalRec}</strong></span>
+        <span className="ml-auto text-muted-foreground/70" title="Lida ⊂ Entregue ⊂ Enviada. Os contadores acima são cumulativos.">ⓘ contadores cumulativos</span>
+
+
       <div className="flex items-center gap-2 flex-wrap">
         <Input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
           placeholder="Buscar por nome ou telefone..." className="h-8 text-xs max-w-xs" />
