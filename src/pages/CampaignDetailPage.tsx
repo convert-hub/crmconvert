@@ -263,6 +263,9 @@ export default function CampaignDetailPage() {
         <span>·</span>
         <span>Total <strong className="text-foreground">{totalRec}</strong></span>
         <span className="ml-auto text-muted-foreground/70" title="Lida ⊂ Entregue ⊂ Enviada. Os contadores acima são cumulativos.">ⓘ contadores cumulativos</span>
+      </div>
+
+
 
 
       <div className="flex items-center gap-2 flex-wrap">
