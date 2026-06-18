@@ -14,7 +14,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Send, Play, Pause, Trash2, Users, FileCheck2, Loader2 } from 'lucide-react';
+import { Plus, Send, Play, Pause, Trash2, Users, FileCheck2, Loader2, Download } from 'lucide-react';
+import { exportCampaignCsv } from '@/lib/exportCampaign';
+
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import type { Campaign, CampaignAudienceFilter } from '@/types/crm';
