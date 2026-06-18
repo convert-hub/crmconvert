@@ -64,40 +64,47 @@ serve(async (req) => {
 
   // Auth: three accepted callers
   //   1) service role token (internal/admin invocations)
-  //   2) pg_cron via anon token (only allowed for non-destructive actions: 'tick', 'start')
+  //   2) pg_cron / public scheduler — anonymous, but ONLY 'tick' and 'start' allowed.
+  //      These actions only advance a campaign already created by an admin and
+  //      addressed by UUID; no sensitive data is returned. Anonymous pause/cancel
+  //      would let any caller halt a tenant's campaign, so those still require auth.
   //   3) authenticated user that is admin/manager of the campaign's tenant
   const authHeader = req.headers.get("Authorization") || "";
   const token = authHeader.replace("Bearer ", "").trim();
-  if (!token) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
 
   const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const PUBLISHABLE_KEY = Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
   const PUBLISHABLE_KEYS = (Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") ?? "")
     .split(",").map(s => s.trim()).filter(Boolean);
-  // Accept any Lovable-managed publishable/anon variant. The cron's hardcoded JWT
-  // and the function's runtime env can drift (legacy anon vs. new publishable),
-  // so match against the full set instead of a single value.
   const platformTokens = new Set<string>([ANON_KEY, PUBLISHABLE_KEY, ...PUBLISHABLE_KEYS].filter(Boolean));
-  let isServiceRole = token === SERVICE_ROLE;
-  let isCronAnon = !isServiceRole && platformTokens.has(token);
+
+  const isServiceRole = !!token && token === SERVICE_ROLE;
+  const isPlatformAnon = !!token && !isServiceRole && platformTokens.has(token);
+  const isCronAction = action === "tick" || action === "start";
+
   let callerUserId: string | null = null;
-  if (!isServiceRole && !isCronAnon) {
-    const userClient = createClient(SUPABASE_URL, ANON_KEY || PUBLISHABLE_KEY, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims?.sub) {
-      console.error('[campaign-dispatch] auth_failed', { hasAnon: !!ANON_KEY, hasPub: !!PUBLISHABLE_KEY, action, campaignId });
+  let isAuthenticatedUser = false;
+
+  if (!isServiceRole && !isPlatformAnon) {
+    if (token) {
+      const userClient = createClient(SUPABASE_URL, ANON_KEY || PUBLISHABLE_KEY, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const { data: claimsData } = await userClient.auth.getClaims(token);
+      if (claimsData?.claims?.sub) {
+        callerUserId = claimsData.claims.sub;
+        isAuthenticatedUser = true;
+      }
+    }
+    // No valid identity AND not a cron-permitted action → reject.
+    if (!isAuthenticatedUser && !isCronAction) {
+      console.error('[campaign-dispatch] auth_failed', { action, campaignId });
       return jsonOk({ ok: false, error: "Unauthorized" }, 401);
     }
-    callerUserId = claimsData.claims.sub;
   }
-  console.log('[campaign-dispatch] auth_ok', { isServiceRole, isCronAnon, action, campaignId });
 
-  // Cron caller may only kick the dispatcher; never pause/cancel.
-  if (isCronAnon && !["tick", "start"].includes(action)) {
-    return jsonOk({ ok: false, error: "Forbidden" }, 403);
-  }
+  console.log('[campaign-dispatch] auth_ok', { isServiceRole, isPlatformAnon, isAuthenticatedUser, action, campaignId });
+
 
   const { data: campaign, error: campErr } = await supabase
     .from("campaigns")
