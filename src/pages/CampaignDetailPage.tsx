@@ -8,9 +8,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
-import { ArrowLeft, RefreshCw, Loader2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Loader2, Download } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { exportCampaignCsv } from '@/lib/exportCampaign';
+
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   draft: { label: 'Rascunho', color: 'bg-muted text-muted-foreground' },
@@ -51,6 +53,8 @@ export default function CampaignDetailPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [distribution, setDistribution] = useState<Record<string, number>>({});
+
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchDebounced, setSearchDebounced] = useState('');
 
@@ -112,6 +116,23 @@ export default function CampaignDetailPage() {
 
   useEffect(() => { loadRecipients(); }, [id, tenant?.id, page, statusFilter.join(','), searchDebounced]);
 
+  // Real distribution by status (independent of pagination/filters)
+  const loadDistribution = async () => {
+    if (!id || !tenant) return;
+    const statuses = ['pending', 'sending', 'skipped', 'sent', 'delivered', 'read', 'replied', 'failed'];
+    const next: Record<string, number> = {};
+    await Promise.all(statuses.map(async (s) => {
+      const { count } = await supabase.from('campaign_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenant.id).eq('campaign_id', id).eq('status', s);
+      next[s] = count ?? 0;
+    }));
+    setDistribution(next);
+  };
+  useEffect(() => { loadDistribution(); }, [id, tenant?.id, campaign?.updated_at]);
+
+
+
   // Realtime: campaign updates + recipient deltas
   useCampaignRealtime({
     tenantId: tenant?.id ?? null,
@@ -144,10 +165,22 @@ export default function CampaignDetailPage() {
     } finally { setBusy(false); }
   };
 
+  const exportCsv = async () => {
+    if (!campaign || !tenant) return;
+    setBusy(true);
+    try {
+      await exportCampaignCsv({ id: campaign.id, name: campaign.name, tenant_id: tenant.id });
+      toast.success('Planilha exportada');
+    } catch (e: any) {
+      toast.error(e.message ?? 'Falha ao exportar');
+    } finally { setBusy(false); }
+  };
+
   const status = campaign ? (STATUS_LABELS[campaign.status] ?? STATUS_LABELS.draft) : null;
   const totalRec = campaign?.total_recipients ?? 0;
   const pending = Math.max(0, totalRec - (campaign?.sent_count ?? 0) - (campaign?.failed_count ?? 0));
   const progressPct = totalRec > 0 ? Math.min(100, Math.round(((campaign?.sent_count ?? 0) / totalRec) * 100)) : 0;
+
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const toggleStatus = (s: string) => {
@@ -185,12 +218,18 @@ export default function CampaignDetailPage() {
             {' · '}{campaign.throttle_per_minute}/min
           </p>
         </div>
-        {canRecompute && (
-          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={recompute} disabled={busy}>
-            {busy ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1.5" />}
-            Recalcular contadores
+        <div className="flex items-center gap-1.5">
+          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportCsv} disabled={busy}>
+            <Download className="h-3 w-3 mr-1.5" />Exportar
           </Button>
-        )}
+          {canRecompute && (
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={recompute} disabled={busy}>
+              {busy ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1.5" />}
+              Recalcular
+            </Button>
+          )}
+        </div>
+
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
@@ -211,6 +250,23 @@ export default function CampaignDetailPage() {
         </div>
         <Progress value={progressPct} className="h-2" />
       </div>
+
+      <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground border-t border-border pt-2.5">
+        <span className="text-foreground/70 font-medium">Distribuição:</span>
+        <span>Pendentes <strong className="text-foreground">{distribution.pending ?? 0}</strong></span>
+        <span>·</span>
+        <span>Em envio <strong className="text-foreground">{distribution.sending ?? 0}</strong></span>
+        <span>·</span>
+        <span>Puladas <strong className="text-foreground">{distribution.skipped ?? 0}</strong></span>
+        <span>·</span>
+        <span>Falhas <strong className="text-foreground">{distribution.failed ?? 0}</strong></span>
+        <span>·</span>
+        <span>Total <strong className="text-foreground">{totalRec}</strong></span>
+        <span className="ml-auto text-muted-foreground/70" title="Lida ⊂ Entregue ⊂ Enviada. Os contadores acima são cumulativos.">ⓘ contadores cumulativos</span>
+      </div>
+
+
+
 
       <div className="flex items-center gap-2 flex-wrap">
         <Input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
