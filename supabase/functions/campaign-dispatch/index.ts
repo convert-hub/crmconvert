@@ -156,14 +156,19 @@ serve(async (req) => {
   const perTickLimit = Math.max(1, Math.min(throttle, Math.floor(TICK_BUDGET_MS / intervalMs) || 1));
   const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+  // The actual dispatch work: lease + claim + send loop. Wrapped so 'start' can
+  // run it in the background (releases the HTTP response immediately so the UI
+  // doesn't sit blocked for ~55s — otherwise the "Pausar" click cannot fire).
+  const runDispatch = async () => {
   // Concurrency safety: multiple invocations (cron + manual click) are expected.
   // Protected by a row-level lease on campaigns.tick_lock_until + atomic claim
   // via claim_campaign_recipients (FOR UPDATE SKIP LOCKED). The lease auto-expires
   // in 90s so an edge-function timeout cannot permanently block the campaign.
   const { data: gotLease } = await supabase.rpc('acquire_campaign_tick_lease', { _campaign_id: campaignId });
   if (!gotLease) {
-    return jsonOk({ ok: true, skipped: 'locked', processed: 0 });
+    return { ok: true, skipped: 'locked', processed: 0 };
   }
+
 
   try {
     // Only the lease holder reaps stuck 'sending' rows (>10min) back to 'pending'.
