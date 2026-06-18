@@ -199,12 +199,18 @@ export default function CampaignDetailPage() {
             {' · '}{campaign.throttle_per_minute}/min
           </p>
         </div>
-        {canRecompute && (
-          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={recompute} disabled={busy}>
-            {busy ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1.5" />}
-            Recalcular contadores
+        <div className="flex items-center gap-1.5">
+          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportCsv} disabled={busy}>
+            <Download className="h-3 w-3 mr-1.5" />Exportar
           </Button>
-        )}
+          {canRecompute && (
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={recompute} disabled={busy}>
+              {busy ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1.5" />}
+              Recalcular
+            </Button>
+          )}
+        </div>
+
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
