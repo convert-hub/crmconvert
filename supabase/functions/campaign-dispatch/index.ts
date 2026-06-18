@@ -210,6 +210,7 @@ serve(async (req) => {
     });
 
     const claimedIds = (claimed ?? []).map((r: any) => r.id);
+    console.log('[campaign-dispatch] claim', { campaignId, perTickLimit, claimed: claimedIds.length });
 
     if (claimedIds.length === 0) {
       const { count } = await supabase
@@ -217,7 +218,15 @@ serve(async (req) => {
         .select("id", { count: "exact", head: true })
         .eq("campaign_id", campaignId)
         .in("status", ["pending", "sending"]);
+      console.log('[campaign-dispatch] no_claim', { campaignId, remaining: count ?? 0 });
       if ((count ?? 0) === 0) {
+        await supabase.from("campaigns").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+        }).eq("id", campaignId);
+      }
+      return { ok: true, processed: 0 };
+    }
         await supabase.from("campaigns").update({
           status: "completed",
           completed_at: new Date().toISOString(),
