@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Upload, FileText, AlertTriangle, Download } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -60,6 +61,7 @@ const CONTACT_FIELDS = [
   { value: 'state', label: 'Estado' },
   { value: 'source', label: 'Origem' },
   { value: 'notes', label: 'Notas' },
+  { value: 'pipeline_stage', label: 'Etapa do Pipeline' },
 ];
 
 const normKey = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').trim();
@@ -76,6 +78,7 @@ function guessMapping(header: string, customDefs: CustomFieldDef[] = []): string
   if (/^estado|state|uf/i.test(h)) return 'state';
   if (/^origem|source/i.test(h)) return 'source';
   if (/^nota|note|obs/i.test(h)) return 'notes';
+  if (/^etapa|stage|pipeline|funil|fase/i.test(h)) return 'pipeline_stage';
   // Custom fields: try matching by label or key
   const nh = normKey(header);
   for (const fd of customDefs) {
@@ -140,15 +143,46 @@ function parseCSV(text: string): { headers: string[]; rows: CsvRow[] } {
 
 interface ImportError { row: number; reason: string; data: Record<string, string> }
 
+interface OppConflict {
+  opportunityId: string;
+  contactName: string;
+  currentStageId: string;
+  currentStageName: string;
+  targetStageId: string;
+  targetStageName: string;
+  selected: boolean;
+}
+
+interface ImportResult {
+  created: number;
+  updated: number;
+  errors: ImportError[];
+  oppsCreated: number;
+  oppsIgnored: number;
+  oppsConflicts: number;
+  oppsUpdated: number;
+  stageErrors: number;
+}
+
+type Pipeline = { id: string; name: string };
+type Stage = { id: string; name: string };
+
 export default function ImportContactsDialog({ open, onOpenChange, tenantId, onImported }: ImportContactsDialogProps) {
-  const [step, setStep] = useState<'upload' | 'mapping' | 'importing'>('upload');
+  const [step, setStep] = useState<'upload' | 'mapping' | 'importing' | 'conflicts'>('upload');
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [importResult, setImportResult] = useState<{ created: number; updated: number; errors: ImportError[] } | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState(0);
   const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [selectedPipeline, setSelectedPipeline] = useState<string>('');
+  const [conflicts, setConflicts] = useState<OppConflict[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const hasPipelineStageMapping = Object.values(mapping).includes('pipeline_stage');
+  const selectedPipelineName = pipelines.find(p => p.id === selectedPipeline)?.name || '';
 
   useEffect(() => {
     if (!open || !tenantId) return;
@@ -158,7 +192,17 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         setCustomDefs(Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : []);
       }
     });
+    supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position').then(({ data }) => {
+      setPipelines((data as Pipeline[]) || []);
+    });
   }, [open, tenantId]);
+
+  useEffect(() => {
+    if (!selectedPipeline) { setStages([]); return; }
+    supabase.from('stages').select('id,name').eq('pipeline_id', selectedPipeline).order('position').then(({ data }) => {
+      setStages((data as Stage[]) || []);
+    });
+  }, [selectedPipeline]);
 
   const fieldLabel = (value: string): string => {
     if (value.startsWith('custom:')) {
@@ -217,14 +261,23 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const handleImport = async () => {
     const nameCol = Object.entries(mapping).find(([, v]) => v === 'name')?.[0];
     if (!nameCol) { toast.error('Mapeie pelo menos a coluna "Nome"'); return; }
+    const stageCol = Object.entries(mapping).find(([, v]) => v === 'pipeline_stage')?.[0];
+    if (stageCol && !selectedPipeline) { toast.error('Selecione o pipeline'); return; }
 
     setStep('importing');
     setProgress(0);
     let created = 0, updated = 0;
+    let oppsCreated = 0, oppsIgnored = 0, oppsUpdated = 0, stageErrors = 0;
     const errors: ImportError[] = [];
     const seenByPhone = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
     const seenByEmail = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
     const allTagsUsed = new Set<string>();
+    // contact_id -> latest known opportunity in selected pipeline (DB or just-created this run)
+    const createdOrSeenOpps = new Map<string, { opportunityId: string; stageId: string }>();
+    const conflictsAcc: OppConflict[] = [];
+    const conflictByOppId = new Map<string, OppConflict>();
+
+    const stagesByNormName = new Map(stages.map(s => [normKey(s.name), s]));
 
     const mergeTags = (a: string[] = [], b: string[] = []) => {
       const out: string[] = [];
@@ -246,6 +299,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         const c: any = { tenant_id: tenantId };
         let rawPhone = '';
         let rawBirth = '';
+        let rawStage = '';
         let birthInvalid = false;
         const customFields: Record<string, unknown> = {};
         let customError: string | null = null;
@@ -268,6 +322,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             if (parsed) c.birth_date = parsed;
             else birthInvalid = true;
           }
+          else if (field === 'pipeline_stage') { rawStage = val; }
           else c[field] = val;
         }
 
@@ -301,6 +356,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [], custom_fields: (data[0].custom_fields as Record<string, unknown>) || {} };
         }
 
+        let contactId: string;
         if (existing) {
           const mergedTags = mergeTags(existing.tags, c.tags || []);
           const mergedCustom = hasCustom ? { ...existing.custom_fields, ...customFields } : existing.custom_fields;
@@ -314,6 +370,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           existing.custom_fields = mergedCustom;
           if (c.phone) seenByPhone.set(c.phone, existing);
           if (c.email) seenByEmail.set(c.email, existing);
+          contactId = existing.id;
         } else {
           if (hasCustom) c.custom_fields = customFields;
           const { data: ins, error } = await supabase.from('contacts').insert(c).select('id').single();
@@ -322,12 +379,103 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           const entry = { id: ins!.id, tags: c.tags || [], custom_fields: customFields };
           if (c.phone) seenByPhone.set(c.phone, entry);
           if (c.email) seenByEmail.set(c.email, entry);
+          contactId = ins!.id;
+        }
+
+        // Opportunity handling
+        if (stageCol && rawStage) {
+          const matchedStage = stagesByNormName.get(normKey(rawStage));
+          if (!matchedStage) {
+            errors.push({
+              row: i + 2,
+              reason: `Etapa "${rawStage}" não corresponde a nenhuma etapa do pipeline "${selectedPipelineName}"`,
+              data: row,
+            });
+            stageErrors++;
+          } else {
+            // Check in-memory cache first
+            let cached = createdOrSeenOpps.get(contactId);
+            if (!cached) {
+              const { data: existingOpp } = await supabase
+                .from('opportunities')
+                .select('id, stage_id')
+                .eq('tenant_id', tenantId)
+                .eq('contact_id', contactId)
+                .eq('pipeline_id', selectedPipeline)
+                .eq('status', 'open')
+                .limit(1);
+              if (existingOpp && existingOpp.length > 0) {
+                cached = { opportunityId: existingOpp[0].id, stageId: existingOpp[0].stage_id };
+                createdOrSeenOpps.set(contactId, cached);
+              }
+            }
+
+            if (!cached) {
+              const { data: insOpp, error: oppErr } = await supabase
+                .from('opportunities')
+                .insert({
+                  tenant_id: tenantId,
+                  contact_id: contactId,
+                  pipeline_id: selectedPipeline,
+                  stage_id: matchedStage.id,
+                  title: c.name,
+                  value: 0,
+                  priority: 'medium',
+                  status: 'open',
+                })
+                .select('id')
+                .single();
+              if (oppErr) throw oppErr;
+              createdOrSeenOpps.set(contactId, { opportunityId: insOpp!.id, stageId: matchedStage.id });
+              oppsCreated++;
+            } else if (cached.stageId === matchedStage.id) {
+              oppsIgnored++;
+            } else {
+              // Conflict
+              const existingConflict = conflictByOppId.get(cached.opportunityId);
+              if (!existingConflict) {
+                const currentStageName = stages.find(s => s.id === cached!.stageId)?.name || '(desconhecida)';
+                const conflict: OppConflict = {
+                  opportunityId: cached.opportunityId,
+                  contactName: c.name,
+                  currentStageId: cached.stageId,
+                  currentStageName,
+                  targetStageId: matchedStage.id,
+                  targetStageName: matchedStage.name,
+                  selected: true,
+                };
+                conflictByOppId.set(cached.opportunityId, conflict);
+                conflictsAcc.push(conflict);
+              } else if (existingConflict.targetStageId === matchedStage.id) {
+                oppsIgnored++;
+              } else {
+                errors.push({
+                  row: i + 2,
+                  reason: `Conflito ambíguo: contato "${c.name}" aparece com etapas diferentes no CSV ("${existingConflict.targetStageName}" e "${matchedStage.name}")`,
+                  data: row,
+                });
+              }
+            }
+          }
         }
       } catch (e: any) {
         console.error('[ImportContacts] row failed', i + 2, e);
         errors.push({ row: i + 2, reason: e?.message || String(e), data: row });
       }
       setProgress(Math.round(((i + 1) / rows.length) * 100));
+    }
+
+    // Resolve current stage names for conflicts whose stage isn't in the loaded `stages` list
+    // (shouldn't happen since opp is in selectedPipeline, but defensive)
+    const missingStageIds = conflictsAcc.filter(c => c.currentStageName === '(desconhecida)').map(c => c.currentStageId);
+    if (missingStageIds.length > 0) {
+      const { data: extra } = await supabase.from('stages').select('id,name').in('id', missingStageIds).eq('pipeline_id', selectedPipeline);
+      const nameById = new Map((extra || []).map((s: any) => [s.id, s.name]));
+      conflictsAcc.forEach(c => {
+        if (c.currentStageName === '(desconhecida)' && nameById.has(c.currentStageId)) {
+          c.currentStageName = nameById.get(c.currentStageId)!;
+        }
+      });
     }
 
     // Auto-register new tags
@@ -352,11 +500,38 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       }
     }
 
-    setImportResult({ created, updated, errors });
+    const result: ImportResult = {
+      created, updated, errors,
+      oppsCreated, oppsIgnored,
+      oppsConflicts: conflictsAcc.length,
+      oppsUpdated, stageErrors,
+    };
+    setImportResult(result);
+    setConflicts(conflictsAcc);
+
     const msg = `${created} criados, ${updated} atualizados${errors.length ? `, ${errors.length} com erro` : ''}`;
     if (errors.length === 0) toast.success(`Importação concluída: ${msg}`);
     else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
+
+    if (conflictsAcc.length > 0) setStep('conflicts');
+  };
+
+  const applyConflicts = async () => {
+    const toApply = conflicts.filter(c => c.selected);
+    let updatedCount = 0;
+    for (const cf of toApply) {
+      const { error } = await supabase
+        .from('opportunities')
+        .update({ stage_id: cf.targetStageId })
+        .eq('id', cf.opportunityId)
+        .eq('tenant_id', tenantId);
+      if (!error) updatedCount++;
+    }
+    setImportResult(r => r ? { ...r, oppsUpdated: r.oppsUpdated + updatedCount } : r);
+    if (updatedCount > 0) toast.success(`${updatedCount} oportunidade(s) atualizada(s)`);
+    onImported();
+    setStep('importing');
   };
 
   const downloadErrorsCsv = () => {
@@ -381,6 +556,9 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     setMapping({});
     setImportResult(null);
     setProgress(0);
+    setSelectedPipeline('');
+    setStages([]);
+    setConflicts([]);
   };
 
   const handleClose = (o: boolean) => {
@@ -442,6 +620,19 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
               ))}
             </div>
 
+            {hasPipelineStageMapping && (
+              <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <span className="text-sm font-medium">Pipeline</span>
+                <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
+                  <SelectTrigger className="h-8 text-[13px] flex-1"><SelectValue placeholder="Selecione…" /></SelectTrigger>
+                  <SelectContent>
+                    {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground">{stages.length} etapas</span>
+              </div>
+            )}
+
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground mb-2">Preview (primeiras 3 linhas):</p>
               <Table>
@@ -466,7 +657,47 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
 
             <div className="flex gap-2">
               <Button variant="outline" onClick={reset}>Voltar</Button>
-              <Button onClick={handleImport} className="flex-1">Importar {rows.length} contatos</Button>
+              <Button
+                onClick={handleImport}
+                className="flex-1"
+                disabled={hasPipelineStageMapping && !selectedPipeline}
+              >
+                Importar {rows.length} contatos
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'conflicts' && importResult && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-sm">
+              <AlertTriangle className="h-4 w-4 text-warning" />
+              <span>{conflicts.length} oportunidade(s) já existem em etapa diferente. Selecione as que devem ser atualizadas:</span>
+            </div>
+            <div className="flex items-center gap-2 px-1">
+              <Checkbox
+                checked={conflicts.every(c => c.selected)}
+                onCheckedChange={(v) => setConflicts(cs => cs.map(c => ({ ...c, selected: !!v })))}
+              />
+              <span className="text-xs text-muted-foreground">Selecionar todos</span>
+            </div>
+            <div className="max-h-72 overflow-y-auto space-y-1 rounded-lg border border-border">
+              {conflicts.map((c, idx) => (
+                <div key={c.opportunityId} className="flex items-center gap-3 px-3 py-2 border-b border-border last:border-0 text-[13px]">
+                  <Checkbox
+                    checked={c.selected}
+                    onCheckedChange={(v) => setConflicts(cs => cs.map((x, i) => i === idx ? { ...x, selected: !!v } : x))}
+                  />
+                  <span className="font-medium flex-1 truncate">{c.contactName}</span>
+                  <span className="text-muted-foreground truncate">{c.currentStageName} → <span className="text-foreground">{c.targetStageName}</span></span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setStep('importing')}>Pular</Button>
+              <Button onClick={applyConflicts} className="flex-1" disabled={!conflicts.some(c => c.selected)}>
+                Atualizar selecionadas ({conflicts.filter(c => c.selected).length})
+              </Button>
             </div>
           </div>
         )}
@@ -479,6 +710,21 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                 <div className="flex justify-center gap-2 flex-wrap">
                   <Badge variant="outline" className="text-sm py-1 px-3">{importResult.created} criados</Badge>
                   <Badge variant="outline" className="text-sm py-1 px-3">{importResult.updated} atualizados</Badge>
+                  {importResult.oppsCreated > 0 && (
+                    <Badge variant="outline" className="text-sm py-1 px-3">{importResult.oppsCreated} oport. criadas</Badge>
+                  )}
+                  {importResult.oppsIgnored > 0 && (
+                    <Badge variant="outline" className="text-sm py-1 px-3">{importResult.oppsIgnored} oport. iguais</Badge>
+                  )}
+                  {importResult.oppsConflicts > 0 && (
+                    <Badge variant="outline" className="text-sm py-1 px-3">{importResult.oppsConflicts} conflitos</Badge>
+                  )}
+                  {importResult.oppsUpdated > 0 && (
+                    <Badge variant="outline" className="text-sm py-1 px-3">{importResult.oppsUpdated} oport. atualizadas</Badge>
+                  )}
+                  {importResult.stageErrors > 0 && (
+                    <Badge variant="destructive" className="text-sm py-1 px-3">{importResult.stageErrors} etapas inválidas</Badge>
+                  )}
                   {importResult.errors.length > 0 && (
                     <Badge variant="destructive" className="text-sm py-1 px-3">{importResult.errors.length} erros</Badge>
                   )}
