@@ -330,6 +330,30 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
 
   console.log(`webhook-uazapi: saved ${fromMe ? 'outbound' : 'inbound'} message for conversation ${conversation.id}`);
 
+  // Mark most-recent campaign send as 'replied' when contact answers (best-effort).
+  if (!fromMe) {
+    try {
+      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: rcp } = await supabase.from('campaign_recipients')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('contact_id', contact.id)
+        .in('status', ['sent', 'delivered', 'read'])
+        .gte('sent_at', cutoff)
+        .order('sent_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (rcp?.id) {
+        await supabase.from('campaign_recipients')
+          .update({ status: 'replied', replied_at: new Date().toISOString() })
+          .eq('id', rcp.id);
+        console.log(`webhook-uazapi: campaign_recipient ${rcp.id} marked as replied`);
+      }
+    } catch (e) {
+      console.error('webhook-uazapi: replied tracking failed:', e);
+    }
+  }
+
   // Reset inactivity and bring open opportunities to top on message activity
   try {
     await supabase.from('opportunities')
