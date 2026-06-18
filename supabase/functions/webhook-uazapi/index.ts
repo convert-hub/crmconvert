@@ -74,9 +74,18 @@ serve(async (req) => {
       case 'status_update':
         await handleStatusUpdate(supabase, tenantId, body);
         break;
-      case 'connection':
+      case 'connection': {
         await handleConnectionEvent(supabase, tenantId, body);
+        const evStatus = body.instance?.status || body.type || body.Type;
+        if (evStatus === 'connected' && instanceId) {
+          fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/uazapi-history-sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}` },
+            body: JSON.stringify({ tenant_id: tenantId, instance_id: instanceId }),
+          }).catch(() => {});
+        }
         break;
+      }
       default:
         console.log('webhook-uazapi: unhandled event type, EventType:', body.EventType, 'body keys:', Object.keys(body));
     }
