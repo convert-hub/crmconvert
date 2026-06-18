@@ -145,18 +145,22 @@ serve(async (req) => {
   await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
 
 
+  let effectiveStatus: string = campaign.status;
   if (action === "start") {
-    if (!["draft", "scheduled", "paused"].includes(campaign.status)) {
+    if (!["draft", "scheduled", "paused", "running"].includes(campaign.status)) {
       return jsonOk({ ok: false, error: `cannot_start_from_${campaign.status}` }, 400);
     }
     await supabase.from("campaigns").update({
       status: "running",
       started_at: campaign.started_at ?? new Date().toISOString(),
     }).eq("id", campaignId);
+    effectiveStatus = "running";
+    console.log('[campaign-dispatch] start_transition', { campaignId, from: campaign.status, to: 'running' });
   }
 
-  if (campaign.status === "paused" || campaign.status === "cancelled" || campaign.status === "completed") {
-    return jsonOk({ ok: true, status: campaign.status, processed: 0 });
+  if (effectiveStatus === "paused" || effectiveStatus === "cancelled" || effectiveStatus === "completed") {
+    console.log('[campaign-dispatch] short_circuit', { campaignId, effectiveStatus });
+    return jsonOk({ ok: true, status: effectiveStatus, processed: 0 });
   }
 
   const instance = (campaign as any).whatsapp_instance;
