@@ -227,13 +227,6 @@ serve(async (req) => {
       }
       return { ok: true, processed: 0 };
     }
-        await supabase.from("campaigns").update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-        }).eq("id", campaignId);
-      }
-      return { ok: true, processed: 0 };
-    }
 
     // Hydrate contact data preserving FIFO order.
     const { data: pending } = await supabase
