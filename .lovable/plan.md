@@ -1,38 +1,53 @@
-## Esclarecimento sobre o throttle
+# Importação de contatos com criação de oportunidades
 
-Hoje `throttle_per_minute` é apenas o **limite máximo de mensagens por tick** (e o cron roda 1 tick/minuto). Então com 60 configurado, o sistema dispara **até 60 mensagens em rajada** no início do minuto, sem espaçamento real entre elas, e fica os ~55 segundos restantes parado. Isso explica:
-- Sensação de que o throttle não funciona (chega tudo junto).
-- Pausa parece demorar (entre claim e fim do for, todas já saíram).
-- Risco de ban por burst no WhatsApp.
+Toda a mudança fica contida em `src/components/contacts/ImportContactsDialog.tsx`. Reaproveita parsing de CSV, dedupe, `normKey`, relatório de erros e CSV de falhas existentes. Quem não mapear `pipeline_stage` segue com o fluxo atual inalterado.
 
-## Correção — espaçar de fato
+## 1. Novo campo de mapeamento
+- Em `CONTACT_FIELDS`, adicionar `{ value: 'pipeline_stage', label: 'Etapa do Pipeline' }`.
+- Em `guessMapping`, adicionar regex `/^etapa|stage|pipeline|funil|fase/i` → `'pipeline_stage'`.
 
-Tornar `throttle_per_minute` literal: **N mensagens por minuto = 1 mensagem a cada `60/N` segundos**.
+## 2. Seleção do pipeline na tela de mapeamento
+- Novos estados: `pipelines`, `stages`, `selectedPipeline`.
+- Ao entrar em `step === 'mapping'`: `supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position')`.
+- Se algum mapeamento for `pipeline_stage`, renderizar `<Select>` obrigatório de Pipeline acima do botão de importar.
+- Ao escolher pipeline: `supabase.from('stages').select('id,name').eq('pipeline_id', selectedPipeline).order('position')`.
+- Bloquear "Importar" enquanto faltar pipeline selecionado.
 
-### Mudança única em `supabase/functions/campaign-dispatch/index.ts`
+## 3. Match da etapa por linha
+- `stagesByNormName = new Map(stages.map(s => [normKey(s.name), s]))`.
+- No loop, capturar `rawStage` da coluna mapeada e resolver `matchedStage = stagesByNormName.get(normKey(rawStage))`.
 
-No loop `for (const rcp of pending)` (linha ~205):
+## 4. Etapa não encontrada = erro só na oportunidade
+- Contato é criado/atualizado normalmente.
+- Se `rawStage` não-vazio e sem match: push em `errors` com `Etapa "<rawStage>" não corresponde a nenhuma etapa do pipeline "<nome do pipeline>"` e incrementa `stageErrors`.
+- `rawStage` vazio → sem oportunidade, sem erro.
 
-1. Calcular `intervalMs = Math.round(60000 / throttle)` antes do loop.
-2. Registrar `loopStart = Date.now()` antes do loop e `sendStart = Date.now()` no início de cada iteração.
-3. **Após cada envio** (sucesso ou falha), antes do `processed++`, dormir o restante: `await sleep(Math.max(0, intervalMs - (Date.now() - sendStart)))`.
-4. **Antes de cada sleep**, fazer um re-check leve de `campaigns.status` (já existe no topo da iteração); se vier pause/cancel durante o sleep, abortar imediatamente.
-5. **Teto de duração do tick**: se `Date.now() - loopStart > 55_000`, sair do loop e devolver recipients restantes ainda não processados (não há — só os já reclamados/enviados ficam). O cron seguinte continua. Isso evita ultrapassar o limite de 60s entre cron ticks.
-6. Reduzir o `_limit` do `claim_campaign_recipients` para `Math.min(throttle, Math.floor(55000 / intervalMs) || 1)` — assim o tick só reclama o que cabe em ~55s, sem deixar recipients presos em `sending` esperando o próximo tick.
+## 5. Criar oportunidade + cache em memória da execução
+- Novo `Map<string, { opportunityId: string; stageId: string }> createdOrSeenOpps` indexado por `contact_id`, populado durante a execução.
+- Para cada linha com `matchedStage`:
+  1. Se `createdOrSeenOpps.has(contactId)` → usar essa entrada (não consulta o banco).
+  2. Caso contrário, `supabase.from('opportunities').select('id, stage_id').eq('tenant_id', tenantId).eq('contact_id', contactId).eq('pipeline_id', selectedPipeline).eq('status', 'open').limit(1)` e popular o cache com o resultado (se houver).
+  3. Se ainda não existir: `insert({ tenant_id, contact_id, pipeline_id: selectedPipeline, stage_id: matchedStage.id, title: c.name, value: 0, priority: 'medium', status: 'open' })`, popular `createdOrSeenOpps` com a oportunidade recém-criada e `oppsCreated++`.
 
-### Texto auxiliar na UI
+## 6. Já existente igual = ignorar
+- Entrada do cache existe e `entry.stageId === matchedStage.id` → `oppsIgnored++`. Aplica tanto a oportunidades que vieram do banco quanto às criadas em linhas anteriores do mesmo CSV.
 
-Em `src/pages/CampaignsPage.tsx` (linha 237), ajustar o helper text do input para deixar explícito: "mensagens por minuto (distribuídas uniformemente; ex.: 60 = 1/seg)".
+## 7. Já existente com etapa diferente = conflito
+- Entrada do cache com `stageId !== matchedStage.id`: empilhar em `conflicts: { opportunityId, contactName, currentStageId, currentStageName, targetStageId, targetStageName, selected }`.
+- Importante: como o cache reflete o estado mais recente (inclusive oportunidades recém-criadas), uma segunda linha com a mesma pessoa e etapa diferente vira conflito real (não duplicata).
+- Para evitar conflitos duplicados do mesmo `opportunityId`: manter `Set<opportunityId>` e só empilhar a primeira ocorrência (`targetStage` da primeira linha conflitante prevalece; demais com mesmo target viram `oppsIgnored`, demais com targets diferentes são reportadas em `errors` como conflito ambíguo dentro do CSV).
+- Nomes da etapa atual resolvidos em batch no fim: `supabase.from('stages').select('id,name').in('id', [...currentStageIds]).eq('pipeline_id', selectedPipeline)`.
+- Novo `step: 'conflicts'` após `'importing'` quando `conflicts.length > 0`: lista com checkbox por item (`Contato — Etapa atual → Etapa da planilha`), "Selecionar todos", botão "Atualizar selecionadas" (executa `update({ stage_id: targetStageId }).eq('id', opportunityId).eq('tenant_id', tenantId)` em série e incrementa `oppsUpdated`) e botão "Pular" (vai ao resumo sem alterar).
 
-## Por que essa abordagem
+## 8. Resumo final
+- `importResult` estendido: `oppsCreated`, `oppsIgnored`, `oppsConflicts` (inicial), `oppsUpdated` (pós-confirmação), `stageErrors`.
+- Tela de resultado mostra contadores separados: contatos criados, contatos atualizados, oportunidades criadas, oportunidades ignoradas, oportunidades em conflito, oportunidades atualizadas, erros de etapa.
+- Erros de etapa entram no mesmo `errors[]` e portanto no CSV via `downloadErrorsCsv`.
 
-- Não exige nova tabela, RPC ou schema — só lógica no edge.
-- Lease já existe (90s), mas fica folgado: tick de 55s + release antes do próximo cron.
-- Pausa responsiva preservada (re-check antes de enviar **e** antes do sleep).
-- Trigger de contadores e webhooks continuam funcionando exatamente como antes.
+## Isolamento por tenant
+- Todas as queries de `pipelines`, `opportunities` filtradas por `tenant_id`; `stages` por `pipeline_id` (pipeline já é do tenant).
 
 ## Fora de escopo
-
-- Não mexer em `wa-meta-send`, `uazapi-proxy`, `webhook-uazapi`.
-- Não alterar schema de `campaigns` (sem campos novos).
-- Sem mudança no cron schedule (continua 1/min).
+- Não alterar `normKey`, `parseCSV`, `guessMapping` para outros usos.
+- Sem novos arquivos, hooks ou utilitários globais.
+- Sem mudança no fluxo de quem não mapeia `pipeline_stage`.
