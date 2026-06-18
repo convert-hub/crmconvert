@@ -1,85 +1,43 @@
-## Escopo
+## Diagnóstico forense confirmado
 
-1. Aplicar A+B+C+D do diagnóstico anterior (pause limpo, reaper sempre, UI com distribuição completa, backfill de órfãos).
-2. Botão **Exportar** por campanha → planilha com 1 linha por destinatário.
-3. Reenvio gradual das mensagens que faltaram.
+O problema não é mais destinatário “sumido”. Os destinatários estão `pending` nas campanhas antigas e novas.
 
----
+A causa raiz encontrada nos dados/logs é dupla:
 
-## 1. Correções do bug de "destinatários perdidos"
+1. **O cron está chamando `campaign-dispatch` com token inválido/antigo**
+   - `cron.job` executa todo minuto e retorna “8 rows”, mas `net._http_response` mostra `401 Unauthorized` para todas as chamadas recentes.
+   - Por isso campanhas em `running` com pendentes não continuam automaticamente.
 
-### A. `supabase/functions/campaign-dispatch/index.ts`
-- No `action === 'pause'`, **antes** de devolver a resposta, executar `UPDATE campaign_recipients SET status='pending', updated_at=now() WHERE campaign_id=:id AND status='sending'` para soltar imediatamente quem estava claimado.
-- Mover `reap_stuck_sending` para **antes** do curto-circuito de `paused/cancelled/completed`, garantindo que órfãos sejam devolvidos mesmo em campanhas pausadas.
+2. **O botão “Continuar” muda para `running`, mas não processa imediatamente em algumas campanhas**
+   - Em `campaign-dispatch`, depois do `start`, o objeto `campaign` ainda contém status antigo `paused`.
+   - Logo em seguida existe um bloqueio que retorna se `campaign.status === 'paused'`, podendo impedir o processamento real no mesmo clique.
 
-### B. Backfill one-shot (via `supabase--insert`)
-```sql
-UPDATE public.campaign_recipients
-   SET status='pending', updated_at=now()
- WHERE status='sending';
-```
-Solta todos os órfãos agora; nenhum dano se algum estiver legitimamente em envio (próximo tick reclama de novo via `claim_campaign_recipients`).
+## Plano de correção
 
-### C. UI — `src/pages/CampaignDetailPage.tsx`
-Adicionar uma faixa densa de distribuição real abaixo dos contadores cumulativos:
+### 1. Corrigir `campaign-dispatch`
+- Após `action === 'start'`, usar um `effectiveStatus = 'running'` em vez do status antigo carregado antes do update.
+- Garantir que `start`/`continue` sempre tente processar destinatários `pending` imediatamente.
+- Adicionar logs objetivos no backend:
+  - campanha, ação, status original, status efetivo
+  - quantidade reivindicada (`claimed`)
+  - motivo quando não processar (`locked`, `no_pending`, `paused`, erro de envio)
 
-```
-Pendentes 40 · Em envio 0 · Puladas 0 · Total 58
-```
+### 2. Corrigir o cron da campanha
+- Criar migração para recriar o job de campanhas com um token válido do ambiente do banco, em vez do JWT anon hardcoded antigo.
+- Manter a frequência de 1 minuto.
+- Limitar apenas campanhas `scheduled` e `running`, como hoje.
 
-Tooltip discreto nos contadores cumulativos: "Inclui as etapas seguintes (entregue ⊂ enviada)". Sem labels redundantes.
+### 3. Backfill operacional seguro
+- Não mexer em entregues/lidas/respondidas.
+- Garantir apenas que destinatários presos em `sending` voltem para `pending`.
+- Manter campanhas com pendentes em `running` ou permitir que o botão “Continuar” as retome.
 
----
+### 4. Validação antes de dizer que está resolvido
+- Consultar `net._http_response` após a correção e confirmar que `campaign-dispatch` não retorna mais `401`.
+- Conferir uma campanha real com pendentes antes/depois e validar que o número de `pending` diminui e `sent/failed` aumenta.
+- Conferir logs da edge function com `claimed > 0`.
 
-## 2. Exportar planilha por campanha
-
-### Backend — nova função client-side (sem edge function)
-No `CampaignDetailPage.tsx` (e botão também na lista `CampaignsPage.tsx`), botão **Exportar** que:
-
-1. Busca via `supabase`:
-   ```ts
-   supabase.from('campaign_recipients')
-     .select('status, sent_at, delivered_at, read_at, replied_at, error, contact:contacts(name, phone, email)')
-     .eq('campaign_id', id)
-     .eq('tenant_id', tenantId)
-     .order('created_at')
-   ```
-   Paginação em chunks de 1000 para campanhas grandes (limite default do PostgREST).
-
-2. Gera CSV (UTF-8 com BOM para Excel abrir acentos corretamente). Colunas:
-
-   | Campanha | Nome | Telefone | Email | Status | Enviado em | Entregue em | Lido em | Respondido em | Erro |
-
-   Status traduzido em pt-BR via map: `pending→Pendente, sending→Em envio, sent→Enviada, delivered→Entregue, read→Lida, replied→Respondeu, failed→Falhou, skipped→Pulada`.
-
-3. Download via `Blob` + `URL.createObjectURL`. Nome do arquivo: `campanha-{slug-do-nome}-{YYYYMMDD}.csv`.
-
-CSV resolve para Excel/Sheets, não precisa de xlsx (mais leve, sem dependência nova). Se preferir `.xlsx` real, posso usar a lib `xlsx` (SheetJS) já comum — diga e eu troco.
-
----
-
-## 3. Reenvio gradual dos que faltaram
-
-**Não precisa código novo.** O fluxo já existe e o throttle já é gradual:
-
-- Após o backfill (item B), todos os órfãos `sending` voltam para `pending`.
-- Clicar **Iniciar** em cada campanha pausada → o dispatcher pega os `pending` respeitando `throttle_per_minute` (campo já configurável por campanha) e o cron faz ticks de 1 em 1 minuto.
-- Para reenviar de forma **mais lenta**, basta editar a campanha e reduzir o `throttle_per_minute` antes de iniciar (ex: 10/min em vez de 60/min).
-
-Vou adicionar ao modal de detalhes / lista um botão **Continuar envio** (alias visual de "Iniciar" quando `status='paused'` e existem `pending`), deixando claro que ele pega só o que faltou — sem reenviar quem já recebeu (a tabela `campaign_recipients` é idempotente por linha).
-
-### Bônus opcional — fora deste plano se não pedir
-Campo "limite por minuto" inline na barra de ação da campanha pausada, para o usuário ajustar a velocidade sem entrar em edição.
-
----
-
-## Ordem de execução
-1. Editar `campaign-dispatch/index.ts` (A) e fazer deploy.
-2. Rodar backfill (B).
-3. Editar `CampaignDetailPage.tsx` / `CampaignsPage.tsx` (C + botão Exportar + label "Continuar envio").
-4. Validar com a campanha "NV 17/06 14H" que aparece "Pendentes 40" e o export traz as 58 linhas.
-
-## Fora do escopo
-- Não vou criar edge function para o export (client-side basta; menos latência, sem custo de função).
-- Não vou tocar na trigger de contadores.
-- Reenvio gradual = throttle existente; nada novo no backend.
+## Arquivos/áreas afetadas
+- `supabase/functions/campaign-dispatch/index.ts`
+- Migração SQL para recriar o cron job de campanhas
+- Sem alteração visual desnecessária.
