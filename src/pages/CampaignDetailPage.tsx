@@ -146,10 +146,22 @@ export default function CampaignDetailPage() {
     } finally { setBusy(false); }
   };
 
+  const exportCsv = async () => {
+    if (!campaign || !tenant) return;
+    setBusy(true);
+    try {
+      await exportCampaignCsv({ id: campaign.id, name: campaign.name, tenant_id: tenant.id });
+      toast.success('Planilha exportada');
+    } catch (e: any) {
+      toast.error(e.message ?? 'Falha ao exportar');
+    } finally { setBusy(false); }
+  };
+
   const status = campaign ? (STATUS_LABELS[campaign.status] ?? STATUS_LABELS.draft) : null;
   const totalRec = campaign?.total_recipients ?? 0;
   const pending = Math.max(0, totalRec - (campaign?.sent_count ?? 0) - (campaign?.failed_count ?? 0));
   const progressPct = totalRec > 0 ? Math.min(100, Math.round(((campaign?.sent_count ?? 0) / totalRec) * 100)) : 0;
+
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const toggleStatus = (s: string) => {
