@@ -116,6 +116,23 @@ export default function CampaignDetailPage() {
 
   useEffect(() => { loadRecipients(); }, [id, tenant?.id, page, statusFilter.join(','), searchDebounced]);
 
+  // Real distribution by status (independent of pagination/filters)
+  const loadDistribution = async () => {
+    if (!id || !tenant) return;
+    const statuses = ['pending', 'sending', 'skipped', 'sent', 'delivered', 'read', 'replied', 'failed'];
+    const next: Record<string, number> = {};
+    await Promise.all(statuses.map(async (s) => {
+      const { count } = await supabase.from('campaign_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenant.id).eq('campaign_id', id).eq('status', s);
+      next[s] = count ?? 0;
+    }));
+    setDistribution(next);
+  };
+  useEffect(() => { loadDistribution(); }, [id, tenant?.id, campaign?.updated_at]);
+
+
+
   // Realtime: campaign updates + recipient deltas
   useCampaignRealtime({
     tenantId: tenant?.id ?? null,
