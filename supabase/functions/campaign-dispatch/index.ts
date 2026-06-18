@@ -194,7 +194,7 @@ serve(async (req) => {
           completed_at: new Date().toISOString(),
         }).eq("id", campaignId);
       }
-      return jsonOk({ ok: true, processed: 0 });
+      return { ok: true, processed: 0 };
     }
 
     // Hydrate contact data preserving FIFO order.
