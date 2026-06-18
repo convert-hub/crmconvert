@@ -339,6 +339,29 @@ async function handleInboundMessage(
   }
 
 
+  // Mark most-recent campaign send as 'replied' (best-effort, scoped por tenant).
+  try {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: rcp } = await supabase.from("campaign_recipients")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("contact_id", contact.id)
+      .in("status", ["sent", "delivered", "read"])
+      .gte("sent_at", cutoff)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (rcp?.id) {
+      await supabase.from("campaign_recipients")
+        .update({ status: "replied", replied_at: new Date().toISOString() })
+        .eq("id", rcp.id);
+      console.log("[webhook-meta] campaign_recipient marked replied", { id: rcp.id });
+    }
+  } catch (e) {
+    console.error("[webhook-meta] replied tracking failed", e);
+  }
+
+
   // 6) Update conversation timestamps
   const { error: convUpdErr } = await supabase
     .from("conversations")
