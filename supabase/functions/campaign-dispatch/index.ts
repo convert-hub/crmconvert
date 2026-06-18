@@ -113,12 +113,26 @@ serve(async (req) => {
 
   if (action === "pause") {
     await supabase.from("campaigns").update({ status: "paused" }).eq("id", campaignId);
+    // Release any 'sending' claims so they don't sit orphaned while the campaign is paused.
+    await supabase.from("campaign_recipients")
+      .update({ status: "pending", updated_at: new Date().toISOString() })
+      .eq("campaign_id", campaignId)
+      .eq("status", "sending");
     return jsonOk({ ok: true, status: "paused" });
   }
   if (action === "cancel") {
     await supabase.from("campaigns").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", campaignId);
+    await supabase.from("campaign_recipients")
+      .update({ status: "pending", updated_at: new Date().toISOString() })
+      .eq("campaign_id", campaignId)
+      .eq("status", "sending");
     return jsonOk({ ok: true, status: "cancelled" });
   }
+
+  // Always reap orphan 'sending' rows (>10min), even when the campaign is paused/completed —
+  // otherwise those rows stay stuck forever because the dispatch loop short-circuits below.
+  await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
+
 
   if (action === "start") {
     if (!["draft", "scheduled", "paused"].includes(campaign.status)) {
