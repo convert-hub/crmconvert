@@ -446,7 +446,7 @@ serve(async (req) => {
       }).eq("id", campaignId);
     }
 
-    return jsonOk({ ok: true, processed, sent, failed });
+    return { ok: true, processed, sent, failed };
   } finally {
     // Best-effort release. If it throws, the lease auto-expires in 90s.
     try {
@@ -455,4 +455,18 @@ serve(async (req) => {
       console.error('[campaign-dispatch] release_campaign_tick_lease failed', releaseErr);
     }
   }
+  };
+
+  if (action === "start") {
+    // Fire-and-forget so the HTTP response returns now and "Pausar" stays clickable.
+    // @ts-ignore EdgeRuntime is provided by the Deno deploy runtime
+    const waitUntil = (globalThis as any).EdgeRuntime?.waitUntil;
+    const p = runDispatch().catch((e) => console.error('[campaign-dispatch] background error', e));
+    if (typeof waitUntil === 'function') waitUntil(p);
+    return jsonOk({ ok: true, status: 'running' });
+  }
+
+  const result = await runDispatch();
+  return jsonOk(result);
 });
+
