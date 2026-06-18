@@ -53,6 +53,8 @@ export default function CampaignDetailPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [distribution, setDistribution] = useState<Record<string, number>>({});
+
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchDebounced, setSearchDebounced] = useState('');
 
