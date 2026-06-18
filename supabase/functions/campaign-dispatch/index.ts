@@ -115,7 +115,7 @@ serve(async (req) => {
   if (campErr || !campaign) return jsonOk({ ok: false, error: "campaign_not_found" }, 404);
 
   // Tenant authorization: end-user callers must be admin/manager of the campaign's tenant
-  if (!isServiceRole && !isCronAnon) {
+  if (isAuthenticatedUser) {
     const { data: membership } = await supabase
       .from("tenant_memberships")
       .select("role")
