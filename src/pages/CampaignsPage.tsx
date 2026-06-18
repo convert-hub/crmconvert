@@ -387,7 +387,7 @@ export default function CampaignsPage() {
                   <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {(c.status === 'draft' || c.status === 'scheduled' || c.status === 'paused') && (
                       <Button size="sm" variant="default" className="h-8 text-xs" disabled={busy === c.id} onClick={() => dispatch(c, 'start')}>
-                        {busy === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Play className="h-3 w-3 mr-1" />Iniciar</>}
+                        {busy === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Play className="h-3 w-3 mr-1" />{c.status === 'paused' ? 'Continuar' : 'Iniciar'}</>}
                       </Button>
                     )}
                     {c.status === 'running' && (
@@ -395,10 +395,21 @@ export default function CampaignsPage() {
                         <Pause className="h-3 w-3 mr-1" />Pausar
                       </Button>
                     )}
+                    <Button size="icon" variant="ghost" className="h-8 w-8" title="Exportar planilha"
+                      onClick={async () => {
+                        if (!tenant) return;
+                        try {
+                          await exportCampaignCsv({ id: c.id, name: c.name, tenant_id: tenant.id });
+                          toast.success('Planilha exportada');
+                        } catch (e: any) { toast.error(e.message ?? 'Falha ao exportar'); }
+                      }}>
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDelete(c.id)}>
                       <Trash2 className="h-3.5 w-3.5 text-destructive" />
                     </Button>
                   </div>
+
                 </div>
                 <p className="text-[10px] text-muted-foreground mt-2">Criada em {format(new Date(c.created_at), 'dd/MM/yyyy HH:mm')}</p>
               </CardContent>
