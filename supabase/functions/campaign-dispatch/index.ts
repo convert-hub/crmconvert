@@ -70,18 +70,29 @@ serve(async (req) => {
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
 
-  const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+  const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  const PUBLISHABLE_KEY = Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
+  const PUBLISHABLE_KEYS = (Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") ?? "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  // Accept any Lovable-managed publishable/anon variant. The cron's hardcoded JWT
+  // and the function's runtime env can drift (legacy anon vs. new publishable),
+  // so match against the full set instead of a single value.
+  const platformTokens = new Set<string>([ANON_KEY, PUBLISHABLE_KEY, ...PUBLISHABLE_KEYS].filter(Boolean));
   let isServiceRole = token === SERVICE_ROLE;
-  let isCronAnon = !isServiceRole && token === ANON_KEY;
+  let isCronAnon = !isServiceRole && platformTokens.has(token);
   let callerUserId: string | null = null;
   if (!isServiceRole && !isCronAnon) {
-    const userClient = createClient(SUPABASE_URL, ANON_KEY, {
+    const userClient = createClient(SUPABASE_URL, ANON_KEY || PUBLISHABLE_KEY, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
     const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims?.sub) return jsonOk({ ok: false, error: "Unauthorized" }, 401);
+    if (claimsErr || !claimsData?.claims?.sub) {
+      console.error('[campaign-dispatch] auth_failed', { hasAnon: !!ANON_KEY, hasPub: !!PUBLISHABLE_KEY, action, campaignId });
+      return jsonOk({ ok: false, error: "Unauthorized" }, 401);
+    }
     callerUserId = claimsData.claims.sub;
   }
+  console.log('[campaign-dispatch] auth_ok', { isServiceRole, isCronAnon, action, campaignId });
 
   // Cron caller may only kick the dispatcher; never pause/cancel.
   if (isCronAnon && !["tick", "start"].includes(action)) {
@@ -134,18 +145,22 @@ serve(async (req) => {
   await supabase.rpc('reap_stuck_sending', { _campaign_id: campaignId });
 
 
+  let effectiveStatus: string = campaign.status;
   if (action === "start") {
-    if (!["draft", "scheduled", "paused"].includes(campaign.status)) {
+    if (!["draft", "scheduled", "paused", "running"].includes(campaign.status)) {
       return jsonOk({ ok: false, error: `cannot_start_from_${campaign.status}` }, 400);
     }
     await supabase.from("campaigns").update({
       status: "running",
       started_at: campaign.started_at ?? new Date().toISOString(),
     }).eq("id", campaignId);
+    effectiveStatus = "running";
+    console.log('[campaign-dispatch] start_transition', { campaignId, from: campaign.status, to: 'running' });
   }
 
-  if (campaign.status === "paused" || campaign.status === "cancelled" || campaign.status === "completed") {
-    return jsonOk({ ok: true, status: campaign.status, processed: 0 });
+  if (effectiveStatus === "paused" || effectiveStatus === "cancelled" || effectiveStatus === "completed") {
+    console.log('[campaign-dispatch] short_circuit', { campaignId, effectiveStatus });
+    return jsonOk({ ok: true, status: effectiveStatus, processed: 0 });
   }
 
   const instance = (campaign as any).whatsapp_instance;
@@ -195,6 +210,7 @@ serve(async (req) => {
     });
 
     const claimedIds = (claimed ?? []).map((r: any) => r.id);
+    console.log('[campaign-dispatch] claim', { campaignId, perTickLimit, claimed: claimedIds.length });
 
     if (claimedIds.length === 0) {
       const { count } = await supabase
@@ -202,6 +218,7 @@ serve(async (req) => {
         .select("id", { count: "exact", head: true })
         .eq("campaign_id", campaignId)
         .in("status", ["pending", "sending"]);
+      console.log('[campaign-dispatch] no_claim', { campaignId, remaining: count ?? 0 });
       if ((count ?? 0) === 0) {
         await supabase.from("campaigns").update({
           status: "completed",
