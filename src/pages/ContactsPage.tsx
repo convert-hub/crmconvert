@@ -9,7 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban, MessageSquare, Target, CheckSquare } from 'lucide-react';
+import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban, MessageSquare, Target, CheckSquare, History } from 'lucide-react';
+import BulkHistorySyncDialog from '@/components/contacts/BulkHistorySyncDialog';
+import { listUazapiInstances, syncWhatsappHistoryForPhones } from '@/lib/historySync';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
 import { useCascadeDelete, type ContactLinked } from '@/hooks/useCascadeDelete';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
