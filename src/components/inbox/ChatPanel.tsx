@@ -287,12 +287,33 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [showSchedule, setShowSchedule] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
+  // Fallback: quando o pai não passa contact/channel (deep-link, race de carregamento,
+  // payload de realtime sem join), resolvemos a partir do próprio conversationId.
+  const [resolvedContact, setResolvedContact] = useState<Contact | null>(null);
+  const [resolvedChannel, setResolvedChannel] = useState<string | null>(null);
+  const effectiveContact = (contact ?? resolvedContact) as Contact | null;
+  const effectiveChannel = channel ?? resolvedChannel ?? undefined;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentConvIdRef = useRef<string>(conversationId);
   useEffect(() => { currentConvIdRef.current = conversationId; }, [conversationId]);
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    setResolvedContact(null);
+    setResolvedChannel(null);
+    supabase.from('conversations')
+      .select('channel, contact:contacts(id, tenant_id, name, phone, email, avatar_url)')
+      .eq('id', conversationId).maybeSingle()
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        setResolvedChannel((data as any).channel ?? null);
+        setResolvedContact(((data as any).contact ?? null) as Contact | null);
+      });
+    return () => { cancelled = true; };
+  }, [conversationId]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const insertEmoji = (emoji: string) => {
     const ta = textareaRef.current;
