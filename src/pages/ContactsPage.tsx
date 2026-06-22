@@ -268,6 +268,7 @@ export default function ContactsPage() {
                           <DropdownMenuItem onClick={() => openEdit(c)}><Edit className="h-3.5 w-3.5 mr-2" />Editar</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setConvContact(c); }}><MessageSquare className="h-3.5 w-3.5 mr-2" />Iniciar Conversa</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setOppContact(c); }}><Kanban className="h-3.5 w-3.5 mr-2" />Criar Oportunidade</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); syncOneContactHistory(c); }}><History className="h-3.5 w-3.5 mr-2" />Importar histórico WA</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleDelete(c.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5 mr-2" />Excluir</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
