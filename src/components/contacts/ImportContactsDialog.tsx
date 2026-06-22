@@ -9,6 +9,7 @@ import { Upload, FileText, AlertTriangle, Download, Check, X, Plus } from 'lucid
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
+import { syncWhatsappHistoryForPhones, listUazapiInstances } from '@/lib/historySync';
 import * as XLSX from 'xlsx';
 
 // Decode an ArrayBuffer trying UTF-8 first; fall back to Windows-1252 when mojibake (Ã/Â) is detected.
