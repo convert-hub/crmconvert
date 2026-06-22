@@ -602,16 +602,16 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   };
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      {showHeader && contact && (
+      {showHeader && effectiveContact && (
         <div className="border-b border-border/50 px-4 py-3 flex items-center gap-3 bg-card/50">
           <Avatar className="h-9 w-9">
-            {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact.name} />}
-            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{contact.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+            {(effectiveContact as any)?.avatar_url && <AvatarImage src={(effectiveContact as any).avatar_url} alt={effectiveContact.name} />}
+            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{effectiveContact.name.slice(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground text-sm truncate">{contact.name}</h3>
+            <h3 className="font-semibold text-foreground text-sm truncate">{effectiveContact.name}</h3>
             <span className="text-xs text-muted-foreground">
-              {contact.phone} · {channel}
+              {effectiveContact.phone} · {effectiveChannel}
               {providerInfo?.provider === 'meta_cloud' && <> · <span className="text-primary">WhatsApp Oficial</span></>}
               {providerInfo?.provider === 'uazapi' && providerInfo.instance_id && <> · UAZAPI</>}
             </span>
