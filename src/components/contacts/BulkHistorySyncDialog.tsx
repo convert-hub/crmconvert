@@ -27,7 +27,7 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
   const [estimate, setEstimate] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [result, setResult] = useState<{ chats: number; messages: number; errors: number } | null>(null);
+  const [result, setResult] = useState<{ chats: number; messages: number; errors: number; winner?: string | null; fallback?: boolean } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -89,7 +89,7 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
       const res = await syncWhatsappHistoryForPhones(tenantId, instanceId, phones, (done, total) => {
         setProgress({ done, total });
       });
-      setResult({ chats: res.chats_found, messages: res.messages_inserted, errors: res.errors.length });
+      setResult({ chats: res.chats_found, messages: res.messages_inserted, errors: res.errors.length, winner: res.winner_variant, fallback: res.fallback_scan });
       toast.success(`Histórico importado: ${res.chats_found} conversa(s), ${res.messages_inserted} mensagem(ns)`);
       onDone?.();
     } catch (e) {
@@ -145,6 +145,8 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
             <div className="text-xs bg-muted/50 rounded p-2 space-y-0.5">
               <div>{result.chats} conversa(s) encontradas</div>
               <div>{result.messages} mensagem(ns) importadas</div>
+              {result.winner && <div className="text-muted-foreground">variante UAZAPI: {result.winner}</div>}
+              {result.fallback && <div className="text-muted-foreground">modo varredura (fallback)</div>}
               {result.errors > 0 && <div className="text-destructive">{result.errors} falha(s)</div>}
             </div>
           )}

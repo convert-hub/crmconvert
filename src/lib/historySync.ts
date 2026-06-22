@@ -7,6 +7,8 @@ export type HistorySyncResult = {
   messages_inserted: number;
   messages_skipped: number;
   errors: { phone: string; error: string }[];
+  winner_variant?: string | null;
+  fallback_scan?: boolean;
 };
 
 const BATCH_SIZE = 100;
@@ -34,6 +36,8 @@ export async function syncWhatsappHistoryForPhones(
     messages_inserted: 0,
     messages_skipped: 0,
     errors: [],
+    winner_variant: null,
+    fallback_scan: false,
   };
 
   for (let i = 0; i < list.length; i += BATCH_SIZE) {
@@ -49,6 +53,8 @@ export async function syncWhatsappHistoryForPhones(
       agg.messages_inserted += data.messages_inserted ?? 0;
       agg.messages_skipped += data.messages_skipped ?? 0;
       if (Array.isArray(data.errors)) agg.errors.push(...data.errors);
+      if (data.winner_variant && !agg.winner_variant) agg.winner_variant = data.winner_variant;
+      if (data.fallback_scan) agg.fallback_scan = true;
     }
     onProgress?.(Math.min(i + batch.length, list.length), list.length, agg);
   }
