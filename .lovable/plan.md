@@ -1,33 +1,34 @@
 ## Diagnóstico
 
-Os 273 "erros" são, na verdade, conflitos entre etapas no CSV que misturam nomes válidos do pipeline (ex.: `PROPOSTA ENVIADA`, `EM CONTATO`) com nomes que não existem no pipeline (`REPETIDOS`, `NÃO VAMOS PERSEGUIR`, `LEAD RECEBIDO`). O importador hoje:
+O erro voltou em outro tenant porque a correção anterior só ignora nomes de etapa sem match **se eles não coincidirem com uma etapa real do pipeline selecionado**.
 
-1. Junta todas as etapas distintas que aparecem para o mesmo contato.
-2. Se tem mais de uma, joga erro — sem distinguir válidas de inválidas.
-3. Se a etapa não bate, conta como "etapa inválida".
+Neste tenant, termos da planilha como `PERDIDO` e possivelmente `NOVO LEAD` parecem existir como etapas reais no pipeline. Por isso o importador entende que o mesmo contato tem múltiplas etapas válidas, por exemplo:
 
-Como `REPETIDOS` não existe no pipeline e `PROPOSTA ENVIADA` existe, hoje vira conflito. Você quer que o importador ignore os nomes inexistentes e use o que tem match.
+- `IMPLANTE- CONTATO LEADS` + `PERDIDO`
+- `NOVO LEAD` + `PERDIDO`
+- `NOVO LEAD` + `IMPLANTE- CONTATO LEADS`
+
+Então não é mais apenas “etapa inválida”; é conflito real entre etapas que o sistema reconhece.
 
 ## Plano de correção
 
-No `src/components/contacts/ImportContactsDialog.tsx`, no bloco de oportunidades:
+1. **Tratar contatos duplicados com múltiplas etapas válidas sem gerar erro**
+   - Para cada contato deduplicado por telefone/email, manter todas as linhas, mas escolher automaticamente uma única etapa válida.
+   - Usar a etapa válida da **última linha da planilha** como vencedora, porque normalmente a planilha exportada já traz a informação mais recente por último.
 
-1. Antes de checar conflito, filtrar `rawStages` deixando só as que dão match em `stagesByNormName`.
-2. Decisão por contato:
-   - **0 matches** → silencioso. Não cria oportunidade, não conta como erro, não conta como "etapa inválida".
-   - **1 match** → cria oportunidade normalmente nessa etapa.
-   - **>1 matches distintos** → mantém o erro atual de "etapas diferentes" (caso real de ambiguidade entre etapas válidas).
-3. Remover o incremento de `stageErrors` para etapas que simplesmente não existem no pipeline (passam a ser silenciosas, conforme sua escolha).
-4. Manter contador `stageErrors` apenas para o caso em que TODAS as `rawStages` foram filtradas (zero matches) — não, esse vira silencioso. Então `stageErrors` deixa de ser usado e some do resultado.
+2. **Continuar ignorando etapas que não existem no pipeline**
+   - Se um contato tiver etapas inválidas misturadas com uma etapa válida, criar a oportunidade na etapa válida.
+   - Se todas as etapas forem inválidas, criar/atualizar apenas o contato e não criar oportunidade.
 
-## Resultado esperado na próxima importação
+3. **Não registrar erro para conflito de etapas dentro da própria planilha**
+   - Remover o erro `tem etapas diferentes em N linhas` para duplicidades internas do CSV.
+   - Manter erros reais de dados, como telefone inválido (`+`, `8`, `1`, `162536`, etc.), porque esses dados não identificam um contato importável por telefone.
 
-- Contatos com `REPETIDOS` + `PROPOSTA ENVIADA` → oportunidade criada em `PROPOSTA ENVIADA`, sem erro.
-- Contatos só com nomes inexistentes (`REPETIDOS` sozinho) → contato criado, oportunidade ignorada, sem erro.
-- Conflito real (`PROPOSTA ENVIADA` + `EM CONTATO`, ambas existem) → continua listado como erro pra você revisar.
+4. **Preservar conflitos contra oportunidades já existentes no CRM**
+   - Se já existir oportunidade aberta para o contato em outra etapa, manter o fluxo atual de conflito/atualização, pois isso é uma decisão operacional diferente de duplicidade na planilha.
 
-## Arquivo
+## Resultado esperado
 
-- `src/components/contacts/ImportContactsDialog.tsx` (apenas o bloco de oportunidades + UI de resultado que mostra `stageErrors`).
-
-Sem mudanças no banco.
+- `REPETIDOS`, `NÃO VAMOS PERSEGUIR` e etapas inexistentes: ignoradas silenciosamente.
+- Duplicados com `NOVO LEAD`, `PERDIDO`, `IMPLANTE- CONTATO LEADS`, etc.: não entram mais como erro; o importador escolhe uma etapa automaticamente.
+- Os erros restantes devem cair para casos realmente inválidos, principalmente telefones curtos ou lixo na coluna de telefone.

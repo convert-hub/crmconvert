@@ -592,17 +592,16 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         for (const b of batch) {
           const contactId = bucketToId.get(b);
           if (!contactId) continue;
-          // Filtra para etapas que existem no pipeline; nomes inexistentes são ignorados silenciosamente
-          const matchedStages = Array.from(new Set(b.rawStages))
-            .map(s => stagesByNormName.get(normKey(s)))
-            .filter((s): s is Stage => !!s);
-          const uniqueMatched = Array.from(new Map(matchedStages.map(s => [s.id, s])).values());
-          if (uniqueMatched.length === 0) continue; // sem etapa válida → sem oportunidade, sem erro
-          if (uniqueMatched.length > 1) {
-            errors.push({ row: b.rowIdxs[0], reason: `Contato "${b.contact.name}" tem etapas diferentes em ${b.rowIdxs.length} linhas: ${uniqueMatched.map(s => s.name).join(', ')}`, data: rows[b.rowIdxs[0] - 2] || {} });
-            continue;
+          // Etapas inexistentes no pipeline são ignoradas silenciosamente.
+          // Quando o mesmo contato aparece em múltiplas linhas com etapas válidas diferentes,
+          // a última linha da planilha vence (geralmente é a informação mais recente).
+          let chosen: Stage | undefined;
+          for (let k = b.rawStages.length - 1; k >= 0; k--) {
+            const s = stagesByNormName.get(normKey(b.rawStages[k]));
+            if (s) { chosen = s; break; }
           }
-          oppReqs.push({ bucket: b, contactId, matched: uniqueMatched[0] });
+          if (!chosen) continue;
+          oppReqs.push({ bucket: b, contactId, matched: chosen });
         }
 
         if (oppReqs.length > 0) {
