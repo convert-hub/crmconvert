@@ -680,7 +680,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold flex items-center gap-2">
-            <Upload className="h-4 w-4" /> Importar Contatos via CSV
+            <Upload className="h-4 w-4" /> Importar Contatos (CSV ou Excel)
           </DialogTitle>
         </DialogHeader>
 
