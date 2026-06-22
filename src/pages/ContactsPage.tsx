@@ -220,6 +220,7 @@ export default function ContactsPage() {
           {!isReadonly && (
             <>
               <Button variant="outline" size="sm" onClick={() => setShowImport(true)} className="h-9 text-[13px]"><Upload className="h-3.5 w-3.5 mr-1.5" />Importar</Button>
+              <Button variant="outline" size="sm" onClick={() => setShowBulkHistory(true)} className="h-9 text-[13px]"><History className="h-3.5 w-3.5 mr-1.5" />Histórico WA</Button>
               <Button size="sm" onClick={openCreate} className="h-9 text-[13px]"><Plus className="h-3.5 w-3.5 mr-1.5" />Novo Contato</Button>
             </>
           )}
