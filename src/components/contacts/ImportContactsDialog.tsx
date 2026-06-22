@@ -229,7 +229,13 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     supabase.from('tenants').select('settings').eq('id', tenantId).single().then(({ data }) => {
       if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
         const s = data.settings as Record<string, any>;
-        setCustomDefs(Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : []);
+        const contactFields: CustomFieldDef[] = Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : [];
+        const oppFields: CustomFieldDef[] = Array.isArray(s.custom_opportunity_fields) ? s.custom_opportunity_fields : [];
+        // Unifica por key (campos que aparecem em ambos os escopos não duplicam no dropdown)
+        const merged = new Map<string, CustomFieldDef>();
+        [...contactFields, ...oppFields].forEach(fd => { if (fd?.key) merged.set(fd.key, fd); });
+        setCustomDefs(Array.from(merged.values()));
+        setOppCustomKeys(new Set(oppFields.map(fd => fd.key).filter(Boolean)));
       }
     });
     supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position').then(({ data }) => {
