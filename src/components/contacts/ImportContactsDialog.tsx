@@ -1018,10 +1018,24 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                   )}
                 </div>
 
+                {errorGroups.length > 0 && (
+                  <div className="space-y-1.5 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                    <p className="text-xs font-medium text-foreground">Top motivos de falha:</p>
+                    <div className="space-y-1">
+                      {errorGroups.map((g, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-[11px]">
+                          <span className="font-mono text-destructive w-12 text-right">{g.count}×</span>
+                          <span className="flex-1 text-muted-foreground truncate" title={g.reason}>{g.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {importResult.errors.length > 0 && (
                   <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-foreground">Linhas com falha (mostrando até 20):</p>
+                      <p className="text-xs font-medium text-foreground">Linhas com falha (até 20):</p>
                       <Button variant="ghost" size="sm" onClick={downloadErrorsCsv} className="h-7 text-xs">
                         <Download className="h-3 w-3 mr-1" /> Baixar CSV completo
                       </Button>
@@ -1044,11 +1058,19 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             ) : (
               <div className="text-center space-y-3">
                 <div className="h-8 w-8 mx-auto border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-muted-foreground">Importando contatos... {progress}%</p>
+                <p className="text-sm font-medium text-foreground">Importando contatos… {progress}%</p>
+                {progressDetail && <p className="text-xs text-muted-foreground">{progressDetail}</p>}
+                <div className="pt-2">
+                  <Button variant="outline" size="sm" onClick={() => { cancelRef.current = true; }} className="h-8 text-xs">
+                    Cancelar importação
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground/70">Não feche esta janela até a importação concluir.</p>
               </div>
             )}
           </div>
         )}
+
       </DialogContent>
     </Dialog>
   );
