@@ -237,17 +237,53 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const handleFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const { headers: h, rows: r } = parseCSV(text);
-      if (h.length === 0) { toast.error('CSV inválido'); return; }
-      setHeaders(h);
-      setRows(r);
-      const autoMapping: Record<string, string> = {};
-      h.forEach(header => { autoMapping[header] = guessMapping(header, customDefs); });
-      setMapping(autoMapping);
-      setStep('mapping');
+      try {
+        const buf = e.target?.result as ArrayBuffer;
+        if (!buf) throw new Error('Arquivo vazio');
+        const bytes = new Uint8Array(buf);
+        const isXlsx = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+          || file.name.toLowerCase().endsWith('.xlsx');
+
+        let h: string[] = [];
+        let r: CsvRow[] = [];
+        let encUsed: 'utf-8' | 'windows-1252' | 'xlsx' = 'utf-8';
+
+        if (isXlsx && bytes[0] === 0x50) {
+          const wb = XLSX.read(buf, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '', raw: false, blankrows: false });
+          if (aoa.length === 0) throw new Error('Planilha vazia');
+          h = (aoa[0] as unknown[]).map(v => String(v ?? '').trim());
+          r = aoa.slice(1).map(row => {
+            const obj: CsvRow = {};
+            h.forEach((header, idx) => { obj[header] = String((row as unknown[])[idx] ?? '').trim(); });
+            return obj;
+          });
+          encUsed = 'xlsx';
+        } else {
+          const { text, encoding } = decodeBufferSmart(buf);
+          encUsed = encoding;
+          const parsed = parseCSV(text);
+          h = parsed.headers;
+          r = parsed.rows;
+        }
+
+        if (h.length === 0) { toast.error('Arquivo sem cabeçalho'); return; }
+        setHeaders(h);
+        setRows(r);
+        const autoMapping: Record<string, string> = {};
+        h.forEach(header => { autoMapping[header] = guessMapping(header, customDefs); });
+        setMapping(autoMapping);
+        setStep('mapping');
+        if (encUsed === 'windows-1252') {
+          toast.info('Arquivo em Latin-1 detectado e convertido para UTF-8 automaticamente.');
+        }
+      } catch (err: any) {
+        console.error('[ImportContacts] file parse failed', err);
+        toast.error(`Falha ao ler arquivo: ${err?.message || err}`);
+      }
     };
-    reader.readAsText(file, 'UTF-8');
+    reader.readAsArrayBuffer(file);
   };
 
   const coerceCustom = (def: CustomFieldDef, val: string): { ok: true; value: unknown } | { ok: false; reason: string } => {
