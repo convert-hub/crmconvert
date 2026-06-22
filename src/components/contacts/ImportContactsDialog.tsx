@@ -198,6 +198,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [progress, setProgress] = useState(0);
   const [progressDetail, setProgressDetail] = useState('');
   const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
+  const [oppCustomKeys, setOppCustomKeys] = useState<Set<string>>(new Set());
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
@@ -228,7 +229,13 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     supabase.from('tenants').select('settings').eq('id', tenantId).single().then(({ data }) => {
       if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
         const s = data.settings as Record<string, any>;
-        setCustomDefs(Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : []);
+        const contactFields: CustomFieldDef[] = Array.isArray(s.custom_contact_fields) ? s.custom_contact_fields : [];
+        const oppFields: CustomFieldDef[] = Array.isArray(s.custom_opportunity_fields) ? s.custom_opportunity_fields : [];
+        // Unifica por key (campos que aparecem em ambos os escopos não duplicam no dropdown)
+        const merged = new Map<string, CustomFieldDef>();
+        [...contactFields, ...oppFields].forEach(fd => { if (fd?.key) merged.set(fd.key, fd); });
+        setCustomDefs(Array.from(merged.values()));
+        setOppCustomKeys(new Set(oppFields.map(fd => fd.key).filter(Boolean)));
       }
     });
     supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position').then(({ data }) => {
@@ -591,7 +598,13 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             for (const req of oppReqs) {
               const ex: any = existingByContact.get(req.contactId);
               if (!ex) {
-                toInsert.push({
+                const oppCf: Record<string, unknown> = {};
+                if (req.bucket.hasCustom && oppCustomKeys.size > 0) {
+                  for (const k of Object.keys(req.bucket.custom)) {
+                    if (oppCustomKeys.has(k)) oppCf[k] = req.bucket.custom[k];
+                  }
+                }
+                const oppPayload: any = {
                   tenant_id: tenantId,
                   contact_id: req.contactId,
                   pipeline_id: selectedPipeline,
@@ -600,7 +613,9 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                   value: 0,
                   priority: 'medium',
                   status: 'open',
-                });
+                };
+                if (Object.keys(oppCf).length > 0) oppPayload.custom_fields = oppCf;
+                toInsert.push(oppPayload);
               } else if (ex.stage_id === req.matched.id) {
                 oppsIgnored++;
               } else if (!conflictByOppId.has(ex.id)) {
