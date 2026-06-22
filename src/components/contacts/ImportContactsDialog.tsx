@@ -189,6 +189,11 @@ interface ImportResult {
 type Pipeline = { id: string; name: string };
 type Stage = { id: string; name: string };
 
+const isLegacyStageConflictError = (reason: string) => {
+  const normalized = reason.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return normalized.includes('tem etapas diferentes em') || normalized.includes('etapas diferentes em');
+};
+
 export default function ImportContactsDialog({ open, onOpenChange, tenantId, onImported }: ImportContactsDialogProps) {
   const [step, setStep] = useState<'upload' | 'mapping' | 'importing' | 'conflicts'>('upload');
   const [headers, setHeaders] = useState<string[]>([]);
@@ -259,6 +264,11 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   };
 
   const handleFile = (file: File) => {
+    setImportResult(null);
+    setConflicts([]);
+    setProgress(0);
+    setProgressDetail('');
+    cancelRef.current = false;
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -347,6 +357,8 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     if (stageCol && !selectedPipeline) { toast.error('Selecione o pipeline'); return; }
 
     cancelRef.current = false;
+    setImportResult(null);
+    setConflicts([]);
     setStep('importing');
     setProgress(0);
     setProgressDetail('Preparando linhas…');
@@ -697,17 +709,23 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       }
     }
 
-    const totalMs = Date.now() - t0;
-    console.log('[ImportContacts] complete', { created, updated, errors: errors.length, ms: totalMs, cancelled: cancelRef.current });
+    const visibleErrors = errors.filter(e => !isLegacyStageConflictError(e.reason));
+    const suppressedLegacyStageErrors = errors.length - visibleErrors.length;
+    if (suppressedLegacyStageErrors > 0) {
+      console.warn('[ImportContacts] suppressed legacy duplicate-stage errors', suppressedLegacyStageErrors);
+    }
 
-    const result: ImportResult = { created, updated, errors, oppsCreated, oppsIgnored, oppsConflicts: conflictsAcc.length, oppsUpdated, stageErrors };
+    const totalMs = Date.now() - t0;
+    console.log('[ImportContacts] complete', { created, updated, errors: visibleErrors.length, suppressedLegacyStageErrors, ms: totalMs, cancelled: cancelRef.current });
+
+    const result: ImportResult = { created, updated, errors: visibleErrors, oppsCreated, oppsIgnored, oppsConflicts: conflictsAcc.length, oppsUpdated, stageErrors };
     setImportResult(result);
     setConflicts(conflictsAcc);
     setProgressDetail(`Concluído em ${(totalMs / 1000).toFixed(1)}s`);
 
-    const msg = `${created} criados, ${updated} atualizados${errors.length ? `, ${errors.length} com erro` : ''}`;
+    const msg = `${created} criados, ${updated} atualizados${visibleErrors.length ? `, ${visibleErrors.length} com erro` : ''}`;
     if (cancelRef.current) toast.warning(`Importação cancelada: ${msg}`);
-    else if (errors.length === 0) toast.success(`Importação concluída em ${(totalMs / 1000).toFixed(1)}s: ${msg}`);
+    else if (visibleErrors.length === 0) toast.success(`Importação concluída em ${(totalMs / 1000).toFixed(1)}s: ${msg}`);
     else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
 
