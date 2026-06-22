@@ -730,17 +730,63 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             </div>
 
             {hasPipelineStageMapping && (
-              <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                <span className="text-sm font-medium">Pipeline</span>
-                <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
-                  <SelectTrigger className="h-8 text-[13px] flex-1"><SelectValue placeholder="Selecione…" /></SelectTrigger>
-                  <SelectContent>
-                    {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <span className="text-xs text-muted-foreground">{stages.length} etapas</span>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="text-sm font-medium">Pipeline</span>
+                  <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
+                    <SelectTrigger className="h-8 text-[13px] flex-1"><SelectValue placeholder="Selecione…" /></SelectTrigger>
+                    <SelectContent>
+                      {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">{stages.length} etapas</span>
+                </div>
+
+                {stageAudit && stageAudit.items.length > 0 && (
+                  <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-foreground">
+                        Etapas encontradas no arquivo
+                        {stageAudit.missingCount > 0 && (
+                          <span className="ml-2 text-destructive">({stageAudit.missingCount} sem correspondência)</span>
+                        )}
+                      </p>
+                      {stageAudit.missingCount > 0 && (
+                        <Button
+                          variant="outline" size="sm" className="h-7 text-xs"
+                          onClick={createMissingStages} disabled={creatingStages}
+                        >
+                          <Plus className="h-3 w-3 mr-1" />
+                          {creatingStages ? 'Criando…' : `Criar ${stageAudit.missingCount} faltantes`}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="max-h-32 overflow-y-auto flex flex-wrap gap-1.5">
+                      {stageAudit.items.map(it => (
+                        <span
+                          key={it.value}
+                          className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${
+                            it.matched
+                              ? 'border-success/30 bg-success/5 text-success'
+                              : 'border-destructive/30 bg-destructive/5 text-destructive'
+                          }`}
+                        >
+                          {it.matched ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                          <span className="truncate max-w-[180px]">{it.value}</span>
+                          <span className="opacity-60">×{it.count}</span>
+                        </span>
+                      ))}
+                    </div>
+                    {stageAudit.missingCount > 0 && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Contatos serão importados normalmente. Linhas com etapa sem correspondência apenas não criarão oportunidade.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+
 
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground mb-2">Preview (primeiras 3 linhas):</p>
