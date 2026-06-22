@@ -718,15 +718,44 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     setMapping({});
     setImportResult(null);
     setProgress(0);
+    setProgressDetail('');
     setSelectedPipeline('');
     setStages([]);
     setConflicts([]);
+    cancelRef.current = false;
   };
 
   const handleClose = (o: boolean) => {
+    if (!o && step === 'importing' && !importResult) {
+      // protege contra fechamento acidental durante importação
+      const ok = window.confirm('A importação está em andamento. Cancelar e fechar?');
+      if (!ok) return;
+      cancelRef.current = true;
+    }
     if (!o) reset();
     onOpenChange(o);
   };
+
+  // Agrupa erros por motivo (top categorias) para visão rápida
+  const errorGroups = useMemo(() => {
+    if (!importResult?.errors.length) return [] as Array<{ reason: string; count: number }>;
+    const normalizeReason = (r: string) => r
+      .replace(/"[^"]*"/g, '"…"')                     // collapse quoted values
+      .replace(/\b[0-9a-f]{8}-[0-9a-f-]+\b/gi, '<id>') // collapse uuids
+      .replace(/\d+/g, 'N')                            // collapse numbers
+      .slice(0, 120);
+    const counts = new Map<string, number>();
+    importResult.errors.forEach(e => {
+      const k = normalizeReason(e.reason);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [importResult]);
+
+
 
   // Unique stage values from CSV column mapped to pipeline_stage, with match status vs. pipeline stages
   const stageCsvCol = useMemo(
