@@ -444,11 +444,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         if (stageCol && rawStage) {
           const matchedStage = stagesByNormName.get(normKey(rawStage));
           if (!matchedStage) {
-            errors.push({
-              row: i + 2,
-              reason: `Etapa "${rawStage}" não corresponde a nenhuma etapa do pipeline "${selectedPipelineName}"`,
-              data: row,
-            });
+            // Não bloqueia o contato — apenas registra o aviso de etapa.
             stageErrors++;
           } else {
             // Check in-memory cache first
