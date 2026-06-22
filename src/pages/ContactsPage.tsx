@@ -46,7 +46,25 @@ export default function ContactsPage() {
   const [deleteContactId, setDeleteContactId] = useState<string | null>(null);
   const [convContact, setConvContact] = useState<Contact | null>(null);
   const [contactCascadeData, setContactCascadeData] = useState<ContactLinked | null>(null);
+  const [showBulkHistory, setShowBulkHistory] = useState(false);
   const { getContactLinked, deleteContactCascade, loading: cascadeLoading } = useCascadeDelete();
+
+  const syncOneContactHistory = async (c: Contact) => {
+    if (!tenant || !c.phone) { toast.error('Contato sem telefone'); return; }
+    const instances = await listUazapiInstances(tenant.id);
+    if (instances.length === 0) { toast.error('Nenhuma instância UAZAPI ativa'); return; }
+    const inst = instances.length === 1 ? instances[0] : instances[0]; // TODO: prompt se múltiplas
+    const tid = toast.loading('Buscando histórico no WhatsApp…');
+    try {
+      const res = await syncWhatsappHistoryForPhones(tenant.id, inst.id, [c.phone]);
+      toast.dismiss(tid);
+      if (res.chats_found === 0) toast.info('Nenhuma conversa encontrada nos últimos 30 dias');
+      else toast.success(`${res.chats_found} conversa, ${res.messages_inserted} mensagem(ns) importadas`);
+    } catch {
+      toast.dismiss(tid);
+      toast.error('Falha ao buscar histórico');
+    }
+  };
 
   useEffect(() => {
     if (!tenant) return;
