@@ -7,6 +7,8 @@ export type HistorySyncResult = {
   messages_inserted: number;
   messages_skipped: number;
   errors: { phone: string; error: string }[];
+  winner_variant?: string | null;
+  fallback_scan?: boolean;
 };
 
 const BATCH_SIZE = 100;

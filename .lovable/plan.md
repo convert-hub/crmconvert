@@ -1,69 +1,49 @@
-## Objetivo
-Quando o usuário importa contatos via CSV, puxar do UAZAPI o histórico (30 dias) de cada telefone importado e gravar `conversations` + `messages`. Também permitir backfill manual para contatos **já importados** anteriormente.
+## Causa-raiz
 
-## Diagnóstico do estado atual
-- `uazapi-history-sync` existe, mas roda **uma única vez por instância** (disparada por `webhook-uazapi` na conexão), varrendo toda a instância nos últimos 30 dias.
-- `webhook-uazapi` grava em tempo real toda mensagem nova após a conexão, criando contato pelo telefone normalizado.
-- Importação atual (`ImportContactsDialog.tsx`) deduplica por telefone normalizado mas **não dispara fetch de histórico**.
-- Conversas e mensagens são idempotentes: `conversations` por `(tenant_id, instance_id, provider_chat_id)` e `messages` por `(tenant_id, provider_message_id)`. Rodar backfill duas vezes não duplica.
+A função `uazapi-history-sync-contacts` chama `POST /message/find` passando `{ chatid: "55XXX@s.whatsapp.net", limit, offset }`. Logs mostram apenas `booted` — nenhuma falha de HTTP nem erro de upsert: a UAZAPI está respondendo **200 com lista vazia**, porque o filtro por `chatid` está silenciosamente ignorado ou usa outro nome/formato. A função antiga (`uazapi-history-sync`) funciona justamente porque **não** passa filtro: ela puxa tudo da instância e agrupa por chat no servidor.
 
-## Plano
+Portanto, o problema é o contrato do endpoint `/message/find` com filtro por chat — não a persistência.
 
-### 1. Nova edge function `uazapi-history-sync-contacts`
-Backfill **por lista de telefones**, reaproveitando a persistência da `uazapi-history-sync`.
+## Correção
 
-Input:
-```json
-{ "tenant_id": "...", "instance_id": "...", "phones": ["5511999...", ...] }
-```
+### 1. Instrumentar a função para diagnóstico imediato
+Adicionar logs `console.log` na primeira chamada de cada telefone:
+- payload enviado
+- status HTTP
+- chaves do JSON de resposta e tamanho da lista detectada
 
-Fluxo:
-1. Resolver `apiBase` + `instToken` (mesma lógica da função existente).
-2. Para cada telefone normalizado:
-   - Montar `chatid = <phone>@s.whatsapp.net`.
-   - `POST /message/find` com `{ chatid, limit: 100 }`, paginando até esgotar ou cutoff de **30 dias**.
-   - Persistir igual à função atual (upsert idempotente).
-3. Retornar `{ ok, contacts_processed, chats_found, messages_inserted, messages_skipped, errors }`.
+Isso confirma em uma nova execução qual variante o servidor aceita.
 
-Limites:
-- Máx. 500 telefones por chamada (cliente quebra em lotes).
-- Máx. 10 páginas de 100 mensagens por telefone.
-- Prefixo de log: `uazapi-history-sync-contacts:`.
+### 2. Sondar variantes de payload e usar a primeira que retorna mensagens
+Para o primeiro telefone do lote, tentar em sequência (parando na primeira que vier não-vazia):
 
-### 2. UI — opção no `ImportContactsDialog`
-- Antes de importar:
-  - Checkbox **"Puxar histórico do WhatsApp (30 dias)"** — default ligado.
-  - Se houver mais de uma `whatsapp_instances` ativa, mostrar `Select` compacto; se houver apenas uma, seleção silenciosa.
-- Após import bem-sucedido, se ligado:
-  - Coleta telefones normalizados que entraram (novos + atualizados).
-  - Chama `uazapi-history-sync-contacts` em lotes de 100.
-  - Progresso no modal ("Buscando histórico: X/Y"), e contadores finais (`conversas encontradas`, `mensagens importadas`).
-- Falhas do backfill não invalidam o import — viram aviso.
+1. `{ chatid: "55XXX@s.whatsapp.net", limit, offset }` — atual
+2. `{ chatid: "55XXX", limit, offset }` — só dígitos
+3. `{ chatId: "55XXX@s.whatsapp.net", limit, offset }` — camelCase
+4. `{ number: "55XXX", limit, offset }` — nome alternativo comum em UAZAPI v2
+5. `{ jid: "55XXX@s.whatsapp.net", limit, offset }`
 
-### 3. Ação manual por contato
-- **Em `ContactsPage`** (menu da linha): item **"Importar histórico WhatsApp"** → chama a função para 1 telefone, mostra toast com resultado.
-- **Em `OpportunityDetail`** (header de ações): mesmo item.
-- Se houver múltiplas instâncias, abre `Select` rápido antes de disparar.
+Guardar a variante vencedora em memória do request e usar para os demais telefones do mesmo lote. Logar `winner_variant`.
 
-### 4. Backfill em lote para contatos já importados
-Para resolver os contatos que **já foram importados antes deste recurso existir**:
+### 3. Fallback de segurança (modo "varredura")
+Se nenhuma variante retornar mensagens para os 3 primeiros telefones, cair para o modo da função antiga: uma única chamada `POST /message/find` sem `chatid`, paginando até 10 páginas de 100, e filtrar localmente pelos `chatid` correspondentes aos telefones pedidos. É mais caro, mas garante o backfill.
 
-- **Em `ContactsPage` (header de ações):** botão **"Importar histórico WhatsApp"**.
-- Modal compacto:
-  - `Select` da instância (se >1).
-  - Escopo: `Todos os contatos filtrados` (respeita filtros atuais de busca/status/tags) **ou** `Apenas contatos sem conversa nesta instância` (default).
-  - Contador estimado de telefones que serão processados.
-  - Botão **Iniciar**.
-- Executa em lotes de 100 telefones via mesma função, com barra de progresso e resumo final.
+Ativar esse fallback automaticamente após a sondagem; logar `fallback_scan: true` quando usado.
 
-### 5. Sem mudanças de schema
-Nenhuma migração necessária — tudo reaproveita constraints/índices existentes.
+### 4. Resposta e UI
+Incluir `winner_variant` e `fallback_scan` no JSON de retorno. Expor esses campos como toast/dica no `BulkHistorySyncDialog` para o usuário ver qual caminho foi tomado.
 
-## Resultado esperado
-- Imports novos: histórico chega automático.
-- Imports antigos: usuário roda o "Importar histórico WhatsApp" da página de contatos uma vez (ou ação individual por contato).
-- Tudo idempotente: pode rodar de novo sem duplicar nada.
+### 5. Validação
+Após o deploy, rodar novamente o "Histórico WA" com escopo "Apenas contatos sem conversa". Esperado:
+- nos logs: `winner_variant` definido ou `fallback_scan: true`
+- toast: número > 0 de conversas e mensagens, se de fato houver histórico nos 30 dias.
 
-## Premissas confirmadas
-- Janela fixa de **30 dias** (limite da API UAZAPI no plano atual).
-- Item 3 (ação por contato) e item 4 (lote para já-importados) entram juntos no mesmo PR.
+Se ainda voltar 0 mesmo com fallback de varredura, a causa estará confirmada como ausência de histórico na própria UAZAPI (mensagens >30 dias, ou instância recém-conectada sem cache), e ajustamos a mensagem na UI.
+
+## Arquivos tocados
+
+- `supabase/functions/uazapi-history-sync-contacts/index.ts` — sondagem de variantes, fallback de varredura, logs
+- `src/lib/historySync.ts` — propagar `winner_variant` e `fallback_scan`
+- `src/components/contacts/BulkHistorySyncDialog.tsx` — exibir o caminho usado no resultado
+
+Nenhuma mudança em schema, RLS, contratos públicos ou na função antiga `uazapi-history-sync`.
