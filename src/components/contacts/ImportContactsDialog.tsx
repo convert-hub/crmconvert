@@ -691,10 +691,10 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
               onClick={() => fileRef.current?.click()}
             >
               <FileText className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-              <p className="text-sm font-medium text-foreground">Clique para selecionar um arquivo CSV</p>
-              <p className="text-xs text-muted-foreground mt-1">Suporta vírgula (,) e ponto-e-vírgula (;), campos entre aspas</p>
+              <p className="text-sm font-medium text-foreground">Clique para selecionar um arquivo CSV ou Excel</p>
+              <p className="text-xs text-muted-foreground mt-1">.csv, .xlsx — encoding (UTF-8 / Latin-1) detectado automaticamente</p>
             </div>
-            <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
+            <input ref={fileRef} type="file" accept=".csv,.txt,.xlsx" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
           </div>
         )}
