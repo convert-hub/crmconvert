@@ -370,6 +370,16 @@ export default function ContactsPage() {
         />
       )}
 
+      {tenant && (
+        <BulkHistorySyncDialog
+          open={showBulkHistory}
+          onOpenChange={setShowBulkHistory}
+          tenantId={tenant.id}
+          filteredPhones={contacts.map(c => c.phone).filter(Boolean) as string[]}
+          onDone={loadContacts}
+        />
+      )}
+
       {oppContact && (
         <CreateOpportunityFromContactDialog
           open={!!oppContact}
