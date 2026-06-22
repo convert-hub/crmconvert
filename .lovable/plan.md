@@ -1,43 +1,33 @@
 ## Diagnóstico
 
-A falha atual não vem do CSV nem dos campos personalizados. Ela vem do `upsert` de contatos com telefone.
+Os 273 "erros" são, na verdade, conflitos entre etapas no CSV que misturam nomes válidos do pipeline (ex.: `PROPOSTA ENVIADA`, `EM CONTATO`) com nomes que não existem no pipeline (`REPETIDOS`, `NÃO VAMOS PERSEGUIR`, `LEAD RECEBIDO`). O importador hoje:
 
-O código usa:
+1. Junta todas as etapas distintas que aparecem para o mesmo contato.
+2. Se tem mais de uma, joga erro — sem distinguir válidas de inválidas.
+3. Se a etapa não bate, conta como "etapa inválida".
 
-```ts
-.upsert(payload, { onConflict: 'tenant_id,phone' })
-```
-
-Mas no banco o índice único existente é parcial:
-
-```sql
-contacts_tenant_phone_unique ON (tenant_id, phone)
-WHERE phone IS NOT NULL AND phone <> ''
-```
-
-Postgres/Supabase não aceita `ON CONFLICT (tenant_id, phone)` apontando para índice único parcial nesse formato, por isso todos os lotes com telefone falham com:
-
-```text
-there is no unique or exclusion constraint matching the ON CONFLICT specification
-```
-
-Isso explica o resultado da tela: os poucos criados foram provavelmente contatos sem telefone, enquanto os 2147 registros com telefone caíram no mesmo erro de lote.
+Como `REPETIDOS` não existe no pipeline e `PROPOSTA ENVIADA` existe, hoje vira conflito. Você quer que o importador ignore os nomes inexistentes e use o que tem match.
 
 ## Plano de correção
 
-1. Alterar o importador para não depender de `upsert(... onConflict: 'tenant_id,phone')`.
-2. Manter o lookup atual por telefone para descobrir contatos existentes.
-3. Separar o lote em dois grupos:
-   - contatos existentes: atualizar por `id`, preservando/mesclando tags e `custom_fields`;
-   - contatos novos: inserir normalmente.
-4. Preservar a lógica recém-ajustada para criar `opportunities.custom_fields` quando o campo estiver marcado para oportunidade.
-5. Ajustar a contagem de criados/atualizados para refletir `insert` e `update` separados.
-6. Validar na tela que uma nova importação não gera mais o erro de `ON CONFLICT`.
+No `src/components/contacts/ImportContactsDialog.tsx`, no bloco de oportunidades:
 
-## Arquivo afetado
+1. Antes de checar conflito, filtrar `rawStages` deixando só as que dão match em `stagesByNormName`.
+2. Decisão por contato:
+   - **0 matches** → silencioso. Não cria oportunidade, não conta como erro, não conta como "etapa inválida".
+   - **1 match** → cria oportunidade normalmente nessa etapa.
+   - **>1 matches distintos** → mantém o erro atual de "etapas diferentes" (caso real de ambiguidade entre etapas válidas).
+3. Remover o incremento de `stageErrors` para etapas que simplesmente não existem no pipeline (passam a ser silenciosas, conforme sua escolha).
+4. Manter contador `stageErrors` apenas para o caso em que TODAS as `rawStages` foram filtradas (zero matches) — não, esse vira silencioso. Então `stageErrors` deixa de ser usado e some do resultado.
 
-- `src/components/contacts/ImportContactsDialog.tsx`
+## Resultado esperado na próxima importação
 
-## Sem mudança de banco
+- Contatos com `REPETIDOS` + `PROPOSTA ENVIADA` → oportunidade criada em `PROPOSTA ENVIADA`, sem erro.
+- Contatos só com nomes inexistentes (`REPETIDOS` sozinho) → contato criado, oportunidade ignorada, sem erro.
+- Conflito real (`PROPOSTA ENVIADA` + `EM CONTATO`, ambas existem) → continua listado como erro pra você revisar.
 
-Não pretendo alterar índices, constraints ou RLS agora. A correção mais segura é no código do importador, porque o índice parcial já existe para permitir múltiplos contatos sem telefone e evitar duplicidade apenas quando há telefone válido.
+## Arquivo
+
+- `src/components/contacts/ImportContactsDialog.tsx` (apenas o bloco de oportunidades + UI de resultado que mostra `stageErrors`).
+
+Sem mudanças no banco.
