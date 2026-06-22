@@ -251,6 +251,11 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position').then(({ data }) => {
       setPipelines((data as Pipeline[]) || []);
     });
+    listUazapiInstances(tenantId).then(list => {
+      setUazInstances(list);
+      if (list.length === 1) setHistoryInstanceId(list[0].id);
+      else if (list.length === 0) setSyncHistory(false);
+    });
   }, [open, tenantId]);
 
   useEffect(() => {
