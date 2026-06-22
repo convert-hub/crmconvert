@@ -287,12 +287,33 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [showSchedule, setShowSchedule] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
+  // Fallback: quando o pai não passa contact/channel (deep-link, race de carregamento,
+  // payload de realtime sem join), resolvemos a partir do próprio conversationId.
+  const [resolvedContact, setResolvedContact] = useState<Contact | null>(null);
+  const [resolvedChannel, setResolvedChannel] = useState<string | null>(null);
+  const effectiveContact = (contact ?? resolvedContact) as Contact | null;
+  const effectiveChannel = channel ?? resolvedChannel ?? undefined;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentConvIdRef = useRef<string>(conversationId);
   useEffect(() => { currentConvIdRef.current = conversationId; }, [conversationId]);
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    setResolvedContact(null);
+    setResolvedChannel(null);
+    supabase.from('conversations')
+      .select('channel, contact:contacts(id, tenant_id, name, phone, email, avatar_url)')
+      .eq('id', conversationId).maybeSingle()
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        setResolvedChannel((data as any).channel ?? null);
+        setResolvedContact(((data as any).contact ?? null) as Contact | null);
+      });
+    return () => { cancelled = true; };
+  }, [conversationId]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const insertEmoji = (emoji: string) => {
     const ta = textareaRef.current;
@@ -320,9 +341,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   }, [tenant]);
   const replaceVariables = (text: string): string => {
     return text
-      .replace(/\{\{nome\}\}/gi, contact?.name || '')
-      .replace(/\{\{telefone\}\}/gi, contact?.phone || '')
-      .replace(/\{\{email\}\}/gi, contact?.email || '');
+      .replace(/\{\{nome\}\}/gi, effectiveContact?.name || '')
+      .replace(/\{\{telefone\}\}/gi, effectiveContact?.phone || '')
+      .replace(/\{\{email\}\}/gi, effectiveContact?.email || '');
   };
   const handleSelectQuickReply = (qr: QuickReply) => {
     const replaced = replaceVariables(qr.content);
@@ -379,8 +400,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   }, [conversationId]);
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !conversationId) return;
-    const isWhatsApp = channel === 'whatsapp';
-    const contactPhone = contact?.phone;
+    const isWhatsApp = effectiveChannel === 'whatsapp';
+    const contactPhone = effectiveContact?.phone;
     const msgContent = newMsg;
     const sendAsInternal = isInternal;
     const capturedConvId = conversationId;
@@ -467,8 +488,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const handleSendMedia = async (file: File) => {
     if (!tenant || !membership || !conversationId) return;
     const capturedConvId = conversationId;
-    const contactPhone = contact?.phone;
-    const isWhatsApp = channel === 'whatsapp';
+    const contactPhone = effectiveContact?.phone;
+    const isWhatsApp = effectiveChannel === 'whatsapp';
     if (!isWhatsApp || !contactPhone) { toast.error('Envio de mídia só disponível para WhatsApp'); return; }
     let mediaType: 'audio' | 'image' | 'video' | 'document' = 'image';
     if (file.type.startsWith('audio/')) mediaType = 'audio';
@@ -581,16 +602,16 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   };
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      {showHeader && contact && (
+      {showHeader && effectiveContact && (
         <div className="border-b border-border/50 px-4 py-3 flex items-center gap-3 bg-card/50">
           <Avatar className="h-9 w-9">
-            {(contact as any)?.avatar_url && <AvatarImage src={(contact as any).avatar_url} alt={contact.name} />}
-            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{contact.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+            {(effectiveContact as any)?.avatar_url && <AvatarImage src={(effectiveContact as any).avatar_url} alt={effectiveContact.name} />}
+            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{effectiveContact.name.slice(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground text-sm truncate">{contact.name}</h3>
+            <h3 className="font-semibold text-foreground text-sm truncate">{effectiveContact.name}</h3>
             <span className="text-xs text-muted-foreground">
-              {contact.phone} · {channel}
+              {effectiveContact.phone} · {effectiveChannel}
               {providerInfo?.provider === 'meta_cloud' && <> · <span className="text-primary">WhatsApp Oficial</span></>}
               {providerInfo?.provider === 'uazapi' && providerInfo.instance_id && <> · UAZAPI</>}
             </span>
@@ -793,7 +814,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           tenantId={tenant.id}
           whatsappInstanceId={providerInfo.instance_id}
           conversationId={conversationId}
-          contactName={contact?.name ?? null}
+          contactName={effectiveContact?.name ?? null}
         />
       )}
     </div>
