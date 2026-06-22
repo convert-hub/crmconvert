@@ -1,6 +1,6 @@
 // uazapi-history-sync-contacts: backfill de histórico (30 dias) por lista de telefones.
-// Sonda variantes do filtro do /message/find e cai para varredura geral
-// (estilo uazapi-history-sync) se nenhuma variante retornar mensagens.
+// Estratégia: lista todos os chats reais da instância via /chat/find, cruza com os
+// telefones pedidos e só então pagina /message/find com o chatid correto.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { normalizeBrazilPhone } from '../_shared/phone.ts';
 
@@ -16,25 +16,11 @@ const json = (body: unknown, status = 200) =>
   });
 
 const MAX_PAGES_PER_CHAT = 10;
+const CHAT_LIST_MAX_PAGES = 50;
 const PAGE_SIZE = 100;
 const CUTOFF_MS = 30 * 24 * 60 * 60 * 1000;
 const BATCH = 50;
 const MAX_PHONES = 500;
-const PROBE_PHONES = 3;
-const SCAN_MAX_PAGES = 10;
-
-type Variant = {
-  name: string;
-  build: (phone: string, offset: number) => Record<string, unknown>;
-};
-
-const VARIANTS: Variant[] = [
-  { name: 'chatid_jid',  build: (p, o) => ({ chatid: `${p}@s.whatsapp.net`, limit: PAGE_SIZE, offset: o }) },
-  { name: 'chatid_num',  build: (p, o) => ({ chatid: p, limit: PAGE_SIZE, offset: o }) },
-  { name: 'chatId_jid',  build: (p, o) => ({ chatId: `${p}@s.whatsapp.net`, limit: PAGE_SIZE, offset: o }) },
-  { name: 'number',      build: (p, o) => ({ number: p, limit: PAGE_SIZE, offset: o }) },
-  { name: 'jid',         build: (p, o) => ({ jid: `${p}@s.whatsapp.net`, limit: PAGE_SIZE, offset: o }) },
-];
 
 function chunk<T>(arr: T[], n: number): T[][] {
   const out: T[][] = [];
@@ -51,34 +37,35 @@ function msgTimestampMs(m: any): number {
 }
 
 function extractList(data: any): any[] {
-  return Array.isArray(data)
-    ? data
+  return Array.isArray(data) ? data
     : Array.isArray(data?.messages) ? data.messages
+    : Array.isArray(data?.chats) ? data.chats
     : Array.isArray(data?.data) ? data.data
     : Array.isArray(data?.result) ? data.result
     : [];
 }
 
-function pickChatIdFromMsg(m: any): string | null {
-  const c = m?.chatid || m?.chatId || m?.chat_id || m?.from || m?.remoteJid || m?.sender;
-  return c ? String(c) : null;
+function pickChatId(c: any): string | null {
+  const v = c?.wa_chatid || c?.chatid || c?.chatId || c?.chat_id || c?.id || c?.jid || c?.remoteJid;
+  return v ? String(v) : null;
 }
 
-function chatIdToPhone(chatid: string): string {
-  return normalizeBrazilPhone(String(chatid).replace('@s.whatsapp.net', '').replace('@c.us', '').split(/[:@]/)[0]);
+function isIndividualChat(chatid: string): boolean {
+  return /@(s\.whatsapp\.net|c\.us|lid)$/i.test(chatid);
 }
 
-async function callFind(apiBase: string, token: string, payload: Record<string, unknown>): Promise<{ ok: boolean; status: number; list: any[]; bodyPreview: string }> {
-  const resp = await fetch(`${apiBase}/message/find`, {
-    method: 'POST',
-    headers: { token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+function chatIdToPhone(chatid: string): string | null {
+  if (/@lid$/i.test(chatid)) return null; // pseudônimo, não dá pra inferir telefone
+  const left = chatid.split('@')[0].split(':')[0];
+  return normalizeBrazilPhone(left) || null;
+}
+
+async function callJson(url: string, init: RequestInit): Promise<{ ok: boolean; status: number; data: any; bodyPreview: string }> {
+  const resp = await fetch(url, init);
   const text = await resp.text();
   let data: any = null;
   try { data = JSON.parse(text); } catch { /* */ }
-  const list = extractList(data);
-  return { ok: resp.ok, status: resp.status, list, bodyPreview: text.slice(0, 300) };
+  return { ok: resp.ok, status: resp.status, data, bodyPreview: text.slice(0, 400) };
 }
 
 Deno.serve(async (req) => {
@@ -124,7 +111,7 @@ Deno.serve(async (req) => {
     const normPhones = Array.from(normSet).slice(0, MAX_PHONES);
 
     if (normPhones.length === 0) {
-      return json({ ok: true, contacts_processed: 0, chats_found: 0, messages_inserted: 0, messages_skipped: 0, errors: [], winner_variant: null, fallback_scan: false });
+      return json({ ok: true, contacts_processed: 0, phones_requested: 0, phones_matched: 0, phones_without_chat: 0, chats_listed: 0, chats_found: 0, messages_inserted: 0, messages_skipped: 0, errors: [] });
     }
 
     const phoneSet = new Set(normPhones);
@@ -140,98 +127,93 @@ Deno.serve(async (req) => {
       }
     }
 
-    const cutoffMs = Date.now() - CUTOFF_MS;
     const errors: { phone: string; error: string }[] = [];
 
-    // ============ Sondagem ============
-    let winner: Variant | null = null;
-    let fallbackScan = false;
-    const probe = normPhones.slice(0, PROBE_PHONES);
+    // ============ Fase 1 — listar chats reais da instância ============
+    // Tenta POST /chat/find primeiro; se 404/405, cai para GET.
+    const phoneToChatId = new Map<string, string>();
+    let chatsListed = 0;
+    let listMode: 'post' | 'get' = 'post';
 
-    probeLoop:
-    for (const v of VARIANTS) {
-      for (const phone of probe) {
-        try {
-          const r = await callFind(apiBase, instToken, v.build(phone, 0));
-          console.log(`probe variant=${v.name} phone=${phone} status=${r.status} count=${r.list.length} body=${r.bodyPreview}`);
-          if (r.ok && r.list.length > 0) {
-            // confirma que veio mensagem do próprio telefone
-            const hit = r.list.some(m => {
-              const cid = pickChatIdFromMsg(m);
-              return cid ? chatIdToPhone(cid) === phone : true; // se não tem chatid no item, aceita
-            });
-            if (hit) {
-              winner = v;
-              break probeLoop;
-            }
-          }
-        } catch (err) {
-          console.warn(`probe variant=${v.name} phone=${phone} fetch error`, (err as Error).message);
+    for (let page = 0; page < CHAT_LIST_MAX_PAGES; page++) {
+      const offset = page * PAGE_SIZE;
+      let r: { ok: boolean; status: number; data: any; bodyPreview: string };
+
+      if (listMode === 'post') {
+        r = await callJson(`${apiBase}/chat/find`, {
+          method: 'POST',
+          headers: { token: instToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: PAGE_SIZE, offset, operator: 'AND' }),
+        });
+        if (page === 0 && (r.status === 404 || r.status === 405)) {
+          listMode = 'get';
+          r = await callJson(`${apiBase}/chat/find?limit=${PAGE_SIZE}&offset=${offset}`, {
+            method: 'GET',
+            headers: { token: instToken },
+          });
+        }
+      } else {
+        r = await callJson(`${apiBase}/chat/find?limit=${PAGE_SIZE}&offset=${offset}`, {
+          method: 'GET',
+          headers: { token: instToken },
+        });
+      }
+
+      if (page === 0) {
+        console.log(`chat/find mode=${listMode} status=${r.status} bodyPreview=${r.bodyPreview}`);
+      }
+      if (!r.ok) {
+        errors.push({ phone: '', error: `chat/find HTTP ${r.status}: ${r.bodyPreview}` });
+        break;
+      }
+      const list = extractList(r.data);
+      if (list.length === 0) break;
+
+      for (const c of list) {
+        const cid = pickChatId(c);
+        if (!cid || !isIndividualChat(cid)) continue;
+        chatsListed++;
+        const ph = chatIdToPhone(cid);
+        if (ph && phoneSet.has(ph) && !phoneToChatId.has(ph)) {
+          phoneToChatId.set(ph, cid);
         }
       }
+      if (list.length < PAGE_SIZE) break;
     }
 
-    // ============ Coleta ============
-    // msgsByChatPhone: phone normalizado -> lista de mensagens
+    console.log(`chats_listed=${chatsListed} phones_requested=${normPhones.length} phones_matched=${phoneToChatId.size}`);
+
+    // ============ Fase 2 — backfill por chat conhecido ============
+    const cutoffMs = Date.now() - CUTOFF_MS;
     const msgsByPhone = new Map<string, any[]>();
 
-    if (winner) {
-      console.log(`winner variant=${winner.name}`);
-      for (const phone of normPhones) {
-        const collected: any[] = [];
-        let stop = false;
-        for (let page = 0; page < MAX_PAGES_PER_CHAT && !stop; page++) {
-          try {
-            const r = await callFind(apiBase, instToken, winner.build(phone, page * PAGE_SIZE));
-            if (!r.ok) {
-              errors.push({ phone, error: `HTTP ${r.status} ${r.bodyPreview}` });
-              break;
-            }
-            if (r.list.length === 0) break;
-            let recent = false;
-            for (const m of r.list) {
-              const ts = msgTimestampMs(m);
-              if (ts >= cutoffMs) { collected.push(m); recent = true; }
-            }
-            if (!recent) break;
-            if (r.list.length < PAGE_SIZE) break;
-          } catch (err) {
-            errors.push({ phone, error: `fetch failed: ${(err as Error).message}` });
-            stop = true;
-          }
-        }
-        if (collected.length) msgsByPhone.set(phone, collected);
-      }
-    } else {
-      // Fallback: varredura geral, agrupar por chatid e filtrar pelos telefones pedidos
-      fallbackScan = true;
-      console.log('fallback_scan=true — sondagem não encontrou variante; varrendo /message/find sem filtro');
-      let pageEmpty = false;
-      for (let page = 0; page < SCAN_MAX_PAGES && !pageEmpty; page++) {
+    for (const [phone, chatid] of phoneToChatId.entries()) {
+      const collected: any[] = [];
+      let stop = false;
+      for (let page = 0; page < MAX_PAGES_PER_CHAT && !stop; page++) {
+        const offset = page * PAGE_SIZE;
         try {
-          const r = await callFind(apiBase, instToken, { limit: PAGE_SIZE, offset: page * PAGE_SIZE });
-          if (page === 0) console.log(`scan page0 status=${r.status} count=${r.list.length} body=${r.bodyPreview}`);
-          if (!r.ok) { errors.push({ phone: '', error: `scan HTTP ${r.status} ${r.bodyPreview}` }); break; }
-          if (r.list.length === 0) { pageEmpty = true; break; }
-          let pageHasRecent = false;
-          for (const m of r.list) {
+          const r = await callJson(`${apiBase}/message/find`, {
+            method: 'POST',
+            headers: { token: instToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatid, limit: PAGE_SIZE, offset }),
+          });
+          if (!r.ok) { errors.push({ phone, error: `message/find HTTP ${r.status}: ${r.bodyPreview}` }); break; }
+          const list = extractList(r.data);
+          if (list.length === 0) break;
+          let recent = false;
+          for (const m of list) {
             const ts = msgTimestampMs(m);
-            if (ts < cutoffMs) continue;
-            pageHasRecent = true;
-            const cid = pickChatIdFromMsg(m);
-            if (!cid) continue;
-            const ph = chatIdToPhone(cid);
-            if (!ph || !phoneSet.has(ph)) continue;
-            if (!msgsByPhone.has(ph)) msgsByPhone.set(ph, []);
-            msgsByPhone.get(ph)!.push(m);
+            if (ts >= cutoffMs) { collected.push(m); recent = true; }
           }
-          if (!pageHasRecent) break;
-          if (r.list.length < PAGE_SIZE) break;
+          if (!recent) break;
+          if (list.length < PAGE_SIZE) break;
         } catch (err) {
-          errors.push({ phone: '', error: `scan fetch failed: ${(err as Error).message}` });
-          break;
+          errors.push({ phone, error: `fetch failed: ${(err as Error).message}` });
+          stop = true;
         }
       }
+      if (collected.length) msgsByPhone.set(phone, collected);
     }
 
     // ============ Persistência ============
@@ -242,7 +224,7 @@ Deno.serve(async (req) => {
     for (const [phone, msgs] of msgsByPhone.entries()) {
       if (!msgs.length) continue;
       chatsFound++;
-      const chatid = `${phone}@s.whatsapp.net`;
+      const chatid = phoneToChatId.get(phone) || `${phone}@s.whatsapp.net`;
       const contactId = phoneToContactId.get(phone) ?? null;
 
       let lastMs = 0, lastInMs = 0, lastOutMs = 0;
@@ -355,12 +337,14 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       contacts_processed: normPhones.length,
+      phones_requested: normPhones.length,
+      phones_matched: phoneToChatId.size,
+      phones_without_chat: normPhones.length - phoneToChatId.size,
+      chats_listed: chatsListed,
       chats_found: chatsFound,
       messages_inserted: insertedCount,
       messages_skipped: skippedCount,
       errors,
-      winner_variant: winner?.name ?? null,
-      fallback_scan: fallbackScan,
     });
   } catch (err) {
     console.error('uazapi-history-sync-contacts fatal:', err);
