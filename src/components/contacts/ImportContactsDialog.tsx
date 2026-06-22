@@ -209,6 +209,10 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [conflicts, setConflicts] = useState<OppConflict[]>([]);
+  const [uazInstances, setUazInstances] = useState<Array<{ id: string; display_name: string | null; instance_name: string | null }>>([]);
+  const [syncHistory, setSyncHistory] = useState(true);
+  const [historyInstanceId, setHistoryInstanceId] = useState<string>('');
+  const [historyProgress, setHistoryProgress] = useState<{ done: number; total: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
 
