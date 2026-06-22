@@ -482,7 +482,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       const withoutPhone = batch.filter(b => !b.contact.phone);
       const bucketToId = new Map<Bucket, string>();
 
-      // ----- contacts with phone: lookup + upsert by id -----
+      // ----- contacts with phone: lookup, then split insert/update -----
       try {
         if (withPhone.length > 0) {
           const phones = withPhone.map(b => b.contact.phone);
@@ -494,34 +494,53 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           if (lookupErr) throw lookupErr;
           const existingByPhone = new Map((existingRows || []).map((r: any) => [r.phone, r]));
 
-          const payload = withPhone.map(b => {
+          const toInsert: any[] = [];
+          const toInsertBuckets: Bucket[] = [];
+          const updateOps: { bucket: Bucket; id: string; payload: any }[] = [];
+
+          for (const b of withPhone) {
             const ex: any = existingByPhone.get(b.contact.phone);
-            const p: any = { ...b.contact, tags: b.contact.tags || [] };
             if (ex) {
-              p.id = ex.id;
-              p.tags = mergeTagsList(ex.tags || [], p.tags);
-              if (b.hasCustom) p.custom_fields = { ...(ex.custom_fields || {}), ...b.custom };
-            } else if (b.hasCustom) {
-              p.custom_fields = b.custom;
+              const payload: any = { ...b.contact, tags: mergeTagsList(ex.tags || [], b.contact.tags || []) };
+              delete payload.tenant_id;
+              if (b.hasCustom) payload.custom_fields = { ...(ex.custom_fields || {}), ...b.custom };
+              updateOps.push({ bucket: b, id: ex.id, payload });
+              bucketToId.set(b, ex.id);
+            } else {
+              const payload: any = { ...b.contact, tags: b.contact.tags || [] };
+              if (b.hasCustom) payload.custom_fields = b.custom;
+              toInsert.push(payload);
+              toInsertBuckets.push(b);
             }
-            return p;
-          });
+          }
 
-          const { data: upserted, error } = await supabase
-            .from('contacts')
-            .upsert(payload, { onConflict: 'tenant_id,phone' })
-            .select('id, phone');
-          if (error) throw error;
+          // Insert news in one round-trip
+          if (toInsert.length > 0) {
+            const { data: inserted, error: insErr } = await supabase
+              .from('contacts')
+              .insert(toInsert)
+              .select('id, phone');
+            if (insErr) throw insErr;
+            const idByPhone = new Map((inserted || []).map((r: any) => [r.phone, r.id]));
+            toInsertBuckets.forEach(b => {
+              const id = idByPhone.get(b.contact.phone);
+              if (id) bucketToId.set(b, id);
+            });
+            created += toInsert.length;
+          }
 
-          const updatedInBatch = existingByPhone.size;
-          updated += updatedInBatch;
-          created += (withPhone.length - updatedInBatch);
-
-          const idByPhone = new Map((upserted || []).map((r: any) => [r.phone, r.id]));
-          withPhone.forEach(b => {
-            const id = idByPhone.get(b.contact.phone);
-            if (id) bucketToId.set(b, id);
-          });
+          // Updates per-row (Postgres-REST doesn't batch heterogeneous updates)
+          for (const op of updateOps) {
+            const { error: updErr } = await supabase.from('contacts').update(op.payload).eq('id', op.id);
+            if (updErr) {
+              op.bucket.rowIdxs.forEach(rowIdx => {
+                errors.push({ row: rowIdx, reason: `Atualização falhou: ${updErr.message}`, data: rows[rowIdx - 2] || {} });
+              });
+              bucketToId.delete(op.bucket);
+            } else {
+              updated++;
+            }
+          }
         }
       } catch (e: any) {
         console.error('[ImportContacts] batch', bi + 1, 'contacts(with phone) failed', e);
@@ -529,6 +548,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           errors.push({ row: rowIdx, reason: `Lote ${bi + 1}: ${e?.message || e}`, data: rows[rowIdx - 2] || {} });
         }));
       }
+
 
       // ----- contacts without phone: lookup by email, else insert -----
       for (const b of withoutPhone) {
