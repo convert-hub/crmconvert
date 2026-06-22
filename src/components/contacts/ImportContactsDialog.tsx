@@ -739,6 +739,39 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
 
+    // Backfill de histórico WhatsApp (30 dias) para os telefones importados
+    if (syncHistory && historyInstanceId && !cancelRef.current) {
+      const phoneCol = Object.entries(mapping).find(([, v]) => v === 'phone')?.[0];
+      if (phoneCol) {
+        const phones: string[] = [];
+        for (const row of rows) {
+          const v = row[phoneCol];
+          if (!v) continue;
+          const n = normalizeBrazilPhone(v);
+          if (n) phones.push(n);
+        }
+        if (phones.length > 0) {
+          setHistoryProgress({ done: 0, total: phones.length });
+          setProgressDetail(`Buscando histórico no WhatsApp: 0/${phones.length}`);
+          try {
+            const res = await syncWhatsappHistoryForPhones(tenantId, historyInstanceId, phones, (done, total) => {
+              setHistoryProgress({ done, total });
+              setProgressDetail(`Buscando histórico no WhatsApp: ${done}/${total}`);
+            });
+            const histMsg = `${res.chats_found} conversa(s), ${res.messages_inserted} mensagem(ns)`;
+            if (res.errors.length > 0) toast.warning(`Histórico parcial: ${histMsg} · ${res.errors.length} falha(s)`);
+            else toast.success(`Histórico importado: ${histMsg}`);
+            onImported();
+          } catch (e) {
+            console.error('[ImportContacts] history sync failed', e);
+            toast.error('Falha ao buscar histórico do WhatsApp');
+          } finally {
+            setHistoryProgress(null);
+          }
+        }
+      }
+    }
+
     if (conflictsAcc.length > 0) setStep('conflicts');
   };
 
