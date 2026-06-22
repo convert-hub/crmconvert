@@ -196,15 +196,32 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState(0);
+  const [progressDetail, setProgressDetail] = useState('');
   const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [conflicts, setConflicts] = useState<OppConflict[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
 
   const hasPipelineStageMapping = Object.values(mapping).includes('pipeline_stage');
   const selectedPipelineName = pipelines.find(p => p.id === selectedPipeline)?.name || '';
+
+  const EMPTY_PHONE_TOKENS = new Set(['', '-', '—', '--', '()', 'n/a', 'na', 'sem', 'sem telefone', 'nao informado', 'não informado', 'nao tem', 'não tem', '.', '0']);
+
+  const mergeTagsList = (a: string[] = [], b: string[] = []): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    [...a, ...b].forEach(t => {
+      const k = (t ?? '').trim();
+      if (!k) return;
+      const lc = k.toLowerCase();
+      if (seen.has(lc)) return;
+      seen.add(lc); out.push(k);
+    });
+    return out;
+  };
 
   useEffect(() => {
     if (!open || !tenantId) return;
@@ -322,218 +339,310 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     const stageCol = Object.entries(mapping).find(([, v]) => v === 'pipeline_stage')?.[0];
     if (stageCol && !selectedPipeline) { toast.error('Selecione o pipeline'); return; }
 
+    cancelRef.current = false;
     setStep('importing');
     setProgress(0);
-    let created = 0, updated = 0;
-    let oppsCreated = 0, oppsIgnored = 0, oppsUpdated = 0, stageErrors = 0;
-    const errors: ImportError[] = [];
-    const seenByPhone = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
-    const seenByEmail = new Map<string, { id: string; tags: string[]; custom_fields: Record<string, unknown> }>();
-    const allTagsUsed = new Set<string>();
-    // contact_id -> latest known opportunity in selected pipeline (DB or just-created this run)
-    const createdOrSeenOpps = new Map<string, { opportunityId: string; stageId: string }>();
-    const conflictsAcc: OppConflict[] = [];
-    const conflictByOppId = new Map<string, OppConflict>();
+    setProgressDetail('Preparando linhas…');
+    const t0 = Date.now();
+    console.log('[ImportContacts] start', { rows: rows.length, pipeline: selectedPipeline, batchSize: 200 });
 
+    const errors: ImportError[] = [];
+    const allTagsUsed = new Set<string>();
     const stagesByNormName = new Map(stages.map(s => [normKey(s.name), s]));
 
-    const mergeTags = (a: string[] = [], b: string[] = []) => {
-      const out: string[] = [];
-      const seen = new Set<string>();
-      [...a, ...b].forEach(t => {
-        const k = t.trim();
-        if (!k) return;
-        const lc = k.toLowerCase();
-        if (seen.has(lc)) return;
-        seen.add(lc);
-        out.push(k);
-      });
-      return out;
-    };
-
+    // ===== PASS 1: parse + validate every row in memory =====
+    type Prepared = { rowIdx: number; contact: any; rawStage: string; custom: Record<string, unknown>; hasCustom: boolean };
+    const prepared: Prepared[] = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      try {
-        const c: any = { tenant_id: tenantId };
-        let rawPhone = '';
-        let rawBirth = '';
-        let rawStage = '';
-        let birthInvalid = false;
-        const customFields: Record<string, unknown> = {};
-        let customError: string | null = null;
+      const c: any = { tenant_id: tenantId };
+      let rawPhone = '', rawBirth = '', rawStage = '';
+      let birthInvalid = false;
+      const customFields: Record<string, unknown> = {};
+      let customError: string | null = null;
 
-        for (const [csvCol, field] of Object.entries(mapping)) {
-          const val = row[csvCol];
-          if (field === 'skip' || !val) continue;
-          if (field.startsWith('custom:')) {
-            const key = field.slice(7);
-            const def = customDefs.find(d => d.key === key);
-            if (!def) continue;
-            const res = coerceCustom(def, val);
-            if (res && res.ok === false) { customError = res.reason; break; }
-            if (res && res.ok === true && res.value !== undefined) customFields[key] = res.value;
-          } else if (field === 'phone') { rawPhone = val; c.phone = normalizeBrazilPhone(val); }
-          else if (field === 'tags') c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
-          else if (field === 'birth_date') {
-            rawBirth = val;
-            const parsed = parseDateBR(val);
-            if (parsed) c.birth_date = parsed;
-            else birthInvalid = true;
+      for (const [csvCol, field] of Object.entries(mapping)) {
+        const val = row[csvCol];
+        if (field === 'skip' || !val) continue;
+        if (field.startsWith('custom:')) {
+          const key = field.slice(7);
+          const def = customDefs.find(d => d.key === key);
+          if (!def) continue;
+          const res = coerceCustom(def, val);
+          if (res && res.ok === false) { customError = res.reason; break; }
+          if (res && res.ok === true && res.value !== undefined) customFields[key] = res.value;
+        } else if (field === 'phone') {
+          rawPhone = val;
+          const cleaned = val.trim().toLowerCase();
+          if (!EMPTY_PHONE_TOKENS.has(cleaned)) {
+            const norm = normalizeBrazilPhone(val);
+            if (norm) c.phone = norm;
           }
-          else if (field === 'pipeline_stage') { rawStage = val; }
-          else c[field] = val;
-        }
-
-        if (customError) {
-          errors.push({ row: i + 2, reason: customError, data: row });
-          continue;
-        }
-        if (rawPhone && !c.phone) {
-          errors.push({ row: i + 2, reason: `Telefone inválido: "${rawPhone}"`, data: row });
-          continue;
-        }
-        if (birthInvalid) {
-          errors.push({ row: i + 2, reason: `Data de nascimento inválida: "${rawBirth}" (use DD/MM/AAAA)`, data: row });
-          continue;
-        }
-        if (!c.name) c.name = 'Sem nome';
-        if (!c.status) c.status = 'lead';
-        (c.tags || []).forEach((t: string) => allTagsUsed.add(t));
-        const hasCustom = Object.keys(customFields).length > 0;
-
-        let existing: { id: string; tags: string[]; custom_fields: Record<string, unknown> } | null = null;
-        if (c.phone && seenByPhone.has(c.phone)) existing = seenByPhone.get(c.phone)!;
-        else if (c.email && seenByEmail.has(c.email)) existing = seenByEmail.get(c.email)!;
-
-        if (!existing && c.phone) {
-          const { data } = await supabase.from('contacts').select('id, tags, custom_fields').eq('tenant_id', tenantId).eq('phone', c.phone).limit(1);
-          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [], custom_fields: (data[0].custom_fields as Record<string, unknown>) || {} };
-        }
-        if (!existing && c.email) {
-          const { data } = await supabase.from('contacts').select('id, tags, custom_fields').eq('tenant_id', tenantId).eq('email', c.email).limit(1);
-          if (data && data.length > 0) existing = { id: data[0].id, tags: (data[0].tags as string[]) || [], custom_fields: (data[0].custom_fields as Record<string, unknown>) || {} };
-        }
-
-        let contactId: string;
-        if (existing) {
-          const mergedTags = mergeTags(existing.tags, c.tags || []);
-          const mergedCustom = hasCustom ? { ...existing.custom_fields, ...customFields } : existing.custom_fields;
-          const { tenant_id, tags: _t, ...rest } = c;
-          const updateData: any = { ...rest, tags: mergedTags };
-          if (hasCustom) updateData.custom_fields = mergedCustom;
-          const { error } = await supabase.from('contacts').update(updateData).eq('id', existing.id);
-          if (error) throw error;
-          updated++;
-          existing.tags = mergedTags;
-          existing.custom_fields = mergedCustom;
-          if (c.phone) seenByPhone.set(c.phone, existing);
-          if (c.email) seenByEmail.set(c.email, existing);
-          contactId = existing.id;
+        } else if (field === 'tags') {
+          c.tags = val.split(/[;,]/).map((t: string) => t.trim()).filter(Boolean);
+        } else if (field === 'birth_date') {
+          rawBirth = val;
+          const parsed = parseDateBR(val);
+          if (parsed) c.birth_date = parsed;
+          else birthInvalid = true;
+        } else if (field === 'pipeline_stage') {
+          rawStage = val;
         } else {
-          if (hasCustom) c.custom_fields = customFields;
-          const { data: ins, error } = await supabase.from('contacts').insert(c).select('id').single();
+          c[field] = val;
+        }
+      }
+
+      if (customError) { errors.push({ row: i + 2, reason: customError, data: row }); continue; }
+      if (rawPhone && !c.phone) {
+        const cleaned = rawPhone.trim().toLowerCase();
+        if (!EMPTY_PHONE_TOKENS.has(cleaned)) {
+          errors.push({ row: i + 2, reason: `Telefone com menos de 8 dígitos: "${rawPhone}"`, data: row });
+          continue;
+        }
+      }
+      if (birthInvalid) { errors.push({ row: i + 2, reason: `Data nascimento inválida: "${rawBirth}" (use DD/MM/AAAA)`, data: row }); continue; }
+      if (!c.name) c.name = 'Sem nome';
+      if (!c.status) c.status = 'lead';
+      (c.tags || []).forEach((t: string) => allTagsUsed.add(t));
+
+      prepared.push({
+        rowIdx: i + 2,
+        contact: c,
+        rawStage,
+        custom: customFields,
+        hasCustom: Object.keys(customFields).length > 0,
+      });
+    }
+
+    // ===== PASS 2: in-memory dedup by phone (then email) =====
+    type Bucket = { contact: any; custom: Record<string, unknown>; hasCustom: boolean; rawStages: string[]; rowIdxs: number[] };
+    const byPhone = new Map<string, Bucket>();
+    const byEmail = new Map<string, Bucket>();
+    const noKey: Bucket[] = [];
+
+    const mergeInto = (b: Bucket, p: Prepared) => {
+      b.contact.tags = mergeTagsList(b.contact.tags || [], p.contact.tags || []);
+      if (p.hasCustom) { b.custom = { ...b.custom, ...p.custom }; b.hasCustom = true; }
+      if (p.rawStage) b.rawStages.push(p.rawStage);
+      b.rowIdxs.push(p.rowIdx);
+      // fill blanks from later rows (e.g. email shows up later)
+      ['email', 'birth_date', 'city', 'state', 'source', 'notes'].forEach(f => {
+        if (!b.contact[f] && p.contact[f]) b.contact[f] = p.contact[f];
+      });
+    };
+
+    for (const p of prepared) {
+      const phone = p.contact.phone;
+      const email = p.contact.email;
+      let bucket: Bucket | undefined;
+      if (phone) bucket = byPhone.get(phone);
+      if (!bucket && email) bucket = byEmail.get(email);
+      if (bucket) { mergeInto(bucket, p); continue; }
+      const b: Bucket = {
+        contact: { ...p.contact, tags: p.contact.tags || [] },
+        custom: { ...p.custom },
+        hasCustom: p.hasCustom,
+        rawStages: p.rawStage ? [p.rawStage] : [],
+        rowIdxs: [p.rowIdx],
+      };
+      if (phone) byPhone.set(phone, b);
+      else if (email) byEmail.set(email, b);
+      else noKey.push(b);
+    }
+
+    const allBuckets = [...byPhone.values(), ...byEmail.values(), ...noKey];
+    console.log('[ImportContacts] prepared', {
+      rowsTotal: rows.length, rowsValid: prepared.length,
+      uniqueContacts: allBuckets.length, preErrors: errors.length,
+    });
+
+    // ===== PASS 3: batched upsert =====
+    const BATCH_SIZE = 200;
+    let created = 0, updated = 0;
+    let oppsCreated = 0, oppsIgnored = 0, oppsUpdated = 0, stageErrors = 0;
+    const conflictsAcc: OppConflict[] = [];
+    const conflictByOppId = new Map<string, OppConflict>();
+    const totalBatches = Math.max(1, Math.ceil(allBuckets.length / BATCH_SIZE));
+
+    for (let bi = 0; bi < totalBatches; bi++) {
+      if (cancelRef.current) { console.warn('[ImportContacts] cancelled at batch', bi + 1); break; }
+      const batch = allBuckets.slice(bi * BATCH_SIZE, (bi + 1) * BATCH_SIZE);
+      const tb = Date.now();
+      const processedSoFar = bi * BATCH_SIZE;
+      setProgressDetail(`Lote ${bi + 1}/${totalBatches} — ${processedSoFar}/${allBuckets.length} contatos únicos`);
+
+      const withPhone = batch.filter(b => b.contact.phone);
+      const withoutPhone = batch.filter(b => !b.contact.phone);
+      const bucketToId = new Map<Bucket, string>();
+
+      // ----- contacts with phone: lookup + upsert by id -----
+      try {
+        if (withPhone.length > 0) {
+          const phones = withPhone.map(b => b.contact.phone);
+          const { data: existingRows, error: lookupErr } = await supabase
+            .from('contacts')
+            .select('id, phone, tags, custom_fields')
+            .eq('tenant_id', tenantId)
+            .in('phone', phones);
+          if (lookupErr) throw lookupErr;
+          const existingByPhone = new Map((existingRows || []).map((r: any) => [r.phone, r]));
+
+          const payload = withPhone.map(b => {
+            const ex: any = existingByPhone.get(b.contact.phone);
+            const p: any = { ...b.contact, tags: b.contact.tags || [] };
+            if (ex) {
+              p.id = ex.id;
+              p.tags = mergeTagsList(ex.tags || [], p.tags);
+              if (b.hasCustom) p.custom_fields = { ...(ex.custom_fields || {}), ...b.custom };
+            } else if (b.hasCustom) {
+              p.custom_fields = b.custom;
+            }
+            return p;
+          });
+
+          const { data: upserted, error } = await supabase
+            .from('contacts')
+            .upsert(payload, { onConflict: 'tenant_id,phone' })
+            .select('id, phone');
           if (error) throw error;
-          created++;
-          const entry = { id: ins!.id, tags: c.tags || [], custom_fields: customFields };
-          if (c.phone) seenByPhone.set(c.phone, entry);
-          if (c.email) seenByEmail.set(c.email, entry);
-          contactId = ins!.id;
+
+          const updatedInBatch = existingByPhone.size;
+          updated += updatedInBatch;
+          created += (withPhone.length - updatedInBatch);
+
+          const idByPhone = new Map((upserted || []).map((r: any) => [r.phone, r.id]));
+          withPhone.forEach(b => {
+            const id = idByPhone.get(b.contact.phone);
+            if (id) bucketToId.set(b, id);
+          });
+        }
+      } catch (e: any) {
+        console.error('[ImportContacts] batch', bi + 1, 'contacts(with phone) failed', e);
+        withPhone.forEach(b => b.rowIdxs.forEach(rowIdx => {
+          errors.push({ row: rowIdx, reason: `Lote ${bi + 1}: ${e?.message || e}`, data: rows[rowIdx - 2] || {} });
+        }));
+      }
+
+      // ----- contacts without phone: lookup by email, else insert -----
+      for (const b of withoutPhone) {
+        try {
+          let id: string | undefined;
+          if (b.contact.email) {
+            const { data } = await supabase.from('contacts').select('id, tags, custom_fields')
+              .eq('tenant_id', tenantId).eq('email', b.contact.email).limit(1);
+            if (data && data.length) {
+              const ex: any = data[0];
+              id = ex.id;
+              const updateData: any = { ...b.contact, tags: mergeTagsList(ex.tags || [], b.contact.tags || []) };
+              delete updateData.tenant_id;
+              if (b.hasCustom) updateData.custom_fields = { ...(ex.custom_fields || {}), ...b.custom };
+              const { error } = await supabase.from('contacts').update(updateData).eq('id', id);
+              if (error) throw error;
+              updated++;
+            }
+          }
+          if (!id) {
+            const payload: any = { ...b.contact, tags: b.contact.tags || [] };
+            if (b.hasCustom) payload.custom_fields = b.custom;
+            const { data: ins, error } = await supabase.from('contacts').insert(payload).select('id').single();
+            if (error) throw error;
+            id = ins!.id;
+            created++;
+          }
+          bucketToId.set(b, id);
+        } catch (e: any) {
+          console.error('[ImportContacts] contact(no phone) failed', e);
+          b.rowIdxs.forEach(rowIdx => {
+            errors.push({ row: rowIdx, reason: e?.message || String(e), data: rows[rowIdx - 2] || {} });
+          });
+        }
+      }
+
+      // ----- opportunities batch -----
+      if (selectedPipeline && stages.length > 0) {
+        type OppReq = { bucket: Bucket; contactId: string; matched: Stage };
+        const oppReqs: OppReq[] = [];
+        for (const b of batch) {
+          const contactId = bucketToId.get(b);
+          if (!contactId) continue;
+          const uniqueStages = Array.from(new Set(b.rawStages));
+          if (uniqueStages.length === 0) continue;
+          if (uniqueStages.length > 1) {
+            errors.push({ row: b.rowIdxs[0], reason: `Contato "${b.contact.name}" tem etapas diferentes em ${b.rowIdxs.length} linhas: ${uniqueStages.join(', ')}`, data: rows[b.rowIdxs[0] - 2] || {} });
+            continue;
+          }
+          const matched = stagesByNormName.get(normKey(uniqueStages[0]));
+          if (!matched) { stageErrors++; continue; }
+          oppReqs.push({ bucket: b, contactId, matched });
         }
 
-        // Opportunity handling
-        if (stageCol && rawStage) {
-          const matchedStage = stagesByNormName.get(normKey(rawStage));
-          if (!matchedStage) {
-            // Não bloqueia o contato — apenas registra o aviso de etapa.
-            stageErrors++;
-          } else {
-            // Check in-memory cache first
-            let cached = createdOrSeenOpps.get(contactId);
-            if (!cached) {
-              const { data: existingOpp } = await supabase
-                .from('opportunities')
-                .select('id, stage_id')
-                .eq('tenant_id', tenantId)
-                .eq('contact_id', contactId)
-                .eq('pipeline_id', selectedPipeline)
-                .eq('status', 'open')
-                .limit(1);
-              if (existingOpp && existingOpp.length > 0) {
-                cached = { opportunityId: existingOpp[0].id, stageId: existingOpp[0].stage_id };
-                createdOrSeenOpps.set(contactId, cached);
-              }
-            }
+        if (oppReqs.length > 0) {
+          try {
+            const contactIds = oppReqs.map(r => r.contactId);
+            const { data: existingOpps } = await supabase.from('opportunities')
+              .select('id, contact_id, stage_id')
+              .eq('tenant_id', tenantId)
+              .eq('pipeline_id', selectedPipeline)
+              .eq('status', 'open')
+              .in('contact_id', contactIds);
+            const existingByContact = new Map((existingOpps || []).map((o: any) => [o.contact_id, o]));
 
-            if (!cached) {
-              const { data: insOpp, error: oppErr } = await supabase
-                .from('opportunities')
-                .insert({
+            const toInsert: any[] = [];
+            for (const req of oppReqs) {
+              const ex: any = existingByContact.get(req.contactId);
+              if (!ex) {
+                toInsert.push({
                   tenant_id: tenantId,
-                  contact_id: contactId,
+                  contact_id: req.contactId,
                   pipeline_id: selectedPipeline,
-                  stage_id: matchedStage.id,
-                  title: c.name,
+                  stage_id: req.matched.id,
+                  title: req.bucket.contact.name,
                   value: 0,
                   priority: 'medium',
                   status: 'open',
-                })
-                .select('id')
-                .single();
-              if (oppErr) throw oppErr;
-              createdOrSeenOpps.set(contactId, { opportunityId: insOpp!.id, stageId: matchedStage.id });
-              oppsCreated++;
-            } else if (cached.stageId === matchedStage.id) {
-              oppsIgnored++;
-            } else {
-              // Conflict
-              const existingConflict = conflictByOppId.get(cached.opportunityId);
-              if (!existingConflict) {
-                const currentStageName = stages.find(s => s.id === cached!.stageId)?.name || '(desconhecida)';
-                const conflict: OppConflict = {
-                  opportunityId: cached.opportunityId,
-                  contactName: c.name,
-                  currentStageId: cached.stageId,
+                });
+              } else if (ex.stage_id === req.matched.id) {
+                oppsIgnored++;
+              } else if (!conflictByOppId.has(ex.id)) {
+                const currentStageName = stages.find(s => s.id === ex.stage_id)?.name || '(desconhecida)';
+                const cf: OppConflict = {
+                  opportunityId: ex.id,
+                  contactName: req.bucket.contact.name,
+                  currentStageId: ex.stage_id,
                   currentStageName,
-                  targetStageId: matchedStage.id,
-                  targetStageName: matchedStage.name,
+                  targetStageId: req.matched.id,
+                  targetStageName: req.matched.name,
                   selected: true,
                 };
-                conflictByOppId.set(cached.opportunityId, conflict);
-                conflictsAcc.push(conflict);
-              } else if (existingConflict.targetStageId === matchedStage.id) {
-                oppsIgnored++;
-              } else {
-                errors.push({
-                  row: i + 2,
-                  reason: `Conflito ambíguo: contato "${c.name}" aparece com etapas diferentes no CSV ("${existingConflict.targetStageName}" e "${matchedStage.name}")`,
-                  data: row,
-                });
+                conflictByOppId.set(ex.id, cf);
+                conflictsAcc.push(cf);
               }
             }
+
+            if (toInsert.length > 0) {
+              const { error: oppErr } = await supabase.from('opportunities').insert(toInsert);
+              if (oppErr) throw oppErr;
+              oppsCreated += toInsert.length;
+            }
+          } catch (e: any) {
+            console.error('[ImportContacts] batch', bi + 1, 'opps failed', e);
+            // não falha contatos do batch — apenas registra
+            oppReqs.forEach(r => errors.push({
+              row: r.bucket.rowIdxs[0],
+              reason: `Oportunidade não criada: ${e?.message || e}`,
+              data: rows[r.bucket.rowIdxs[0] - 2] || {},
+            }));
           }
         }
-      } catch (e: any) {
-        console.error('[ImportContacts] row failed', i + 2, e);
-        errors.push({ row: i + 2, reason: e?.message || String(e), data: row });
       }
-      setProgress(Math.round(((i + 1) / rows.length) * 100));
-    }
 
-    // Resolve current stage names for conflicts whose stage isn't in the loaded `stages` list
-    // (shouldn't happen since opp is in selectedPipeline, but defensive)
-    const missingStageIds = conflictsAcc.filter(c => c.currentStageName === '(desconhecida)').map(c => c.currentStageId);
-    if (missingStageIds.length > 0) {
-      const { data: extra } = await supabase.from('stages').select('id,name').in('id', missingStageIds).eq('pipeline_id', selectedPipeline);
-      const nameById = new Map((extra || []).map((s: any) => [s.id, s.name]));
-      conflictsAcc.forEach(c => {
-        if (c.currentStageName === '(desconhecida)' && nameById.has(c.currentStageId)) {
-          c.currentStageName = nameById.get(c.currentStageId)!;
-        }
-      });
+      const progressPct = Math.round(((bi + 1) / totalBatches) * 100);
+      setProgress(progressPct);
+      console.log('[ImportContacts] batch', bi + 1, '/', totalBatches, 'done in', Date.now() - tb, 'ms', { created, updated, errors: errors.length });
     }
 
     // Auto-register new tags
-    if (allTagsUsed.size > 0) {
+    if (allTagsUsed.size > 0 && !cancelRef.current) {
       try {
         const { data: tData } = await supabase.from('tenants').select('settings').eq('id', tenantId).single();
         const settings = (tData?.settings && typeof tData.settings === 'object' && !Array.isArray(tData.settings))
@@ -542,9 +651,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         const existingLc = new Set(existing.map(t => t.name.toLowerCase()));
         const toAdd: Array<{ name: string; color: string }> = [];
         allTagsUsed.forEach(name => {
-          if (!existingLc.has(name.toLowerCase())) {
-            toAdd.push({ name, color: PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)] });
-          }
+          if (!existingLc.has(name.toLowerCase())) toAdd.push({ name, color: PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)] });
         });
         if (toAdd.length > 0) {
           await supabase.from('tenants').update({ settings: { ...settings, tags: [...existing, ...toAdd] } as any }).eq('id', tenantId);
@@ -554,22 +661,23 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       }
     }
 
-    const result: ImportResult = {
-      created, updated, errors,
-      oppsCreated, oppsIgnored,
-      oppsConflicts: conflictsAcc.length,
-      oppsUpdated, stageErrors,
-    };
+    const totalMs = Date.now() - t0;
+    console.log('[ImportContacts] complete', { created, updated, errors: errors.length, ms: totalMs, cancelled: cancelRef.current });
+
+    const result: ImportResult = { created, updated, errors, oppsCreated, oppsIgnored, oppsConflicts: conflictsAcc.length, oppsUpdated, stageErrors };
     setImportResult(result);
     setConflicts(conflictsAcc);
+    setProgressDetail(`Concluído em ${(totalMs / 1000).toFixed(1)}s`);
 
     const msg = `${created} criados, ${updated} atualizados${errors.length ? `, ${errors.length} com erro` : ''}`;
-    if (errors.length === 0) toast.success(`Importação concluída: ${msg}`);
+    if (cancelRef.current) toast.warning(`Importação cancelada: ${msg}`);
+    else if (errors.length === 0) toast.success(`Importação concluída em ${(totalMs / 1000).toFixed(1)}s: ${msg}`);
     else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
 
     if (conflictsAcc.length > 0) setStep('conflicts');
   };
+
 
   const applyConflicts = async () => {
     const toApply = conflicts.filter(c => c.selected);
@@ -610,15 +718,44 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     setMapping({});
     setImportResult(null);
     setProgress(0);
+    setProgressDetail('');
     setSelectedPipeline('');
     setStages([]);
     setConflicts([]);
+    cancelRef.current = false;
   };
 
   const handleClose = (o: boolean) => {
+    if (!o && step === 'importing' && !importResult) {
+      // protege contra fechamento acidental durante importação
+      const ok = window.confirm('A importação está em andamento. Cancelar e fechar?');
+      if (!ok) return;
+      cancelRef.current = true;
+    }
     if (!o) reset();
     onOpenChange(o);
   };
+
+  // Agrupa erros por motivo (top categorias) para visão rápida
+  const errorGroups = useMemo(() => {
+    if (!importResult?.errors.length) return [] as Array<{ reason: string; count: number }>;
+    const normalizeReason = (r: string) => r
+      .replace(/"[^"]*"/g, '"…"')                     // collapse quoted values
+      .replace(/\b[0-9a-f]{8}-[0-9a-f-]+\b/gi, '<id>') // collapse uuids
+      .replace(/\d+/g, 'N')                            // collapse numbers
+      .slice(0, 120);
+    const counts = new Map<string, number>();
+    importResult.errors.forEach(e => {
+      const k = normalizeReason(e.reason);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [importResult]);
+
+
 
   // Unique stage values from CSV column mapped to pipeline_stage, with match status vs. pipeline stages
   const stageCsvCol = useMemo(
@@ -881,10 +1018,24 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                   )}
                 </div>
 
+                {errorGroups.length > 0 && (
+                  <div className="space-y-1.5 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                    <p className="text-xs font-medium text-foreground">Top motivos de falha:</p>
+                    <div className="space-y-1">
+                      {errorGroups.map((g, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-[11px]">
+                          <span className="font-mono text-destructive w-12 text-right">{g.count}×</span>
+                          <span className="flex-1 text-muted-foreground truncate" title={g.reason}>{g.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {importResult.errors.length > 0 && (
                   <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-foreground">Linhas com falha (mostrando até 20):</p>
+                      <p className="text-xs font-medium text-foreground">Linhas com falha (até 20):</p>
                       <Button variant="ghost" size="sm" onClick={downloadErrorsCsv} className="h-7 text-xs">
                         <Download className="h-3 w-3 mr-1" /> Baixar CSV completo
                       </Button>
@@ -907,11 +1058,19 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             ) : (
               <div className="text-center space-y-3">
                 <div className="h-8 w-8 mx-auto border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-muted-foreground">Importando contatos... {progress}%</p>
+                <p className="text-sm font-medium text-foreground">Importando contatos… {progress}%</p>
+                {progressDetail && <p className="text-xs text-muted-foreground">{progressDetail}</p>}
+                <div className="pt-2">
+                  <Button variant="outline" size="sm" onClick={() => { cancelRef.current = true; }} className="h-8 text-xs">
+                    Cancelar importação
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground/70">Não feche esta janela até a importação concluir.</p>
               </div>
             )}
           </div>
         )}
+
       </DialogContent>
     </Dialog>
   );

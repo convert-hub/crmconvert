@@ -1,54 +1,77 @@
-## Diagnóstico forense
+## Objetivo
 
-A planilha do print evidencia **3 falhas combinadas**:
+Importação de 2.000+ linhas precisa **terminar sempre**, mesmo com re-renders, perda de conexão momentânea ou aba em background. Reduzir 8 mil requests serializados para ~20 batches paralelizáveis.
 
-### 1. Encoding errado (raiz dos "nomes de coluna estranhos")
-O arquivo está salvo em **Windows-1252 / Latin-1**, não UTF-8. Aparecem `ComentÃ¡rios`, `Ãšltima Atividade`, `AraÃºjo`, `NÃ£o`, `MunicÃ­pio`. O importador atual força `reader.readAsText(file, 'UTF-8')` em `ImportContactsDialog.tsx`, então todos os acentos viram mojibake — inclusive dentro dos valores de etapa (`MunicÃ­pio` em vez de `Município`), o que faz **0% das etapas baterem** com o pipeline.
+## Diagnóstico confirmado
 
-### 2. Coluna "Status (Etapa)" mapeada como pipeline, sem tolerância
-O auto-mapeamento (`guessMapping`) testa `^status` antes de `^etapa`, então `Status (Etapa)` cai em `status` (errado). Quando o usuário corrige para `pipeline_stage`, a comparação é exata por `normKey` — qualquer divergência (acento mojibake, espaço, parêntese) gera o erro *"Etapa X não corresponde a nenhuma etapa do pipeline"* para **todas as 2000 linhas**.
+- 119/124 contatos criados (5% do total), 0 atualizados, **sem mensagem de erro**, tela resetou sozinha
+- Causa: loop sequencial 1-linha-por-vez com 3-4 awaits por linha. Componente desmontou (Dialog perdeu state) ou request ficou pendente indefinidamente
+- Bug secundário latente: `insert` simples (não upsert) numa tabela com unique `(tenant_id, phone)` + trigger `tg_contacts_normalize_phone` → race condition cliente↔servidor em duplicatas
 
-### 3. Arquivo é CSV salvo com extensão `.xlsx`
-O print mostra "uma célula por linha" (tudo concentrado na coluna A) — o Excel abriu CSV bruto. O importador hoje só lê CSV via `FileReader.readAsText`; se o usuário enviar um `.xlsx` real (binário), o parser quebra silenciosamente.
+## Mudanças (todas em `src/components/contacts/ImportContactsDialog.tsx`)
 
----
+### 1. Batching com upsert (núcleo do fix)
 
-## Plano de correção
+Substituir o loop atual por processamento em lotes de **200 linhas**:
 
-### A. Detecção automática de encoding (`ImportContactsDialog.tsx`)
-- Substituir `readAsText(file, 'UTF-8')` por `readAsArrayBuffer` + tentativa em UTF-8 e fallback para **Windows-1252** (heurística: se aparecer `Ã`/`Â` em headers ou primeiras 50 linhas, redecodificar).
-- Aplica a headers **e** valores — corrige `MunicÃ­pio` → `Município` antes do match de etapa.
+```text
+[parse rows] → [pre-process all rows in memory] → [chunk de 200]
+   → upsert batch em contacts (onConflict: tenant_id,phone)
+   → coletar IDs retornados
+   → upsert batch em opportunities (quando aplicável)
+   → setProgress + console.log do batch
+```
 
-### B. Suporte a `.xlsx` real
-- Adicionar `xlsx` (SheetJS) como dependência.
-- Detectar por extensão / magic bytes: `.xlsx` → `XLSX.read(buffer)`; CSV continua no parser atual.
+- `supabase.from('contacts').upsert(batch, { onConflict: 'tenant_id,phone', ignoreDuplicates: false }).select('id, phone, email')`
+- Merge de tags/custom_fields **antes** do upsert (dedup em memória por phone/email)
+- Opps em batch separado, depois do contacts batch (precisa dos IDs)
+- Cada batch tem seu try/catch — falha de 1 batch não derruba os outros (padrão do `lovable-stack-overflow`)
 
-### C. Auto-mapeamento mais tolerante
-- Reordenar regex em `guessMapping`: `etapa|pipeline|fase|funil|status.?\(etapa\)|status.?etapa` **antes** de `^status`.
-- Normalizar header removendo parênteses/pontuação antes de comparar.
+### 2. Blindagem do Dialog durante import
 
-### D. Etapa "Status (Etapa)" — não falhar a linha inteira
-Hoje, etapa inválida → erro na linha, contato **não é importado**. Mudar para:
-- **Importar o contato sempre** (criar/atualizar).
-- Falha de etapa vira aviso separado, não bloqueia o contato.
-- Na tela de mapping, mostrar **preview das etapas únicas da coluna** com badge ✓/✗ contra o pipeline selecionado, e botão **"Criar etapas faltantes"** (insere `ENVIAR PROPOSTA`, `PROPOSTA ENVIADA`, `LEAD RECEBIDO` no pipeline alvo).
+- `handleClose` ignora `open=false` quando `step==='importing'` (precisa confirmação explícita pra cancelar)
+- Botão "Cancelar importação" visível, com `AbortController` pra parar o loop limpa­mente
+- `setProgress` complementado com `setProgressDetail` (`"batch 3/11 — 600/2141 linhas"`)
 
-### E. Diagnóstico do erro (memória do usuário: root-cause antes de fix)
-- Mensagem de erro passa a incluir: header bruto detectado, encoding usado, e — em caso de etapa não-bate — listar as etapas únicas que falharam vs. as etapas existentes no pipeline.
+### 3. Checkpoint em localStorage
 
-### F. Relatório de erros exportável
-Botão "Baixar relatório" na tela final → CSV com linha, motivo e dados originais. Facilita reenvio só do que falhou.
+- A cada batch concluído, salvar `{ tenantId, fileHash, processedCount, errors }` em `localStorage`
+- Se usuário reabrir o Dialog após crash, oferecer "Retomar importação de XX% que foi interrompida"
+- Limpar checkpoint ao concluir 100%
 
----
+### 4. Tratamento de telefone vazio/lixo
+
+- Lista de valores "nulos" reconhecidos: `''`, `'-'`, `'—'`, `'()'`, `'n/a'`, `'sem'`, `'sem telefone'`
+- Se phone reconhecido como nulo → contato importado **sem** telefone (não vai pra `errors[]`)
+- Se phone tem dígitos mas `normalizeBrazilPhone` devolve `''` → vai pra `errors[]` como hoje, mas com motivo "telefone com menos de 8 dígitos"
+
+### 5. Relatório de erros agrupado
+
+- Tela final mostra **top 5 motivos com contagem** (`"1843× duplicate key on phone"`, `"117× telefone com menos de 8 dígitos"`)
+- Lista detalhada das 20 primeiras linhas + botão "Baixar CSV completo" (já existe)
+- Adicionar contador "Tempo total: 12s" pra forensic visibility
+
+### 6. Logs estruturados pra forensic futuro
+
+- `console.log('[ImportContacts] start', { rows: N, batches: M, pipeline: id })`
+- `console.log('[ImportContacts] batch', i, '/', total, 'done in', ms, 'ms')`
+- `console.error('[ImportContacts] batch failed', i, err)` em vez de stack traces individuais
+
+## Fora de escopo
+
+- Não mexer no edge function `campaign-dispatch` nem em migrações
+- Não alterar a UI da `ContactsPage` (parent)
+- Não tocar em `normalize_brazil_phone` SQL (alinhamento client↔server fica resolvido pelo upsert)
 
 ## Arquivos afetados
 
-- `src/components/contacts/ImportContactsDialog.tsx` — encoding, XLSX, mapping, preview de etapas, relatório.
-- `package.json` — adiciona `xlsx`.
-- Nenhuma mudança em banco/edge function.
+- `src/components/contacts/ImportContactsDialog.tsx` — refator do `handleImport` + UI de progresso/cancelamento/retomada
+- Sem mudanças em DB, edge functions, ou RLS
 
-## O que NÃO muda
+## Validação
 
-- Estrutura de `contacts`, `opportunities`, `stages`.
-- Lógica de deduplicação por telefone/email.
-- RLS / permissões.
+Após implementar:
+1. Reimportar o mesmo CSV de 2141 linhas
+2. Esperado: ~10 segundos, 119 atualizados + ~2000 criados (ou todos atualizados se rodar 2x), 0 erros de "duplicate key"
+3. Checar `console` por logs `[ImportContacts] batch N/M done`
+4. Tentar fechar o Dialog no meio — deve pedir confirmação
