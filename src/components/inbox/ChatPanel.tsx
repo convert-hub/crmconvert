@@ -488,8 +488,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const handleSendMedia = async (file: File) => {
     if (!tenant || !membership || !conversationId) return;
     const capturedConvId = conversationId;
-    const contactPhone = contact?.phone;
-    const isWhatsApp = channel === 'whatsapp';
+    const contactPhone = effectiveContact?.phone;
+    const isWhatsApp = effectiveChannel === 'whatsapp';
     if (!isWhatsApp || !contactPhone) { toast.error('Envio de mídia só disponível para WhatsApp'); return; }
     let mediaType: 'audio' | 'image' | 'video' | 'document' = 'image';
     if (file.type.startsWith('audio/')) mediaType = 'audio';
