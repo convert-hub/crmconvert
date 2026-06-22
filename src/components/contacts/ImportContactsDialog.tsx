@@ -1,14 +1,32 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Upload, FileText, AlertTriangle, Download } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, Download, Check, X, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
+import * as XLSX from 'xlsx';
+
+// Decode an ArrayBuffer trying UTF-8 first; fall back to Windows-1252 when mojibake (Ã/Â) is detected.
+function decodeBufferSmart(buf: ArrayBuffer): { text: string; encoding: 'utf-8' | 'windows-1252' } {
+  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+  const sample = utf8.slice(0, 4000);
+  // Mojibake heuristic: Latin-1 chars decoded as UTF-8 produce sequences like "Ã¡", "Ã©", "Ã­", "Ã³", "Ãº", "Ã§", "Ã£", "Ãª", "Ãµ", "Â"
+  const mojibakeHits = (sample.match(/Ã[\u0080-\u00ff]|Â[\u0080-\u00ff]/g) || []).length;
+  if (mojibakeHits >= 3) {
+    try {
+      const text = new TextDecoder('windows-1252', { fatal: false }).decode(buf);
+      return { text, encoding: 'windows-1252' };
+    } catch {
+      return { text: utf8, encoding: 'utf-8' };
+    }
+  }
+  return { text: utf8, encoding: 'utf-8' };
+}
 
 // Parses DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY or ISO YYYY-MM-DD. Returns 'YYYY-MM-DD' or null.
 function parseDateBR(input: string): string | null {
@@ -67,18 +85,22 @@ const CONTACT_FIELDS = [
 const normKey = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').trim();
 
 function guessMapping(header: string, customDefs: CustomFieldDef[] = []): string {
-  const h = header.toLowerCase().trim();
-  if (/^nome|name|full.?name/i.test(h)) return 'name';
-  if (/^telefone|phone|whatsapp|celular|fone/i.test(h)) return 'phone';
-  if (/^e?-?mail/i.test(h)) return 'email';
-  if (/^status/i.test(h)) return 'status';
-  if (/^tag/i.test(h)) return 'tags';
-  if (/^nasc|birth|aniversário|aniversario/i.test(h)) return 'birth_date';
-  if (/^cidade|city/i.test(h)) return 'city';
-  if (/^estado|state|uf/i.test(h)) return 'state';
-  if (/^origem|source/i.test(h)) return 'source';
-  if (/^nota|note|obs/i.test(h)) return 'notes';
-  if (/^etapa|stage|pipeline|funil|fase/i.test(h)) return 'pipeline_stage';
+  const raw = header.toLowerCase().trim();
+  // strip punctuation/parens for fuzzy matching ("Status (Etapa)" -> "status etapa")
+  const h = raw.replace(/[()[\]{}.,;:_\-/\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Pipeline stage FIRST so "Status (Etapa)" / "Status Etapa" / "Etapa Status" don't fall into plain 'status'
+  if (/\b(etapa|estagio|stage|pipeline|funil|fase)\b/.test(h)) return 'pipeline_stage';
+  if (/\b(status)\s+(etapa|pipeline|funil|fase|stage)\b/.test(h)) return 'pipeline_stage';
+  if (/^nome\b|^name\b|^full.?name/.test(h)) return 'name';
+  if (/^telefone\b|^phone\b|whatsapp|celular|fone/.test(h)) return 'phone';
+  if (/^e?-?mail\b/.test(h)) return 'email';
+  if (/^status\b/.test(h)) return 'status';
+  if (/^tag/.test(h)) return 'tags';
+  if (/nasc|birth|aniversario/.test(h)) return 'birth_date';
+  if (/^cidade\b|^city\b/.test(h)) return 'city';
+  if (/^estado\b|^state\b|^uf\b/.test(h)) return 'state';
+  if (/^origem\b|^source\b/.test(h)) return 'source';
+  if (/^nota|^note|^obs|coment/.test(h)) return 'notes';
   // Custom fields: try matching by label or key
   const nh = normKey(header);
   for (const fd of customDefs) {
@@ -215,17 +237,53 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const handleFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const { headers: h, rows: r } = parseCSV(text);
-      if (h.length === 0) { toast.error('CSV inválido'); return; }
-      setHeaders(h);
-      setRows(r);
-      const autoMapping: Record<string, string> = {};
-      h.forEach(header => { autoMapping[header] = guessMapping(header, customDefs); });
-      setMapping(autoMapping);
-      setStep('mapping');
+      try {
+        const buf = e.target?.result as ArrayBuffer;
+        if (!buf) throw new Error('Arquivo vazio');
+        const bytes = new Uint8Array(buf);
+        const isXlsx = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+          || file.name.toLowerCase().endsWith('.xlsx');
+
+        let h: string[] = [];
+        let r: CsvRow[] = [];
+        let encUsed: 'utf-8' | 'windows-1252' | 'xlsx' = 'utf-8';
+
+        if (isXlsx && bytes[0] === 0x50) {
+          const wb = XLSX.read(buf, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '', raw: false, blankrows: false });
+          if (aoa.length === 0) throw new Error('Planilha vazia');
+          h = (aoa[0] as unknown[]).map(v => String(v ?? '').trim());
+          r = aoa.slice(1).map(row => {
+            const obj: CsvRow = {};
+            h.forEach((header, idx) => { obj[header] = String((row as unknown[])[idx] ?? '').trim(); });
+            return obj;
+          });
+          encUsed = 'xlsx';
+        } else {
+          const { text, encoding } = decodeBufferSmart(buf);
+          encUsed = encoding;
+          const parsed = parseCSV(text);
+          h = parsed.headers;
+          r = parsed.rows;
+        }
+
+        if (h.length === 0) { toast.error('Arquivo sem cabeçalho'); return; }
+        setHeaders(h);
+        setRows(r);
+        const autoMapping: Record<string, string> = {};
+        h.forEach(header => { autoMapping[header] = guessMapping(header, customDefs); });
+        setMapping(autoMapping);
+        setStep('mapping');
+        if (encUsed === 'windows-1252') {
+          toast.info('Arquivo em Latin-1 detectado e convertido para UTF-8 automaticamente.');
+        }
+      } catch (err: any) {
+        console.error('[ImportContacts] file parse failed', err);
+        toast.error(`Falha ao ler arquivo: ${err?.message || err}`);
+      }
     };
-    reader.readAsText(file, 'UTF-8');
+    reader.readAsArrayBuffer(file);
   };
 
   const coerceCustom = (def: CustomFieldDef, val: string): { ok: true; value: unknown } | { ok: false; reason: string } => {
@@ -386,11 +444,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
         if (stageCol && rawStage) {
           const matchedStage = stagesByNormName.get(normKey(rawStage));
           if (!matchedStage) {
-            errors.push({
-              row: i + 2,
-              reason: `Etapa "${rawStage}" não corresponde a nenhuma etapa do pipeline "${selectedPipelineName}"`,
-              data: row,
-            });
+            // Não bloqueia o contato — apenas registra o aviso de etapa.
             stageErrors++;
           } else {
             // Check in-memory cache first
@@ -566,12 +620,63 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     onOpenChange(o);
   };
 
+  // Unique stage values from CSV column mapped to pipeline_stage, with match status vs. pipeline stages
+  const stageCsvCol = useMemo(
+    () => Object.entries(mapping).find(([, v]) => v === 'pipeline_stage')?.[0],
+    [mapping],
+  );
+  const stageAudit = useMemo(() => {
+    if (!stageCsvCol || !selectedPipeline) return null;
+    const byNorm = new Map(stages.map(s => [normKey(s.name), s]));
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const v = (row[stageCsvCol] || '').trim();
+      if (!v) continue;
+      counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    const items = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      count,
+      matched: byNorm.has(normKey(value)),
+    }));
+    items.sort((a, b) => Number(a.matched) - Number(b.matched) || b.count - a.count);
+    const missing = items.filter(i => !i.matched);
+    return { items, missingCount: missing.length, missingValues: missing.map(i => i.value) };
+  }, [rows, stageCsvCol, selectedPipeline, stages]);
+
+  const [creatingStages, setCreatingStages] = useState(false);
+  const createMissingStages = async () => {
+    if (!stageAudit || stageAudit.missingValues.length === 0 || !selectedPipeline) return;
+    setCreatingStages(true);
+    try {
+      const { data: existing } = await supabase
+        .from('stages').select('position').eq('pipeline_id', selectedPipeline).order('position', { ascending: false }).limit(1);
+      let pos = (existing && existing[0]?.position != null) ? Number(existing[0].position) + 1 : 0;
+      const payload = stageAudit.missingValues.map(name => ({
+        pipeline_id: selectedPipeline,
+        name,
+        position: pos++,
+      }));
+      const { error } = await supabase.from('stages').insert(payload as any);
+      if (error) throw error;
+      toast.success(`${payload.length} etapa(s) criada(s) em "${selectedPipelineName}"`);
+      // reload stages
+      const { data } = await supabase.from('stages').select('id,name').eq('pipeline_id', selectedPipeline).order('position');
+      setStages((data as Stage[]) || []);
+    } catch (e: any) {
+      toast.error(`Falha ao criar etapas: ${e?.message || e}`);
+    } finally {
+      setCreatingStages(false);
+    }
+  };
+
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold flex items-center gap-2">
-            <Upload className="h-4 w-4" /> Importar Contatos via CSV
+            <Upload className="h-4 w-4" /> Importar Contatos (CSV ou Excel)
           </DialogTitle>
         </DialogHeader>
 
@@ -582,10 +687,10 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
               onClick={() => fileRef.current?.click()}
             >
               <FileText className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-              <p className="text-sm font-medium text-foreground">Clique para selecionar um arquivo CSV</p>
-              <p className="text-xs text-muted-foreground mt-1">Suporta vírgula (,) e ponto-e-vírgula (;), campos entre aspas</p>
+              <p className="text-sm font-medium text-foreground">Clique para selecionar um arquivo CSV ou Excel</p>
+              <p className="text-xs text-muted-foreground mt-1">.csv, .xlsx — encoding (UTF-8 / Latin-1) detectado automaticamente</p>
             </div>
-            <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
+            <input ref={fileRef} type="file" accept=".csv,.txt,.xlsx" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
           </div>
         )}
@@ -621,17 +726,63 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             </div>
 
             {hasPipelineStageMapping && (
-              <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                <span className="text-sm font-medium">Pipeline</span>
-                <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
-                  <SelectTrigger className="h-8 text-[13px] flex-1"><SelectValue placeholder="Selecione…" /></SelectTrigger>
-                  <SelectContent>
-                    {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <span className="text-xs text-muted-foreground">{stages.length} etapas</span>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="text-sm font-medium">Pipeline</span>
+                  <Select value={selectedPipeline} onValueChange={setSelectedPipeline}>
+                    <SelectTrigger className="h-8 text-[13px] flex-1"><SelectValue placeholder="Selecione…" /></SelectTrigger>
+                    <SelectContent>
+                      {pipelines.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">{stages.length} etapas</span>
+                </div>
+
+                {stageAudit && stageAudit.items.length > 0 && (
+                  <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-foreground">
+                        Etapas encontradas no arquivo
+                        {stageAudit.missingCount > 0 && (
+                          <span className="ml-2 text-destructive">({stageAudit.missingCount} sem correspondência)</span>
+                        )}
+                      </p>
+                      {stageAudit.missingCount > 0 && (
+                        <Button
+                          variant="outline" size="sm" className="h-7 text-xs"
+                          onClick={createMissingStages} disabled={creatingStages}
+                        >
+                          <Plus className="h-3 w-3 mr-1" />
+                          {creatingStages ? 'Criando…' : `Criar ${stageAudit.missingCount} faltantes`}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="max-h-32 overflow-y-auto flex flex-wrap gap-1.5">
+                      {stageAudit.items.map(it => (
+                        <span
+                          key={it.value}
+                          className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${
+                            it.matched
+                              ? 'border-success/30 bg-success/5 text-success'
+                              : 'border-destructive/30 bg-destructive/5 text-destructive'
+                          }`}
+                        >
+                          {it.matched ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                          <span className="truncate max-w-[180px]">{it.value}</span>
+                          <span className="opacity-60">×{it.count}</span>
+                        </span>
+                      ))}
+                    </div>
+                    {stageAudit.missingCount > 0 && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Contatos serão importados normalmente. Linhas com etapa sem correspondência apenas não criarão oportunidade.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+
 
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground mb-2">Preview (primeiras 3 linhas):</p>

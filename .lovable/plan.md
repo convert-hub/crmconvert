@@ -1,43 +1,54 @@
-## Diagnóstico forense confirmado
+## Diagnóstico forense
 
-O problema não é mais destinatário “sumido”. Os destinatários estão `pending` nas campanhas antigas e novas.
+A planilha do print evidencia **3 falhas combinadas**:
 
-A causa raiz encontrada nos dados/logs é dupla:
+### 1. Encoding errado (raiz dos "nomes de coluna estranhos")
+O arquivo está salvo em **Windows-1252 / Latin-1**, não UTF-8. Aparecem `ComentÃ¡rios`, `Ãšltima Atividade`, `AraÃºjo`, `NÃ£o`, `MunicÃ­pio`. O importador atual força `reader.readAsText(file, 'UTF-8')` em `ImportContactsDialog.tsx`, então todos os acentos viram mojibake — inclusive dentro dos valores de etapa (`MunicÃ­pio` em vez de `Município`), o que faz **0% das etapas baterem** com o pipeline.
 
-1. **O cron está chamando `campaign-dispatch` com token inválido/antigo**
-   - `cron.job` executa todo minuto e retorna “8 rows”, mas `net._http_response` mostra `401 Unauthorized` para todas as chamadas recentes.
-   - Por isso campanhas em `running` com pendentes não continuam automaticamente.
+### 2. Coluna "Status (Etapa)" mapeada como pipeline, sem tolerância
+O auto-mapeamento (`guessMapping`) testa `^status` antes de `^etapa`, então `Status (Etapa)` cai em `status` (errado). Quando o usuário corrige para `pipeline_stage`, a comparação é exata por `normKey` — qualquer divergência (acento mojibake, espaço, parêntese) gera o erro *"Etapa X não corresponde a nenhuma etapa do pipeline"* para **todas as 2000 linhas**.
 
-2. **O botão “Continuar” muda para `running`, mas não processa imediatamente em algumas campanhas**
-   - Em `campaign-dispatch`, depois do `start`, o objeto `campaign` ainda contém status antigo `paused`.
-   - Logo em seguida existe um bloqueio que retorna se `campaign.status === 'paused'`, podendo impedir o processamento real no mesmo clique.
+### 3. Arquivo é CSV salvo com extensão `.xlsx`
+O print mostra "uma célula por linha" (tudo concentrado na coluna A) — o Excel abriu CSV bruto. O importador hoje só lê CSV via `FileReader.readAsText`; se o usuário enviar um `.xlsx` real (binário), o parser quebra silenciosamente.
+
+---
 
 ## Plano de correção
 
-### 1. Corrigir `campaign-dispatch`
-- Após `action === 'start'`, usar um `effectiveStatus = 'running'` em vez do status antigo carregado antes do update.
-- Garantir que `start`/`continue` sempre tente processar destinatários `pending` imediatamente.
-- Adicionar logs objetivos no backend:
-  - campanha, ação, status original, status efetivo
-  - quantidade reivindicada (`claimed`)
-  - motivo quando não processar (`locked`, `no_pending`, `paused`, erro de envio)
+### A. Detecção automática de encoding (`ImportContactsDialog.tsx`)
+- Substituir `readAsText(file, 'UTF-8')` por `readAsArrayBuffer` + tentativa em UTF-8 e fallback para **Windows-1252** (heurística: se aparecer `Ã`/`Â` em headers ou primeiras 50 linhas, redecodificar).
+- Aplica a headers **e** valores — corrige `MunicÃ­pio` → `Município` antes do match de etapa.
 
-### 2. Corrigir o cron da campanha
-- Criar migração para recriar o job de campanhas com um token válido do ambiente do banco, em vez do JWT anon hardcoded antigo.
-- Manter a frequência de 1 minuto.
-- Limitar apenas campanhas `scheduled` e `running`, como hoje.
+### B. Suporte a `.xlsx` real
+- Adicionar `xlsx` (SheetJS) como dependência.
+- Detectar por extensão / magic bytes: `.xlsx` → `XLSX.read(buffer)`; CSV continua no parser atual.
 
-### 3. Backfill operacional seguro
-- Não mexer em entregues/lidas/respondidas.
-- Garantir apenas que destinatários presos em `sending` voltem para `pending`.
-- Manter campanhas com pendentes em `running` ou permitir que o botão “Continuar” as retome.
+### C. Auto-mapeamento mais tolerante
+- Reordenar regex em `guessMapping`: `etapa|pipeline|fase|funil|status.?\(etapa\)|status.?etapa` **antes** de `^status`.
+- Normalizar header removendo parênteses/pontuação antes de comparar.
 
-### 4. Validação antes de dizer que está resolvido
-- Consultar `net._http_response` após a correção e confirmar que `campaign-dispatch` não retorna mais `401`.
-- Conferir uma campanha real com pendentes antes/depois e validar que o número de `pending` diminui e `sent/failed` aumenta.
-- Conferir logs da edge function com `claimed > 0`.
+### D. Etapa "Status (Etapa)" — não falhar a linha inteira
+Hoje, etapa inválida → erro na linha, contato **não é importado**. Mudar para:
+- **Importar o contato sempre** (criar/atualizar).
+- Falha de etapa vira aviso separado, não bloqueia o contato.
+- Na tela de mapping, mostrar **preview das etapas únicas da coluna** com badge ✓/✗ contra o pipeline selecionado, e botão **"Criar etapas faltantes"** (insere `ENVIAR PROPOSTA`, `PROPOSTA ENVIADA`, `LEAD RECEBIDO` no pipeline alvo).
 
-## Arquivos/áreas afetadas
-- `supabase/functions/campaign-dispatch/index.ts`
-- Migração SQL para recriar o cron job de campanhas
-- Sem alteração visual desnecessária.
+### E. Diagnóstico do erro (memória do usuário: root-cause antes de fix)
+- Mensagem de erro passa a incluir: header bruto detectado, encoding usado, e — em caso de etapa não-bate — listar as etapas únicas que falharam vs. as etapas existentes no pipeline.
+
+### F. Relatório de erros exportável
+Botão "Baixar relatório" na tela final → CSV com linha, motivo e dados originais. Facilita reenvio só do que falhou.
+
+---
+
+## Arquivos afetados
+
+- `src/components/contacts/ImportContactsDialog.tsx` — encoding, XLSX, mapping, preview de etapas, relatório.
+- `package.json` — adiciona `xlsx`.
+- Nenhuma mudança em banco/edge function.
+
+## O que NÃO muda
+
+- Estrutura de `contacts`, `opportunities`, `stages`.
+- Lógica de deduplicação por telefone/email.
+- RLS / permissões.
