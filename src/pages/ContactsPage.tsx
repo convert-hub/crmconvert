@@ -9,7 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban, MessageSquare, Target, CheckSquare } from 'lucide-react';
+import { Plus, Search, Download, Upload, Phone, Mail, Edit, Trash2, MoreHorizontal, CalendarIcon, Tag, Kanban, MessageSquare, Target, CheckSquare, History } from 'lucide-react';
+import BulkHistorySyncDialog from '@/components/contacts/BulkHistorySyncDialog';
+import { listUazapiInstances, syncWhatsappHistoryForPhones } from '@/lib/historySync';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
 import { useCascadeDelete, type ContactLinked } from '@/hooks/useCascadeDelete';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -44,7 +46,25 @@ export default function ContactsPage() {
   const [deleteContactId, setDeleteContactId] = useState<string | null>(null);
   const [convContact, setConvContact] = useState<Contact | null>(null);
   const [contactCascadeData, setContactCascadeData] = useState<ContactLinked | null>(null);
+  const [showBulkHistory, setShowBulkHistory] = useState(false);
   const { getContactLinked, deleteContactCascade, loading: cascadeLoading } = useCascadeDelete();
+
+  const syncOneContactHistory = async (c: Contact) => {
+    if (!tenant || !c.phone) { toast.error('Contato sem telefone'); return; }
+    const instances = await listUazapiInstances(tenant.id);
+    if (instances.length === 0) { toast.error('Nenhuma instância UAZAPI ativa'); return; }
+    const inst = instances.length === 1 ? instances[0] : instances[0]; // TODO: prompt se múltiplas
+    const tid = toast.loading('Buscando histórico no WhatsApp…');
+    try {
+      const res = await syncWhatsappHistoryForPhones(tenant.id, inst.id, [c.phone]);
+      toast.dismiss(tid);
+      if (res.chats_found === 0) toast.info('Nenhuma conversa encontrada nos últimos 30 dias');
+      else toast.success(`${res.chats_found} conversa, ${res.messages_inserted} mensagem(ns) importadas`);
+    } catch {
+      toast.dismiss(tid);
+      toast.error('Falha ao buscar histórico');
+    }
+  };
 
   useEffect(() => {
     if (!tenant) return;
@@ -200,6 +220,7 @@ export default function ContactsPage() {
           {!isReadonly && (
             <>
               <Button variant="outline" size="sm" onClick={() => setShowImport(true)} className="h-9 text-[13px]"><Upload className="h-3.5 w-3.5 mr-1.5" />Importar</Button>
+              <Button variant="outline" size="sm" onClick={() => setShowBulkHistory(true)} className="h-9 text-[13px]"><History className="h-3.5 w-3.5 mr-1.5" />Histórico WA</Button>
               <Button size="sm" onClick={openCreate} className="h-9 text-[13px]"><Plus className="h-3.5 w-3.5 mr-1.5" />Novo Contato</Button>
             </>
           )}
@@ -247,6 +268,7 @@ export default function ContactsPage() {
                           <DropdownMenuItem onClick={() => openEdit(c)}><Edit className="h-3.5 w-3.5 mr-2" />Editar</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setConvContact(c); }}><MessageSquare className="h-3.5 w-3.5 mr-2" />Iniciar Conversa</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setOppContact(c); }}><Kanban className="h-3.5 w-3.5 mr-2" />Criar Oportunidade</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); syncOneContactHistory(c); }}><History className="h-3.5 w-3.5 mr-2" />Importar histórico WA</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleDelete(c.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5 mr-2" />Excluir</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -345,6 +367,16 @@ export default function ContactsPage() {
           onOpenChange={setShowImport}
           tenantId={tenant.id}
           onImported={loadContacts}
+        />
+      )}
+
+      {tenant && (
+        <BulkHistorySyncDialog
+          open={showBulkHistory}
+          onOpenChange={setShowBulkHistory}
+          tenantId={tenant.id}
+          filteredPhones={contacts.map(c => c.phone).filter(Boolean) as string[]}
+          onDone={loadContacts}
         />
       )}
 

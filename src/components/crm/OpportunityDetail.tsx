@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp, UserPlus } from 'lucide-react';
+import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp, UserPlus, History } from 'lucide-react';
+import { listUazapiInstances, syncWhatsappHistoryForPhones } from '@/lib/historySync';
 import ChatPanel from '@/components/inbox/ChatPanel';
 import { toast } from 'sonner';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -445,7 +446,32 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         </div>
       ) : (
         <div className="space-y-3">
-          <Button variant="outline" size="sm" onClick={() => setIsEditing(true)} className="rounded-xl">Editar Oportunidade</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setIsEditing(true)} className="rounded-xl">Editar Oportunidade</Button>
+            {opp.contact.phone && opp.tenant_id && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                onClick={async () => {
+                  const instances = await listUazapiInstances(opp.tenant_id);
+                  if (instances.length === 0) { toast.error('Nenhuma instância UAZAPI ativa'); return; }
+                  const tid = toast.loading('Buscando histórico…');
+                  try {
+                    const res = await syncWhatsappHistoryForPhones(opp.tenant_id, instances[0].id, [opp.contact.phone!]);
+                    toast.dismiss(tid);
+                    if (res.chats_found === 0) toast.info('Nenhuma conversa nos últimos 30 dias');
+                    else toast.success(`${res.chats_found} conversa, ${res.messages_inserted} mensagem(ns) importadas`);
+                  } catch {
+                    toast.dismiss(tid);
+                    toast.error('Falha ao buscar histórico');
+                  }
+                }}
+              >
+                <History className="h-4 w-4 mr-1" />Histórico WA
+              </Button>
+            )}
+          </div>
           {customFieldDefs.length > 0 && Object.keys(customFieldValues).some(k => customFieldValues[k] !== '' && customFieldValues[k] !== undefined && customFieldValues[k] !== null) && (
             <div className="flex flex-wrap gap-1.5">
               {customFieldDefs.map(fd => {

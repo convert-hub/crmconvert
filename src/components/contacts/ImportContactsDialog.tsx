@@ -9,6 +9,7 @@ import { Upload, FileText, AlertTriangle, Download, Check, X, Plus } from 'lucid
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
+import { syncWhatsappHistoryForPhones, listUazapiInstances } from '@/lib/historySync';
 import * as XLSX from 'xlsx';
 
 // Decode an ArrayBuffer trying UTF-8 first; fall back to Windows-1252 when mojibake (Ã/Â) is detected.
@@ -208,6 +209,10 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [conflicts, setConflicts] = useState<OppConflict[]>([]);
+  const [uazInstances, setUazInstances] = useState<Array<{ id: string; display_name: string | null; instance_name: string | null }>>([]);
+  const [syncHistory, setSyncHistory] = useState(true);
+  const [historyInstanceId, setHistoryInstanceId] = useState<string>('');
+  const [historyProgress, setHistoryProgress] = useState<{ done: number; total: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
 
@@ -245,6 +250,11 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     });
     supabase.from('pipelines').select('id,name').eq('tenant_id', tenantId).order('position').then(({ data }) => {
       setPipelines((data as Pipeline[]) || []);
+    });
+    listUazapiInstances(tenantId).then(list => {
+      setUazInstances(list);
+      if (list.length === 1) setHistoryInstanceId(list[0].id);
+      else if (list.length === 0) setSyncHistory(false);
     });
   }, [open, tenantId]);
 
@@ -729,6 +739,39 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     else toast.warning(`Importação concluída com falhas: ${msg}`);
     onImported();
 
+    // Backfill de histórico WhatsApp (30 dias) para os telefones importados
+    if (syncHistory && historyInstanceId && !cancelRef.current) {
+      const phoneCol = Object.entries(mapping).find(([, v]) => v === 'phone')?.[0];
+      if (phoneCol) {
+        const phones: string[] = [];
+        for (const row of rows) {
+          const v = row[phoneCol];
+          if (!v) continue;
+          const n = normalizeBrazilPhone(v);
+          if (n) phones.push(n);
+        }
+        if (phones.length > 0) {
+          setHistoryProgress({ done: 0, total: phones.length });
+          setProgressDetail(`Buscando histórico no WhatsApp: 0/${phones.length}`);
+          try {
+            const res = await syncWhatsappHistoryForPhones(tenantId, historyInstanceId, phones, (done, total) => {
+              setHistoryProgress({ done, total });
+              setProgressDetail(`Buscando histórico no WhatsApp: ${done}/${total}`);
+            });
+            const histMsg = `${res.chats_found} conversa(s), ${res.messages_inserted} mensagem(ns)`;
+            if (res.errors.length > 0) toast.warning(`Histórico parcial: ${histMsg} · ${res.errors.length} falha(s)`);
+            else toast.success(`Histórico importado: ${histMsg}`);
+            onImported();
+          } catch (e) {
+            console.error('[ImportContacts] history sync failed', e);
+            toast.error('Falha ao buscar histórico do WhatsApp');
+          } finally {
+            setHistoryProgress(null);
+          }
+        }
+      }
+    }
+
     if (conflictsAcc.length > 0) setStep('conflicts');
   };
 
@@ -997,12 +1040,29 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
               </Table>
             </div>
 
+            {uazInstances.length > 0 && (
+              <div className="flex items-center gap-3 p-3 border border-border/60 rounded-md">
+                <Checkbox id="sync-hist" checked={syncHistory} onCheckedChange={(v) => setSyncHistory(!!v)} />
+                <label htmlFor="sync-hist" className="text-[13px] flex-1 cursor-pointer">Puxar histórico do WhatsApp (30 dias)</label>
+                {syncHistory && uazInstances.length > 1 && (
+                  <Select value={historyInstanceId} onValueChange={setHistoryInstanceId}>
+                    <SelectTrigger className="h-8 w-56 text-xs"><SelectValue placeholder="Selecione o número" /></SelectTrigger>
+                    <SelectContent>
+                      {uazInstances.map(i => (
+                        <SelectItem key={i.id} value={i.id}>{i.display_name || i.instance_name || i.id.slice(0, 8)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-2">
               <Button variant="outline" onClick={reset}>Voltar</Button>
               <Button
                 onClick={handleImport}
                 className="flex-1"
-                disabled={hasPipelineStageMapping && !selectedPipeline}
+                disabled={(hasPipelineStageMapping && !selectedPipeline) || (syncHistory && uazInstances.length > 1 && !historyInstanceId)}
               >
                 Importar {rows.length} contatos
               </Button>
