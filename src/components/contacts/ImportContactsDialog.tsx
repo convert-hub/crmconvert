@@ -624,6 +624,57 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
     onOpenChange(o);
   };
 
+  // Unique stage values from CSV column mapped to pipeline_stage, with match status vs. pipeline stages
+  const stageCsvCol = useMemo(
+    () => Object.entries(mapping).find(([, v]) => v === 'pipeline_stage')?.[0],
+    [mapping],
+  );
+  const stageAudit = useMemo(() => {
+    if (!stageCsvCol || !selectedPipeline) return null;
+    const byNorm = new Map(stages.map(s => [normKey(s.name), s]));
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const v = (row[stageCsvCol] || '').trim();
+      if (!v) continue;
+      counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    const items = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      count,
+      matched: byNorm.has(normKey(value)),
+    }));
+    items.sort((a, b) => Number(a.matched) - Number(b.matched) || b.count - a.count);
+    const missing = items.filter(i => !i.matched);
+    return { items, missingCount: missing.length, missingValues: missing.map(i => i.value) };
+  }, [rows, stageCsvCol, selectedPipeline, stages]);
+
+  const [creatingStages, setCreatingStages] = useState(false);
+  const createMissingStages = async () => {
+    if (!stageAudit || stageAudit.missingValues.length === 0 || !selectedPipeline) return;
+    setCreatingStages(true);
+    try {
+      const { data: existing } = await supabase
+        .from('stages').select('position').eq('pipeline_id', selectedPipeline).order('position', { ascending: false }).limit(1);
+      let pos = (existing && existing[0]?.position != null) ? Number(existing[0].position) + 1 : 0;
+      const payload = stageAudit.missingValues.map(name => ({
+        pipeline_id: selectedPipeline,
+        name,
+        position: pos++,
+      }));
+      const { error } = await supabase.from('stages').insert(payload as any);
+      if (error) throw error;
+      toast.success(`${payload.length} etapa(s) criada(s) em "${selectedPipelineName}"`);
+      // reload stages
+      const { data } = await supabase.from('stages').select('id,name').eq('pipeline_id', selectedPipeline).order('position');
+      setStages((data as Stage[]) || []);
+    } catch (e: any) {
+      toast.error(`Falha ao criar etapas: ${e?.message || e}`);
+    } finally {
+      setCreatingStages(false);
+    }
+  };
+
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
