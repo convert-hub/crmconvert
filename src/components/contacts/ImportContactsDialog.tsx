@@ -198,6 +198,7 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [progress, setProgress] = useState(0);
   const [progressDetail, setProgressDetail] = useState('');
   const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
+  const [oppCustomKeys, setOppCustomKeys] = useState<Set<string>>(new Set());
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
