@@ -400,8 +400,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   }, [conversationId]);
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !conversationId) return;
-    const isWhatsApp = channel === 'whatsapp';
-    const contactPhone = contact?.phone;
+    const isWhatsApp = effectiveChannel === 'whatsapp';
+    const contactPhone = effectiveContact?.phone;
     const msgContent = newMsg;
     const sendAsInternal = isInternal;
     const capturedConvId = conversationId;
