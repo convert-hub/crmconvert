@@ -341,9 +341,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   }, [tenant]);
   const replaceVariables = (text: string): string => {
     return text
-      .replace(/\{\{nome\}\}/gi, contact?.name || '')
-      .replace(/\{\{telefone\}\}/gi, contact?.phone || '')
-      .replace(/\{\{email\}\}/gi, contact?.email || '');
+      .replace(/\{\{nome\}\}/gi, effectiveContact?.name || '')
+      .replace(/\{\{telefone\}\}/gi, effectiveContact?.phone || '')
+      .replace(/\{\{email\}\}/gi, effectiveContact?.email || '');
   };
   const handleSelectQuickReply = (qr: QuickReply) => {
     const replaced = replaceVariables(qr.content);
