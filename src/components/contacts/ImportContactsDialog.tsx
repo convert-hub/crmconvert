@@ -196,15 +196,32 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState(0);
+  const [progressDetail, setProgressDetail] = useState('');
   const [customDefs, setCustomDefs] = useState<CustomFieldDef[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [conflicts, setConflicts] = useState<OppConflict[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
 
   const hasPipelineStageMapping = Object.values(mapping).includes('pipeline_stage');
   const selectedPipelineName = pipelines.find(p => p.id === selectedPipeline)?.name || '';
+
+  const EMPTY_PHONE_TOKENS = new Set(['', '-', '—', '--', '()', 'n/a', 'na', 'sem', 'sem telefone', 'nao informado', 'não informado', 'nao tem', 'não tem', '.', '0']);
+
+  const mergeTagsList = (a: string[] = [], b: string[] = []): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    [...a, ...b].forEach(t => {
+      const k = (t ?? '').trim();
+      if (!k) return;
+      const lc = k.toLowerCase();
+      if (seen.has(lc)) return;
+      seen.add(lc); out.push(k);
+    });
+    return out;
+  };
 
   useEffect(() => {
     if (!open || !tenantId) return;
