@@ -3,12 +3,14 @@ import { normalizeBrazilPhone } from '@/lib/phone';
 
 export type HistorySyncResult = {
   contacts_processed: number;
+  phones_requested: number;
+  phones_matched: number;
+  phones_without_chat: number;
+  chats_listed: number;
   chats_found: number;
   messages_inserted: number;
   messages_skipped: number;
   errors: { phone: string; error: string }[];
-  winner_variant?: string | null;
-  fallback_scan?: boolean;
 };
 
 const BATCH_SIZE = 100;
@@ -32,12 +34,14 @@ export async function syncWhatsappHistoryForPhones(
 
   const agg: HistorySyncResult = {
     contacts_processed: 0,
+    phones_requested: 0,
+    phones_matched: 0,
+    phones_without_chat: 0,
+    chats_listed: 0,
     chats_found: 0,
     messages_inserted: 0,
     messages_skipped: 0,
     errors: [],
-    winner_variant: null,
-    fallback_scan: false,
   };
 
   for (let i = 0; i < list.length; i += BATCH_SIZE) {
@@ -49,12 +53,15 @@ export async function syncWhatsappHistoryForPhones(
       agg.errors.push({ phone: '', error: error?.message || data?.error || 'unknown' });
     } else {
       agg.contacts_processed += data.contacts_processed ?? 0;
+      agg.phones_requested += data.phones_requested ?? 0;
+      agg.phones_matched += data.phones_matched ?? 0;
+      agg.phones_without_chat += data.phones_without_chat ?? 0;
+      // chats_listed é por instância — pegar o maior (não somar entre lotes)
+      if ((data.chats_listed ?? 0) > agg.chats_listed) agg.chats_listed = data.chats_listed;
       agg.chats_found += data.chats_found ?? 0;
       agg.messages_inserted += data.messages_inserted ?? 0;
       agg.messages_skipped += data.messages_skipped ?? 0;
       if (Array.isArray(data.errors)) agg.errors.push(...data.errors);
-      if (data.winner_variant && !agg.winner_variant) agg.winner_variant = data.winner_variant;
-      if (data.fallback_scan) agg.fallback_scan = true;
     }
     onProgress?.(Math.min(i + batch.length, list.length), list.length, agg);
   }

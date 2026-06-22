@@ -1,49 +1,51 @@
-## Causa-raiz
+## Objetivo
 
-A função `uazapi-history-sync-contacts` chama `POST /message/find` passando `{ chatid: "55XXX@s.whatsapp.net", limit, offset }`. Logs mostram apenas `booted` — nenhuma falha de HTTP nem erro de upsert: a UAZAPI está respondendo **200 com lista vazia**, porque o filtro por `chatid` está silenciosamente ignorado ou usa outro nome/formato. A função antiga (`uazapi-history-sync`) funciona justamente porque **não** passa filtro: ela puxa tudo da instância e agrupa por chat no servidor.
+Substituir a heurística atual (sonda 5 variantes + fallback de varredura) por uma estratégia que descobre os chatids reais da instância e só depois busca mensagens — eliminando a causa raiz dos 0 retornos e tornando o resultado explicável.
 
-Portanto, o problema é o contrato do endpoint `/message/find` com filtro por chat — não a persistência.
+## Estratégia em 2 fases
 
-## Correção
+**Fase 1 — listar chats reais da instância** via `POST /chat/find` (paginado, até ~50 páginas de 100). Para cada chat individual (descartar `@g.us`, `@newsletter`, `@broadcast`), extrair o número do telefone do `wa_chatid` (independente do sufixo: `@s.whatsapp.net`, `@c.us`, `@lid`) e normalizar. Resultado: um mapa `telefone → chatid real`.
 
-### 1. Instrumentar a função para diagnóstico imediato
-Adicionar logs `console.log` na primeira chamada de cada telefone:
-- payload enviado
-- status HTTP
-- chaves do JSON de resposta e tamanho da lista detectada
+**Fase 2 — backfill por chat conhecido.** Para cada telefone pedido, consultar o mapa. Se encontrar, paginar `POST /message/find` com `{ chatid: <real>, limit: 100, offset }` dentro da janela de 30 dias. Se não encontrar, registrar como `sem_chat_na_instancia` (não é erro — é informação).
 
-Isso confirma em uma nova execução qual variante o servidor aceita.
+## Diagnóstico de saída
 
-### 2. Sondar variantes de payload e usar a primeira que retorna mensagens
-Para o primeiro telefone do lote, tentar em sequência (parando na primeira que vier não-vazia):
+A função passa a retornar e a UI passa a exibir:
 
-1. `{ chatid: "55XXX@s.whatsapp.net", limit, offset }` — atual
-2. `{ chatid: "55XXX", limit, offset }` — só dígitos
-3. `{ chatId: "55XXX@s.whatsapp.net", limit, offset }` — camelCase
-4. `{ number: "55XXX", limit, offset }` — nome alternativo comum em UAZAPI v2
-5. `{ jid: "55XXX@s.whatsapp.net", limit, offset }`
+- `chats_listed` — quantos chats individuais a instância tem
+- `phones_requested` — quantos telefones recebidos
+- `phones_matched` — quantos têm chat na instância
+- `phones_without_chat` — quantos não têm (esperado para leads antigos)
+- `chats_found` / `messages_inserted` — totais persistidos
 
-Guardar a variante vencedora em memória do request e usar para os demais telefones do mesmo lote. Logar `winner_variant`.
+Isso responde de cara: "dos 148 contatos, 23 têm chat na instância, 125 não têm histórico armazenado pela UAZAPI".
 
-### 3. Fallback de segurança (modo "varredura")
-Se nenhuma variante retornar mensagens para os 3 primeiros telefones, cair para o modo da função antiga: uma única chamada `POST /message/find` sem `chatid`, paginando até 10 páginas de 100, e filtrar localmente pelos `chatid` correspondentes aos telefones pedidos. É mais caro, mas garante o backfill.
+## Esclarecer o filtro de escopo
 
-Ativar esse fallback automaticamente após a sondagem; logar `fallback_scan: true` quando usado.
+Na UI, adicionar texto auxiliar sob cada radio:
 
-### 4. Resposta e UI
-Incluir `winner_variant` e `fallback_scan` no JSON de retorno. Expor esses campos como toast/dica no `BulkHistorySyncDialog` para o usuário ver qual caminho foi tomado.
+- "Apenas contatos sem conversa nesta instância" → "Pula contatos que já têm uma conversa registrada no CRM para esse número."
+- "Todos os contatos filtrados" → "Inclui contatos que já têm conversa (reprocessa)."
 
-### 5. Validação
-Após o deploy, rodar novamente o "Histórico WA" com escopo "Apenas contatos sem conversa". Esperado:
-- nos logs: `winner_variant` definido ou `fallback_scan: true`
-- toast: número > 0 de conversas e mensagens, se de fato houver histórico nos 30 dias.
+E quando a estimativa é igual nas duas opções, mostrar dica: "Nenhum contato tem conversa nesta instância ainda — os dois escopos produzem o mesmo conjunto."
 
-Se ainda voltar 0 mesmo com fallback de varredura, a causa estará confirmada como ausência de histórico na própria UAZAPI (mensagens >30 dias, ou instância recém-conectada sem cache), e ajustamos a mensagem na UI.
+## Arquivos
 
-## Arquivos tocados
+- `supabase/functions/uazapi-history-sync-contacts/index.ts` — reescrita: substitui `VARIANTS` + `probeLoop` + `fallback_scan` pela listagem de chats via `/chat/find` + lookup por telefone. Mantém a persistência (conversations + messages upsert) como está.
+- `src/lib/historySync.ts` — estender `HistorySyncResult` com `chats_listed`, `phones_matched`, `phones_without_chat`; remover `winner_variant` e `fallback_scan` (não fazem mais sentido).
+- `src/components/contacts/BulkHistorySyncDialog.tsx` — exibir os novos campos no card de resultado e adicionar os textos auxiliares dos radios + dica quando as estimativas baterem.
 
-- `supabase/functions/uazapi-history-sync-contacts/index.ts` — sondagem de variantes, fallback de varredura, logs
-- `src/lib/historySync.ts` — propagar `winner_variant` e `fallback_scan`
-- `src/components/contacts/BulkHistorySyncDialog.tsx` — exibir o caminho usado no resultado
+## Notas técnicas
 
-Nenhuma mudança em schema, RLS, contratos públicos ou na função antiga `uazapi-history-sync`.
+- Endpoint de listagem: tentar primeiro `POST /chat/find` com `{ limit: 100, offset, operator: 'AND' }` (formato UAZAPI v2). Se 404, cair para `GET /chat/find?limit=100&offset=…`. Logar o shape da primeira página para confirmar o campo do chatid (`wa_chatid`, `chatid`, `id`).
+- Filtro de chat individual: regex `/@(s\.whatsapp\.net|c\.us|lid)$/i`.
+- Extração de telefone do chatid: pegar parte antes do `@`, remover `:\d+` (device id), aplicar `normalizeBrazilPhone`. Para `@lid`, o número antes do `@` *não* é E.164 — nesse caso, usar o campo `wa_name`/`name`/`phone` se a API expuser; senão, pular silenciosamente (o `@lid` é um pseudônimo, não dá pra inferir o telefone).
+- Manter limite de 30 dias, batch de 100 telefones, MAX_PAGES_PER_CHAT = 10.
+- Sem mudanças em schema, RLS, rotas, ou na função antiga `uazapi-history-sync`.
+
+## Validação pós-deploy
+
+1. Rodar "Histórico WA" no mesmo conjunto.
+2. Esperar resposta com `chats_listed > 0`, `phones_matched ≥ 0`, e — se `phones_matched > 0` — `messages_inserted > 0`.
+3. Se `chats_listed = 0`, é problema de credencial/endpoint (vai aparecer no log com o corpo da resposta).
+4. Se `phones_matched = 0` e `chats_listed > 0`, confirma que a UAZAPI realmente não tem histórico desses leads — comunicação esperada para o usuário.

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { listUazapiInstances, syncWhatsappHistoryForPhones } from '@/lib/historySync';
+import { listUazapiInstances, syncWhatsappHistoryForPhones, type HistorySyncResult } from '@/lib/historySync';
 
 type Instance = { id: string; display_name: string | null; instance_name: string | null };
 
@@ -15,7 +15,6 @@ interface Props {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   tenantId: string;
-  /** Telefones já filtrados pela página chamadora. Se omitido, busca todos do tenant. */
   filteredPhones?: string[];
   onDone?: () => void;
 }
@@ -24,10 +23,11 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceId, setInstanceId] = useState<string>('');
   const [scope, setScope] = useState<'no_conv' | 'all'>('no_conv');
-  const [estimate, setEstimate] = useState<number | null>(null);
+  const [estimateNoConv, setEstimateNoConv] = useState<number | null>(null);
+  const [estimateAll, setEstimateAll] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [result, setResult] = useState<{ chats: number; messages: number; errors: number; winner?: string | null; fallback?: boolean } | null>(null);
+  const [result, setResult] = useState<HistorySyncResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -40,14 +40,16 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
   }, [open, tenantId]);
 
   useEffect(() => {
-    if (!open || !instanceId) { setEstimate(null); return; }
+    if (!open || !instanceId) { setEstimateNoConv(null); setEstimateAll(null); return; }
     (async () => {
-      const phones = await resolvePhones();
-      setEstimate(phones.length);
+      const all = await resolvePhones('all');
+      const noConv = await resolvePhones('no_conv');
+      setEstimateAll(all.length);
+      setEstimateNoConv(noConv.length);
     })();
-  }, [open, instanceId, scope, filteredPhones]);
+  }, [open, instanceId, filteredPhones]);
 
-  const resolvePhones = async (): Promise<string[]> => {
+  const resolvePhones = async (effectiveScope: 'all' | 'no_conv'): Promise<string[]> => {
     let phones: string[] = [];
     if (filteredPhones && filteredPhones.length > 0) {
       phones = filteredPhones.filter(Boolean);
@@ -60,8 +62,7 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
         .limit(5000);
       phones = (data ?? []).map((r: any) => r.phone).filter(Boolean);
     }
-    if (scope === 'no_conv' && instanceId) {
-      // Remove telefones que já têm conversation nesta instância
+    if (effectiveScope === 'no_conv' && instanceId) {
       const { data: convs } = await supabase
         .from('conversations')
         .select('provider_chat_id')
@@ -79,7 +80,7 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
     setRunning(true);
     setResult(null);
     try {
-      const phones = await resolvePhones();
+      const phones = await resolvePhones(scope);
       if (phones.length === 0) {
         toast.info('Nenhum telefone para processar');
         setRunning(false);
@@ -89,8 +90,8 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
       const res = await syncWhatsappHistoryForPhones(tenantId, instanceId, phones, (done, total) => {
         setProgress({ done, total });
       });
-      setResult({ chats: res.chats_found, messages: res.messages_inserted, errors: res.errors.length, winner: res.winner_variant, fallback: res.fallback_scan });
-      toast.success(`Histórico importado: ${res.chats_found} conversa(s), ${res.messages_inserted} mensagem(ns)`);
+      setResult(res);
+      toast.success(`${res.phones_matched} contato(s) com chat · ${res.messages_inserted} mensagem(ns) importadas`);
       onDone?.();
     } catch (e) {
       toast.error('Falha ao importar histórico');
@@ -99,6 +100,9 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
       setRunning(false);
     }
   };
+
+  const estimate = scope === 'no_conv' ? estimateNoConv : estimateAll;
+  const sameEstimate = estimateNoConv !== null && estimateAll !== null && estimateNoConv === estimateAll;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!running) onOpenChange(o); }}>
@@ -126,14 +130,31 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
           {instances.length > 0 && (
             <div className="space-y-1.5">
               <Label className="text-xs">Escopo</Label>
-              <RadioGroup value={scope} onValueChange={(v) => setScope(v as any)} className="space-y-1">
-                <div className="flex items-center gap-2"><RadioGroupItem value="no_conv" id="s1" /><label htmlFor="s1" className="text-sm cursor-pointer">Apenas contatos sem conversa nesta instância</label></div>
-                <div className="flex items-center gap-2"><RadioGroupItem value="all" id="s2" /><label htmlFor="s2" className="text-sm cursor-pointer">{filteredPhones ? 'Todos os contatos filtrados' : 'Todos os contatos do tenant'}</label></div>
+              <RadioGroup value={scope} onValueChange={(v) => setScope(v as any)} className="space-y-2">
+                <div className="flex items-start gap-2">
+                  <RadioGroupItem value="no_conv" id="s1" className="mt-0.5" />
+                  <label htmlFor="s1" className="text-sm cursor-pointer leading-tight">
+                    Apenas sem conversa nesta instância
+                    <span className="block text-[11px] text-muted-foreground">Pula contatos já registrados em conversa no CRM para este número.</span>
+                  </label>
+                </div>
+                <div className="flex items-start gap-2">
+                  <RadioGroupItem value="all" id="s2" className="mt-0.5" />
+                  <label htmlFor="s2" className="text-sm cursor-pointer leading-tight">
+                    {filteredPhones ? 'Todos os contatos filtrados' : 'Todos os contatos do tenant'}
+                    <span className="block text-[11px] text-muted-foreground">Inclui também quem já tem conversa (reprocessa).</span>
+                  </label>
+                </div>
               </RadioGroup>
             </div>
           )}
           {instanceId && (
-            <p className="text-xs text-muted-foreground">Estimativa: {estimate ?? '…'} telefone(s) · janela de 30 dias</p>
+            <div className="text-xs text-muted-foreground space-y-0.5">
+              <div>Estimativa: {estimate ?? '…'} telefone(s) · janela de 30 dias</div>
+              {sameEstimate && (
+                <div className="text-[11px]">Nenhum contato tem conversa nesta instância ainda — os dois escopos cobrem o mesmo conjunto.</div>
+              )}
+            </div>
           )}
           {progress && (
             <div className="space-y-1">
@@ -143,11 +164,13 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
           )}
           {result && (
             <div className="text-xs bg-muted/50 rounded p-2 space-y-0.5">
-              <div>{result.chats} conversa(s) encontradas</div>
-              <div>{result.messages} mensagem(ns) importadas</div>
-              {result.winner && <div className="text-muted-foreground">variante UAZAPI: {result.winner}</div>}
-              {result.fallback && <div className="text-muted-foreground">modo varredura (fallback)</div>}
-              {result.errors > 0 && <div className="text-destructive">{result.errors} falha(s)</div>}
+              <div>Chats individuais na instância: <span className="font-medium">{result.chats_listed}</span></div>
+              <div>Contatos com chat encontrado: <span className="font-medium">{result.phones_matched}</span> de {result.phones_requested}</div>
+              {result.phones_without_chat > 0 && (
+                <div className="text-muted-foreground">{result.phones_without_chat} sem histórico armazenado pela UAZAPI</div>
+              )}
+              <div>{result.messages_inserted} mensagem(ns) importadas{result.messages_skipped ? ` · ${result.messages_skipped} já existiam` : ''}</div>
+              {result.errors.length > 0 && <div className="text-destructive">{result.errors.length} falha(s) — ver logs</div>}
             </div>
           )}
           <div className="flex gap-2 pt-2">
