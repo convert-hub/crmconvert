@@ -1,14 +1,32 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Upload, FileText, AlertTriangle, Download } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, Download, Check, X, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { normalizeBrazilPhone } from '@/lib/phone';
+import * as XLSX from 'xlsx';
+
+// Decode an ArrayBuffer trying UTF-8 first; fall back to Windows-1252 when mojibake (Ã/Â) is detected.
+function decodeBufferSmart(buf: ArrayBuffer): { text: string; encoding: 'utf-8' | 'windows-1252' } {
+  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+  const sample = utf8.slice(0, 4000);
+  // Mojibake heuristic: Latin-1 chars decoded as UTF-8 produce sequences like "Ã¡", "Ã©", "Ã­", "Ã³", "Ãº", "Ã§", "Ã£", "Ãª", "Ãµ", "Â"
+  const mojibakeHits = (sample.match(/Ã[\u0080-\u00ff]|Â[\u0080-\u00ff]/g) || []).length;
+  if (mojibakeHits >= 3) {
+    try {
+      const text = new TextDecoder('windows-1252', { fatal: false }).decode(buf);
+      return { text, encoding: 'windows-1252' };
+    } catch {
+      return { text: utf8, encoding: 'utf-8' };
+    }
+  }
+  return { text: utf8, encoding: 'utf-8' };
+}
 
 // Parses DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY or ISO YYYY-MM-DD. Returns 'YYYY-MM-DD' or null.
 function parseDateBR(input: string): string | null {
