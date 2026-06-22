@@ -1,51 +1,57 @@
-## Objetivo
+## Diagnóstico forense
 
-Substituir a heurística atual (sonda 5 variantes + fallback de varredura) por uma estratégia que descobre os chatids reais da instância e só depois busca mensagens — eliminando a causa raiz dos 0 retornos e tornando o resultado explicável.
+**Mensagem exata:** `"Envio de mídia só disponível para WhatsApp"` — origem única em `src/components/inbox/ChatPanel.tsx:472`:
 
-## Estratégia em 2 fases
+```ts
+const isWhatsApp = channel === 'whatsapp';
+if (!isWhatsApp || !contactPhone) {
+  toast.error('Envio de mídia só disponível para WhatsApp'); return;
+}
+```
 
-**Fase 1 — listar chats reais da instância** via `POST /chat/find` (paginado, até ~50 páginas de 100). Para cada chat individual (descartar `@g.us`, `@newsletter`, `@broadcast`), extrair o número do telefone do `wa_chatid` (independente do sufixo: `@s.whatsapp.net`, `@c.us`, `@lid`) e normalizar. Resultado: um mapa `telefone → chatid real`.
+**Causa raiz (confirmada por inspeção de dados):**
 
-**Fase 2 — backfill por chat conhecido.** Para cada telefone pedido, consultar o mapa. Se encontrar, paginar `POST /message/find` com `{ chatid: <real>, limit: 100, offset }` dentro da janela de 30 dias. Se não encontrar, registrar como `sem_chat_na_instancia` (não é erro — é informação).
+O `ChatPanel` recebe `contact` e `channel` como **props** dos seus 3 chamadores (`InboxPage`, `PipelinePage`, `OpportunityDetail`). Quando qualquer um desses chamadores ainda não populou o objeto `contact` (ou está renderizando antes do `select(..., contact:contacts(*))` resolver / o objeto foi substituído por um payload de realtime que não trouxe o join / a conversa selecionada não está na página atual de `conversations`), os dois sintomas aparecem juntos:
 
-## Diagnóstico de saída
+- `contact?.phone` → `undefined` → bloqueia o envio de mídia.
+- `contact?.name` → fallback `'Conversa'` em `InboxPage.tsx:67` e fallback `'Contato'` em `PipelinePage.tsx:963`.
 
-A função passa a retornar e a UI passa a exibir:
+Verificado no banco para o contato "36500 - Ednalva" (tenant SOS):
+- `conversations.contact_id` está preenchido, `channel='whatsapp'`, contato existe no tenant correto, RLS idêntica entre `contacts` e `conversations`. **Os dados estão íntegros — o problema é exclusivamente de propagação de prop no cliente.**
 
-- `chats_listed` — quantos chats individuais a instância tem
-- `phones_requested` — quantos telefones recebidos
-- `phones_matched` — quantos têm chat na instância
-- `phones_without_chat` — quantos não têm (esperado para leads antigos)
-- `chats_found` / `messages_inserted` — totais persistidos
+**Não é reflexo das alterações recentes.** Os commits dos últimos dias tocaram apenas `BulkHistorySyncDialog`, `historySync.ts`, edge function `uazapi-history-sync-contacts`, `ImportContactsDialog` e o botão "Histórico WA" em `OpportunityDetail`. Nenhum desses arquivos altera o `ChatPanel`, o select de conversas no Inbox, ou a regra `channel === 'whatsapp'`. O `git log` por arquivo confirma — `ChatPanel.tsx` não é tocado desde `dee45f7` (anterior a esta série), `InboxPage.tsx` idem. A falha já existia; ficou visível agora porque um membro do SOS abriu uma conversa cujo `contact` não estava no estado do componente pai no momento do clique.
 
-Isso responde de cara: "dos 148 contatos, 23 têm chat na instância, 125 não têm histórico armazenado pela UAZAPI".
+## Correção (mínima, cirúrgica)
 
-## Esclarecer o filtro de escopo
+Tornar o `ChatPanel` **autossuficiente** para envio de mídia e exibição do nome, eliminando dependência frágil de props transitórias. Sem alterar back-end nem RLS.
 
-Na UI, adicionar texto auxiliar sob cada radio:
+### 1. `src/components/inbox/ChatPanel.tsx`
 
-- "Apenas contatos sem conversa nesta instância" → "Pula contatos que já têm uma conversa registrada no CRM para esse número."
-- "Todos os contatos filtrados" → "Inclui contatos que já têm conversa (reprocessa)."
+Adicionar um estado local `resolvedContact` / `resolvedChannel` que, ao montar (e quando `conversationId` muda), faz **um único** select:
 
-E quando a estimativa é igual nas duas opções, mostrar dica: "Nenhum contato tem conversa nesta instância ainda — os dois escopos produzem o mesmo conjunto."
+```ts
+supabase.from('conversations')
+  .select('channel, contact:contacts(id,name,phone,email)')
+  .eq('id', conversationId).maybeSingle()
+```
 
-## Arquivos
+Regras:
+- Se `props.contact` chega populado, usa ele (rápido, sem flicker).
+- Se chega vazio, usa o resultado do fetch como fonte de verdade.
+- `handleSendMedia` e `handleSendMessage` passam a ler `effectiveContact = props.contact ?? resolvedContact` e `effectiveChannel = props.channel ?? resolvedChannel`. Só bloqueia o envio quando **ambas as fontes** estiverem vazias.
+- Header (linha 593) também usa o fallback resolvido — corrige o "?" e o subtítulo "conversa".
 
-- `supabase/functions/uazapi-history-sync-contacts/index.ts` — reescrita: substitui `VARIANTS` + `probeLoop` + `fallback_scan` pela listagem de chats via `/chat/find` + lookup por telefone. Mantém a persistência (conversations + messages upsert) como está.
-- `src/lib/historySync.ts` — estender `HistorySyncResult` com `chats_listed`, `phones_matched`, `phones_without_chat`; remover `winner_variant` e `fallback_scan` (não fazem mais sentido).
-- `src/components/contacts/BulkHistorySyncDialog.tsx` — exibir os novos campos no card de resultado e adicionar os textos auxiliares dos radios + dica quando as estimativas baterem.
+### 2. Nenhum outro arquivo é alterado
 
-## Notas técnicas
+`InboxPage`, `PipelinePage`, `OpportunityDetail` continuam passando as props como hoje. A diferença é que o `ChatPanel` deixa de **depender** delas para operar.
 
-- Endpoint de listagem: tentar primeiro `POST /chat/find` com `{ limit: 100, offset, operator: 'AND' }` (formato UAZAPI v2). Se 404, cair para `GET /chat/find?limit=100&offset=…`. Logar o shape da primeira página para confirmar o campo do chatid (`wa_chatid`, `chatid`, `id`).
-- Filtro de chat individual: regex `/@(s\.whatsapp\.net|c\.us|lid)$/i`.
-- Extração de telefone do chatid: pegar parte antes do `@`, remover `:\d+` (device id), aplicar `normalizeBrazilPhone`. Para `@lid`, o número antes do `@` *não* é E.164 — nesse caso, usar o campo `wa_name`/`name`/`phone` se a API expuser; senão, pular silenciosamente (o `@lid` é um pseudônimo, não dá pra inferir o telefone).
-- Manter limite de 30 dias, batch de 100 telefones, MAX_PAGES_PER_CHAT = 10.
-- Sem mudanças em schema, RLS, rotas, ou na função antiga `uazapi-history-sync`.
+## Validação
 
-## Validação pós-deploy
+1. Abrir a conversa da Ednalva como membro do SOS → header mostra "36500 - Ednalva" + telefone (não mais "?" / "Conversa").
+2. Gravar e enviar áudio → não dispara o toast; mídia sobe normalmente via `whatsapp-media` bucket.
+3. Mensagens de texto continuam funcionando.
+4. Conferir logs do `uazapi-send-media` no Supabase após o teste para confirmar que o payload chegou com `phone` correto.
 
-1. Rodar "Histórico WA" no mesmo conjunto.
-2. Esperar resposta com `chats_listed > 0`, `phones_matched ≥ 0`, e — se `phones_matched > 0` — `messages_inserted > 0`.
-3. Se `chats_listed = 0`, é problema de credencial/endpoint (vai aparecer no log com o corpo da resposta).
-4. Se `phones_matched = 0` e `chats_listed > 0`, confirma que a UAZAPI realmente não tem histórico desses leads — comunicação esperada para o usuário.
+## Por que não mexer no chamador?
+
+Cada chamador tem racing diferente (URL deep-link no Inbox, realtime sem join no realtime payload, opp carregada async em Pipeline/Opportunity). Centralizar a resolução no `ChatPanel` resolve os três de uma vez e blinda contra qualquer chamador futuro.
