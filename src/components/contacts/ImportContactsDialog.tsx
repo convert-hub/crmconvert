@@ -85,18 +85,22 @@ const CONTACT_FIELDS = [
 const normKey = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').trim();
 
 function guessMapping(header: string, customDefs: CustomFieldDef[] = []): string {
-  const h = header.toLowerCase().trim();
-  if (/^nome|name|full.?name/i.test(h)) return 'name';
-  if (/^telefone|phone|whatsapp|celular|fone/i.test(h)) return 'phone';
-  if (/^e?-?mail/i.test(h)) return 'email';
-  if (/^status/i.test(h)) return 'status';
-  if (/^tag/i.test(h)) return 'tags';
-  if (/^nasc|birth|aniversário|aniversario/i.test(h)) return 'birth_date';
-  if (/^cidade|city/i.test(h)) return 'city';
-  if (/^estado|state|uf/i.test(h)) return 'state';
-  if (/^origem|source/i.test(h)) return 'source';
-  if (/^nota|note|obs/i.test(h)) return 'notes';
-  if (/^etapa|stage|pipeline|funil|fase/i.test(h)) return 'pipeline_stage';
+  const raw = header.toLowerCase().trim();
+  // strip punctuation/parens for fuzzy matching ("Status (Etapa)" -> "status etapa")
+  const h = raw.replace(/[()[\]{}.,;:_\-/\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Pipeline stage FIRST so "Status (Etapa)" / "Status Etapa" / "Etapa Status" don't fall into plain 'status'
+  if (/\b(etapa|estagio|stage|pipeline|funil|fase)\b/.test(h)) return 'pipeline_stage';
+  if (/\b(status)\s+(etapa|pipeline|funil|fase|stage)\b/.test(h)) return 'pipeline_stage';
+  if (/^nome\b|^name\b|^full.?name/.test(h)) return 'name';
+  if (/^telefone\b|^phone\b|whatsapp|celular|fone/.test(h)) return 'phone';
+  if (/^e?-?mail\b/.test(h)) return 'email';
+  if (/^status\b/.test(h)) return 'status';
+  if (/^tag/.test(h)) return 'tags';
+  if (/nasc|birth|aniversario/.test(h)) return 'birth_date';
+  if (/^cidade\b|^city\b/.test(h)) return 'city';
+  if (/^estado\b|^state\b|^uf\b/.test(h)) return 'state';
+  if (/^origem\b|^source\b/.test(h)) return 'source';
+  if (/^nota|^note|^obs|coment/.test(h)) return 'notes';
   // Custom fields: try matching by label or key
   const nh = normKey(header);
   for (const fd of customDefs) {
