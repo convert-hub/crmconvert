@@ -598,7 +598,13 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
             for (const req of oppReqs) {
               const ex: any = existingByContact.get(req.contactId);
               if (!ex) {
-                toInsert.push({
+                const oppCf: Record<string, unknown> = {};
+                if (req.bucket.hasCustom && oppCustomKeys.size > 0) {
+                  for (const k of Object.keys(req.bucket.custom)) {
+                    if (oppCustomKeys.has(k)) oppCf[k] = req.bucket.custom[k];
+                  }
+                }
+                const oppPayload: any = {
                   tenant_id: tenantId,
                   contact_id: req.contactId,
                   pipeline_id: selectedPipeline,
@@ -607,7 +613,9 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
                   value: 0,
                   priority: 'medium',
                   status: 'open',
-                });
+                };
+                if (Object.keys(oppCf).length > 0) oppPayload.custom_fields = oppCf;
+                toInsert.push(oppPayload);
               } else if (ex.stage_id === req.matched.id) {
                 oppsIgnored++;
               } else if (!conflictByOppId.has(ex.id)) {
