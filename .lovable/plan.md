@@ -1,21 +1,43 @@
 ## Diagnóstico
 
-O importador hoje só lê `tenants.settings.custom_contact_fields` e grava valores em `contacts.custom_fields`. A inserção de oportunidades (linhas 590–626 de `ImportContactsDialog.tsx`) cria a opp com `tenant_id`, `contact_id`, `pipeline_id`, `stage_id`, `title`, `value`, `priority`, `status` — **nunca toca em `opportunities.custom_fields`**, mesmo quando o campo está marcado também como "Oportunidade" em Configurações.
+A falha atual não vem do CSV nem dos campos personalizados. Ela vem do `upsert` de contatos com telefone.
 
-Resultado: CPF/Devedor aparecem no contato (correto), mas a oportunidade fica com `custom_fields = {}`.
+O código usa:
 
-## Mudança
+```ts
+.upsert(payload, { onConflict: 'tenant_id,phone' })
+```
 
-`src/components/contacts/ImportContactsDialog.tsx`:
+Mas no banco o índice único existente é parcial:
 
-1. Carregar também `custom_opportunity_fields` em paralelo com `custom_contact_fields` (mesmo `useEffect` do tenant settings). Manter um `Set<string>` com as `key`s que existem em ambas as listas (campos de escopo duplo).
-2. Na construção do dropdown de mapeamento, unir as duas listas por `key` (dedupe) — assim um campo marcado só pra "Oportunidade" também fica selecionável.
-3. No bloco de inserção de oportunidades (`toInsert.push({...})`), montar `opp.custom_fields` filtrando `b.custom` pelas keys presentes em `custom_opportunity_fields`. Se vazio, omitir.
-4. No bloco de conflito de etapa (opp já existe), **não** sobrescrever silenciosamente — manter comportamento atual (entra na lista de conflitos). Custom fields só são gravados em opps novas criadas pelo importador, para evitar sobrescrever dados já editados pelo usuário.
+```sql
+contacts_tenant_phone_unique ON (tenant_id, phone)
+WHERE phone IS NOT NULL AND phone <> ''
+```
 
-Sem mudança em DB, RLS ou outras telas. Tabela `opportunities.custom_fields` (JSONB) já existe e já é renderizada em `OpportunityDetail.tsx`.
+Postgres/Supabase não aceita `ON CONFLICT (tenant_id, phone)` apontando para índice único parcial nesse formato, por isso todos os lotes com telefone falham com:
 
-## Validação após implementar
+```text
+there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
 
-- Reimportar o mesmo CSV. Os 124 contatos já existentes não geram opp nova (já têm). Para testar de verdade: apagar 2-3 opps de teste e reimportar → verificar via SQL que `opportunities.custom_fields` veio com `cpf` e `devedor`.
-- Confirmar que abrir a oportunidade no app mostra os campos preenchidos.
+Isso explica o resultado da tela: os poucos criados foram provavelmente contatos sem telefone, enquanto os 2147 registros com telefone caíram no mesmo erro de lote.
+
+## Plano de correção
+
+1. Alterar o importador para não depender de `upsert(... onConflict: 'tenant_id,phone')`.
+2. Manter o lookup atual por telefone para descobrir contatos existentes.
+3. Separar o lote em dois grupos:
+   - contatos existentes: atualizar por `id`, preservando/mesclando tags e `custom_fields`;
+   - contatos novos: inserir normalmente.
+4. Preservar a lógica recém-ajustada para criar `opportunities.custom_fields` quando o campo estiver marcado para oportunidade.
+5. Ajustar a contagem de criados/atualizados para refletir `insert` e `update` separados.
+6. Validar na tela que uma nova importação não gera mais o erro de `ON CONFLICT`.
+
+## Arquivo afetado
+
+- `src/components/contacts/ImportContactsDialog.tsx`
+
+## Sem mudança de banco
+
+Não pretendo alterar índices, constraints ou RLS agora. A correção mais segura é no código do importador, porque o índice parcial já existe para permitir múltiplos contatos sem telefone e evitar duplicidade apenas quando há telefone válido.
