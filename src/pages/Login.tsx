@@ -124,6 +124,36 @@ export default function Login() {
           </Tabs>
         </CardContent>
       </Card>
+
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">Redefinir senha</DialogTitle>
+            <DialogDescription className="text-[13px]">
+              Informe seu e-mail para receber o link de redefinição.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleForgotPassword} className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="forgot-email" className="text-[13px]">Email</Label>
+              <Input
+                id="forgot-email"
+                type="email"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button type="submit" className="w-full" disabled={forgotLoading}>
+                {forgotLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Enviar link
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
