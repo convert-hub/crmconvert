@@ -17,6 +17,22 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: `${window.location.origin}/update-password`,
+    });
+    if (error) console.error('resetPasswordForEmail error:', error);
+    setForgotLoading(false);
+    toast.success('Se o e-mail existir, enviaremos um link de redefinição.');
+    setForgotOpen(false);
+    setForgotEmail('');
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
