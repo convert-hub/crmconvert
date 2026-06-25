@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,18 +12,22 @@ const logo = 'https://zhywwrhzaqfcjcwywkwf.supabase.co/storage/v1/object/public/
 
 export default function UpdatePassword() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [canUpdate, setCanUpdate] = useState<boolean | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ranRef = useRef(false);
 
   useEffect(() => {
+    if (ranRef.current) return;
+    ranRef.current = true;
+
     const hash = window.location.hash || '';
     const hasRecoveryHash = hash.includes('type=recovery');
-    const tokenHash = searchParams.get('token_hash');
-    const type = searchParams.get('type');
+    const params = new URLSearchParams(window.location.search);
+    const tokenHash = params.get('token_hash');
+    const type = params.get('type');
 
     if (tokenHash && type === 'recovery') {
       supabase.auth
@@ -65,7 +69,7 @@ export default function UpdatePassword() {
       subscription.unsubscribe();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [searchParams]);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
