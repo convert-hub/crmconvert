@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import AppLayout from "@/components/layout/AppLayout";
 import Login from "@/pages/Login";
+import UpdatePassword from "@/pages/UpdatePassword";
 import WaitingApproval from "@/pages/WaitingApproval";
 import DashboardPage from "@/pages/DashboardPage";
 import PipelinePage from "@/pages/PipelinePage";
@@ -41,6 +42,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={session ? <Navigate to={isSaasAdmin && !membership ? "/admin" : "/pipeline"} /> : <Login />} />
       <Route path="/flow/install/:token" element={<FlowInstallPage />} />
+      <Route path="/update-password" element={<UpdatePassword />} />
       <Route path="/waiting" element={
         <ProtectedRoute><WaitingApproval /></ProtectedRoute>
       } />

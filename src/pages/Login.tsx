@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 const logo = 'https://zhywwrhzaqfcjcwywkwf.supabase.co/storage/v1/object/public/tenant-logos/logo-crm.png';
@@ -16,6 +17,22 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: `${window.location.origin}/update-password`,
+    });
+    if (error) console.error('resetPasswordForEmail error:', error);
+    setForgotLoading(false);
+    toast.success('Se o e-mail existir, enviaremos um link de redefinição.');
+    setForgotOpen(false);
+    setForgotEmail('');
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,6 +91,13 @@ export default function Login() {
                   {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Entrar
                 </Button>
+                <button
+                  type="button"
+                  onClick={() => setForgotOpen(true)}
+                  className="block mx-auto text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                >
+                  Esqueci minha senha
+                </button>
               </form>
             </TabsContent>
 
@@ -100,6 +124,36 @@ export default function Login() {
           </Tabs>
         </CardContent>
       </Card>
+
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">Redefinir senha</DialogTitle>
+            <DialogDescription className="text-[13px]">
+              Informe seu e-mail para receber o link de redefinição.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleForgotPassword} className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="forgot-email" className="text-[13px]">Email</Label>
+              <Input
+                id="forgot-email"
+                type="email"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button type="submit" className="w-full" disabled={forgotLoading}>
+                {forgotLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Enviar link
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
