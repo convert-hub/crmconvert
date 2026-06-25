@@ -42,6 +42,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={session ? <Navigate to={isSaasAdmin && !membership ? "/admin" : "/pipeline"} /> : <Login />} />
       <Route path="/flow/install/:token" element={<FlowInstallPage />} />
+      <Route path="/update-password" element={<UpdatePassword />} />
       <Route path="/waiting" element={
         <ProtectedRoute><WaitingApproval /></ProtectedRoute>
       } />
