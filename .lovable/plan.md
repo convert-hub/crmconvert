@@ -1,57 +1,75 @@
-## Diagnóstico forense
+# Plano — Fluxo de redefinição de senha (revisado)
 
-**Mensagem exata:** `"Envio de mídia só disponível para WhatsApp"` — origem única em `src/components/inbox/ChatPanel.tsx:472`:
+Implementar o fluxo ponta-a-ponta: link "Esqueci minha senha" na tela de login + página pública `/update-password` para definir a nova senha após clicar no link do e-mail enviado pelo Supabase.
 
-```ts
-const isWhatsApp = channel === 'whatsapp';
-if (!isWhatsApp || !contactPhone) {
-  toast.error('Envio de mídia só disponível para WhatsApp'); return;
-}
-```
+## Arquivos alterados
 
-**Causa raiz (confirmada por inspeção de dados):**
+### 1. `src/pages/Login.tsx` (alterar)
+- Adicionar estado local: `forgotOpen`, `forgotEmail`, `forgotLoading`.
+- Adicionar link discreto **"Esqueci minha senha"** logo abaixo do botão "Entrar" (apenas na aba de login), estilo `text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline`, alinhado ao centro.
+- Ao clicar, abrir `<Dialog>` (shadcn) com:
+  - Título: "Redefinir senha"; descrição: "Informe seu e-mail para receber o link de redefinição."
+  - `Input` de e-mail + `Label`.
+  - Botão "Enviar link" chama:
+    ```ts
+    await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: `${window.location.origin}/update-password`,
+    });
+    ```
+  - **Sempre** mostrar o mesmo toast genérico ("Se o e-mail existir, enviaremos um link de redefinição."), independente de erro/sucesso, para evitar enumeração de usuários. Erro vai só para `console.error`.
+  - Fechar dialog e limpar campo após envio.
 
-O `ChatPanel` recebe `contact` e `channel` como **props** dos seus 3 chamadores (`InboxPage`, `PipelinePage`, `OpportunityDetail`). Quando qualquer um desses chamadores ainda não populou o objeto `contact` (ou está renderizando antes do `select(..., contact:contacts(*))` resolver / o objeto foi substituído por um payload de realtime que não trouxe o join / a conversa selecionada não está na página atual de `conversations`), os dois sintomas aparecem juntos:
+### 2. `src/pages/UpdatePassword.tsx` (criar)
+- Layout idêntico ao `Login.tsx` (mesmo `Card`, logo, `max-w-sm`).
+- Estado: `password`, `confirmPassword`, `loading`, `canUpdate` (bool|null — `null` = ainda verificando), `hasRecoveryHash` (bool).
 
-- `contact?.phone` → `undefined` → bloqueia o envio de mídia.
-- `contact?.name` → fallback `'Conversa'` em `InboxPage.tsx:67` e fallback `'Contato'` em `PipelinePage.tsx:963`.
+**Detecção de recovery (revisada):**
+- No mount (`useEffect`):
+  1. Ler `window.location.hash` — se contiver `type=recovery`, setar `hasRecoveryHash=true`. Esse é o sinal forte de que o usuário chegou por link legítimo; a partir daqui aguardamos a sessão sem timer agressivo.
+  2. Registrar listener `supabase.auth.onAuthStateChange((event, session) => { if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) setCanUpdate(true); })`.
+  3. Chamar `supabase.auth.getSession()` como confirmação inicial — se já houver sessão, setar `canUpdate=true` imediatamente.
+  4. Decisão de "link inválido":
+     - Se **não há** `type=recovery` no hash **E** `getSession()` retornou `null` → setar `canUpdate=false` imediatamente (acesso direto sem token).
+     - Se **há** `type=recovery` no hash → manter `canUpdate=null` (estado de carregamento) e esperar o listener. Fallback opcional de **3s** apenas para mostrar mensagem amigável caso o Supabase falhe silenciosamente; sem o fallback, o usuário ficaria no spinner indefinidamente.
+  5. Cleanup: `subscription.unsubscribe()` e limpar o timer.
 
-Verificado no banco para o contato "36500 - Ednalva" (tenant SOS):
-- `conversations.contact_id` está preenchido, `channel='whatsapp'`, contato existe no tenant correto, RLS idêntica entre `contacts` e `conversations`. **Os dados estão íntegros — o problema é exclusivamente de propagação de prop no cliente.**
+**Renderização condicional:**
+- `canUpdate === null` → spinner centralizado ("Validando link…").
+- `canUpdate === false` → mensagem "Link inválido ou expirado" + botão "Voltar ao login" (`navigate('/login')`).
+- `canUpdate === true` → formulário:
+  - `Input type="password"` "Nova senha" (`minLength={6}`, required).
+  - `Input type="password"` "Confirmar senha" (required).
+  - Validação no submit: ambos preenchidos, mínimo 6 caracteres, iguais; caso contrário, toast de erro e abortar.
+  - Submit: `await supabase.auth.updateUser({ password })`.
+  - Sucesso → toast "Senha atualizada com sucesso" + `supabase.auth.signOut()` + `navigate('/login')`.
+  - Erro → toast com `error.message`.
 
-**Não é reflexo das alterações recentes.** Os commits dos últimos dias tocaram apenas `BulkHistorySyncDialog`, `historySync.ts`, edge function `uazapi-history-sync-contacts`, `ImportContactsDialog` e o botão "Histórico WA" em `OpportunityDetail`. Nenhum desses arquivos altera o `ChatPanel`, o select de conversas no Inbox, ou a regra `channel === 'whatsapp'`. O `git log` por arquivo confirma — `ChatPanel.tsx` não é tocado desde `dee45f7` (anterior a esta série), `InboxPage.tsx` idem. A falha já existia; ficou visível agora porque um membro do SOS abriu uma conversa cujo `contact` não estava no estado do componente pai no momento do clique.
+### 3. `src/App.tsx` (alterar)
+- Importar `UpdatePassword`.
+- Adicionar rota **pública** (fora de `ProtectedRoute`), próxima a `/login` e `/flow/install/:token`:
+  ```tsx
+  <Route path="/update-password" element={<UpdatePassword />} />
+  ```
 
-## Correção (mínima, cirúrgica)
+## Detalhes técnicos importantes
 
-Tornar o `ChatPanel` **autossuficiente** para envio de mídia e exibição do nome, eliminando dependência frágil de props transitórias. Sem alterar back-end nem RLS.
+- O Supabase envia o link com hash `#access_token=...&type=recovery`. Com `persistSession: true` (já configurado em `client.ts`), o cliente processa o hash automaticamente e dispara `PASSWORD_RECOVERY`. A rota **precisa ser pública** — `ProtectedRoute` poderia redirecionar antes do hash ser processado.
+- O critério primário de "link válido" é o **próprio hash da URL**, não um timer. Conexões lentas não causam mais falso negativo.
+- `signOut()` após atualização força login limpo com a nova senha e evita estado ambíguo de sessão de recovery.
+- Toast genérico no "esqueci minha senha" previne enumeração de usuários.
 
-### 1. `src/components/inbox/ChatPanel.tsx`
+## Fora do escopo
 
-Adicionar um estado local `resolvedContact` / `resolvedChannel` que, ao montar (e quando `conversationId` muda), faz **um único** select:
+- `ProtectedRoute.tsx`, `AuthContext.tsx`, lógica de WhatsApp/UAZAPI/leads, edge functions, templates de e-mail do Supabase.
 
-```ts
-supabase.from('conversations')
-  .select('channel, contact:contacts(id,name,phone,email)')
-  .eq('id', conversationId).maybeSingle()
-```
+## Validação após implementação
 
-Regras:
-- Se `props.contact` chega populado, usa ele (rápido, sem flicker).
-- Se chega vazio, usa o resultado do fetch como fonte de verdade.
-- `handleSendMedia` e `handleSendMessage` passam a ler `effectiveContact = props.contact ?? resolvedContact` e `effectiveChannel = props.channel ?? resolvedChannel`. Só bloqueia o envio quando **ambas as fontes** estiverem vazias.
-- Header (linha 593) também usa o fallback resolvido — corrige o "?" e o subtítulo "conversa".
+1. `/login` → "Esqueci minha senha" → e-mail → toast → e-mail chega.
+2. Clicar no link → `/update-password` mostra formulário (não "link inválido"), mesmo em conexão lenta.
+3. Definir nova senha → toast sucesso → `/login` → login com nova senha funciona.
+4. Abrir `/update-password` diretamente sem hash → "Link inválido ou expirado" imediato.
 
-### 2. Nenhum outro arquivo é alterado
+## Resumo de arquivos
 
-`InboxPage`, `PipelinePage`, `OpportunityDetail` continuam passando as props como hoje. A diferença é que o `ChatPanel` deixa de **depender** delas para operar.
-
-## Validação
-
-1. Abrir a conversa da Ednalva como membro do SOS → header mostra "36500 - Ednalva" + telefone (não mais "?" / "Conversa").
-2. Gravar e enviar áudio → não dispara o toast; mídia sobe normalmente via `whatsapp-media` bucket.
-3. Mensagens de texto continuam funcionando.
-4. Conferir logs do `uazapi-send-media` no Supabase após o teste para confirmar que o payload chegou com `phone` correto.
-
-## Por que não mexer no chamador?
-
-Cada chamador tem racing diferente (URL deep-link no Inbox, realtime sem join no realtime payload, opp carregada async em Pipeline/Opportunity). Centralizar a resolução no `ChatPanel` resolve os três de uma vez e blinda contra qualquer chamador futuro.
+- **Criados:** `src/pages/UpdatePassword.tsx`
+- **Alterados:** `src/pages/Login.tsx`, `src/App.tsx`
