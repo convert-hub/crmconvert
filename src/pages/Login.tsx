@@ -91,6 +91,13 @@ export default function Login() {
                   {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Entrar
                 </Button>
+                <button
+                  type="button"
+                  onClick={() => setForgotOpen(true)}
+                  className="block mx-auto text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                >
+                  Esqueci minha senha
+                </button>
               </form>
             </TabsContent>
 
