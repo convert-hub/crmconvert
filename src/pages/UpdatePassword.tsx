@@ -10,6 +10,8 @@ import { Loader2 } from 'lucide-react';
 
 const logo = 'https://zhywwrhzaqfcjcwywkwf.supabase.co/storage/v1/object/public/tenant-logos/logo-crm.png';
 
+let processedToken: string | null = null;
+
 export default function UpdatePassword() {
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
@@ -17,12 +19,8 @@ export default function UpdatePassword() {
   const [loading, setLoading] = useState(false);
   const [canUpdate, setCanUpdate] = useState<boolean | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ranRef = useRef(false);
 
   useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-
     const hash = window.location.hash || '';
     const hasRecoveryHash = hash.includes('type=recovery');
     const params = new URLSearchParams(window.location.search);
@@ -30,6 +28,14 @@ export default function UpdatePassword() {
     const type = params.get('type');
 
     if (tokenHash && type === 'recovery') {
+      if (processedToken === tokenHash) {
+        supabase.auth.getSession().then(({ data }) => {
+          setCanUpdate(!!data.session);
+        });
+        return;
+      }
+
+      processedToken = tokenHash;
       supabase.auth
         .verifyOtp({ token_hash: tokenHash, type: 'recovery' })
         .then(({ error }) => {
@@ -38,6 +44,7 @@ export default function UpdatePassword() {
           } else {
             setCanUpdate(true);
           }
+          window.history.replaceState({}, '', '/update-password');
         });
       return;
     }
@@ -59,7 +66,6 @@ export default function UpdatePassword() {
     });
 
     if (hasRecoveryHash) {
-      // Fallback amigável: se em 3s o Supabase não materializar a sessão, mostra erro.
       timerRef.current = setTimeout(() => {
         setCanUpdate((prev) => (prev === null ? false : prev));
       }, 3000);
