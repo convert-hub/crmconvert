@@ -287,6 +287,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [showSchedule, setShowSchedule] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
+  const [providerLoading, setProviderLoading] = useState(true);
   // Fallback: quando o pai não passa contact/channel (deep-link, race de carregamento,
   // payload de realtime sem join), resolvemos a partir do próprio conversationId.
   const [resolvedContact, setResolvedContact] = useState<Contact | null>(null);
@@ -360,7 +361,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   }, []);
   useEffect(() => {
     if (!conversationId) return;
-    getConversationProvider(conversationId).then(setProviderInfo).catch(() => setProviderInfo(null));
+    setProviderLoading(true);
+    setProviderInfo(null);
+    getConversationProvider(conversationId)
+      .then(setProviderInfo)
+      .catch((e) => { console.warn('[ChatPanel] getConversationProvider falhou', e); setProviderInfo(null); })
+      .finally(() => setProviderLoading(false));
     supabase.from('messages').select('*').eq('conversation_id', conversationId).order('created_at')
       .then(({ data }) => {
         setMessages((data as unknown as Message[]) ?? []);
@@ -726,7 +732,13 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={sending || isInternal} className="rounded-xl h-10 w-10 shrink-0" title="Anexar arquivo">
             <Paperclip className="h-4 w-4" />
           </Button>
-          {!isInternal && <AudioRecorder onRecorded={handleSendMedia} disabled={sending} provider={providerInfo?.provider ?? null} />}
+          {!isInternal && (
+            <AudioRecorder
+              onRecorded={handleSendMedia}
+              disabled={sending}
+              provider={providerLoading ? null : (providerInfo?.provider ?? null)}
+            />
+          )}
           <Button size="icon" variant={isInternal ? 'default' : 'ghost'} onClick={() => setIsInternal(!isInternal)}
             className={cn("rounded-xl h-10 w-10 shrink-0", isInternal && 'bg-warning text-warning-foreground hover:bg-warning/90')} title="Nota interna">
             <StickyNote className="h-4 w-4" />

@@ -1,33 +1,80 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Mic, Square, Trash2, Send } from 'lucide-react';
+import { Mic, Square, Trash2, Send, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 interface AudioRecorderProps {
   onRecorded: (file: File) => void;
   disabled?: boolean;
   /**
-   * Quando 'meta_cloud', tenta gravar em audio/ogg (Opus) via opus-recorder,
-   * que é o formato exigido pela WhatsApp Cloud API.
-   * Para 'uazapi' (ou indefinido) usa MediaRecorder nativo (audio/webm).
+   * 'meta_cloud' = WhatsApp Cloud API oficial. EXIGE ogg/opus.
+   * 'uazapi'     = UAZAPI não-oficial. Aceita webm.
+   * null         = provider ainda não resolvido. Botão fica desabilitado.
    */
   provider?: 'meta_cloud' | 'uazapi' | null;
+}
+
+type OpusReady = 'loading' | 'ready' | 'failed';
+
+const ENCODER_PATH = `/encoderWorker.min.js?v=${(import.meta as any).env?.VITE_APP_BUILD ?? '20260630'}`;
+
+async function instantiateOpusRecorder(): Promise<any> {
+  const mod: any = await import('opus-recorder' as any);
+  const Recorder = mod.default ?? mod;
+  return new Recorder({
+    encoderPath: ENCODER_PATH,
+    encoderApplication: 2048,
+    encoderSampleRate: 48000,
+    numberOfChannels: 1,
+    streamPages: false,
+  });
 }
 
 export default function AudioRecorder({ onRecorded, disabled, provider }: AudioRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
-  // Native MediaRecorder path (uazapi)
+  const [opusReady, setOpusReady] = useState<OpusReady>('loading');
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  // opus-recorder path (meta_cloud)
+
   const opusRecorderRef = useRef<any>(null);
   const opusBlobRef = useRef<Blob | null>(null);
   const usingOpusRef = useRef(false);
+
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const cleanup = useCallback(() => {
+  // Pré-instancia o opus-recorder ao montar. 1 retry se falhar.
+  useEffect(() => {
+    let cancelled = false;
+    let attempt = 0;
+    const tryInit = async () => {
+      attempt += 1;
+      try {
+        const rec = await instantiateOpusRecorder();
+        if (cancelled) { try { rec.close?.(); } catch { /* noop */ } return; }
+        opusRecorderRef.current = rec;
+        setOpusReady('ready');
+      } catch (e) {
+        console.warn('[AudioRecorder] opus-recorder init falhou', { attempt, error: e });
+        if (cancelled) return;
+        if (attempt < 2) {
+          setTimeout(tryInit, 800);
+        } else {
+          setOpusReady('failed');
+        }
+      }
+    };
+    tryInit();
+    return () => {
+      cancelled = true;
+      try { opusRecorderRef.current?.close?.(); } catch { /* noop */ }
+      opusRecorderRef.current = null;
+    };
+  }, []);
+
+  const cleanupRecording = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -35,13 +82,11 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     mediaRecorderRef.current = null;
-    try { opusRecorderRef.current?.close?.(); } catch { /* noop */ }
-    opusRecorderRef.current = null;
     opusBlobRef.current = null;
     usingOpusRef.current = false;
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  useEffect(() => cleanupRecording, [cleanupRecording]);
 
   const startNative = useCallback(async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -61,44 +106,60 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
   }, []);
 
   const startOpus = useCallback(async () => {
-    // dynamic import keeps bundle lean and lets us fall back on failure
-    const mod: any = await import('opus-recorder' as any);
-    const Recorder = mod.default ?? mod;
-    const rec = new Recorder({
-      encoderPath: '/encoderWorker.min.js',
-      encoderApplication: 2048, // VOIP
-      encoderSampleRate: 48000,
-      numberOfChannels: 1,
-      streamPages: false,
-    });
+    let rec = opusRecorderRef.current;
+    if (!rec) {
+      // Pré-instanciação falhou ou ainda não terminou — tenta criar agora.
+      rec = await instantiateOpusRecorder();
+      opusRecorderRef.current = rec;
+    }
     rec.ondataavailable = (typedArray: Uint8Array) => {
       const ab = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
       opusBlobRef.current = new Blob([ab], { type: 'audio/ogg' });
     };
     await rec.start();
-    opusRecorderRef.current = rec;
     usingOpusRef.current = true;
   }, []);
 
+  const blockMetaToast = () =>
+    toast.error('Não foi possível gravar áudio compatível com o WhatsApp Oficial. Recarregue a página e tente novamente.');
+
   const startRecording = useCallback(async () => {
+    // Provider ainda não resolvido → não arrisca.
+    if (provider == null) {
+      toast.error('Canal de envio ainda não identificado. Aguarde alguns segundos.');
+      return;
+    }
+
+    const requiresOgg = provider === 'meta_cloud';
+
     try {
-      if (provider === 'meta_cloud') {
+      if (requiresOgg) {
+        if (opusReady !== 'ready') {
+          blockMetaToast();
+          return;
+        }
         try {
           await startOpus();
         } catch (e) {
-          console.warn('[AudioRecorder] opus-recorder falhou, usando webm fallback', e);
-          await startNative();
+          console.error('[AudioRecorder] opus start falhou em meta_cloud', e);
+          blockMetaToast();
+          cleanupRecording();
+          return;
         }
       } else {
+        // uazapi: webm é aceito.
         await startNative();
       }
       setRecording(true);
       setDuration(0);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-    } catch {
-      cleanup();
+    } catch (e) {
+      console.error('[AudioRecorder] startRecording erro', e);
+      cleanupRecording();
+      if (requiresOgg) blockMetaToast();
+      else toast.error('Falha ao iniciar gravação de áudio.');
     }
-  }, [provider, startOpus, startNative, cleanup]);
+  }, [provider, opusReady, startOpus, startNative, cleanupRecording]);
 
   const stopAndSend = useCallback(async () => {
     if (usingOpusRef.current && opusRecorderRef.current) {
@@ -115,7 +176,10 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
       }
       setRecording(false);
       setDuration(0);
-      cleanup();
+      // Mantém o recorder instanciado para a próxima gravação; só limpa stream/timer.
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      opusBlobRef.current = null;
+      usingOpusRef.current = false;
       return;
     }
     if (!mediaRecorderRef.current) return;
@@ -127,19 +191,22 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
     mediaRecorderRef.current.stop();
     setRecording(false);
     setDuration(0);
-    cleanup();
-  }, [onRecorded, cleanup]);
+    cleanupRecording();
+  }, [onRecorded, cleanupRecording]);
 
   const cancelRecording = useCallback(() => {
     if (usingOpusRef.current && opusRecorderRef.current) {
       try { opusRecorderRef.current.stop(); } catch { /* noop */ }
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      opusBlobRef.current = null;
+      usingOpusRef.current = false;
     } else {
       try { mediaRecorderRef.current?.stop(); } catch { /* noop */ }
+      cleanupRecording();
     }
     setRecording(false);
     setDuration(0);
-    cleanup();
-  }, [cleanup]);
+  }, [cleanupRecording]);
 
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -175,16 +242,31 @@ export default function AudioRecorder({ onRecorded, disabled, provider }: AudioR
     );
   }
 
+  const providerPending = provider == null;
+  const opusBlockingMeta = provider === 'meta_cloud' && opusReady === 'loading';
+  const opusFailedForMeta = provider === 'meta_cloud' && opusReady === 'failed';
+  const isDisabled = !!disabled || providerPending || opusBlockingMeta || opusFailedForMeta;
+
+  const title = providerPending
+    ? 'Identificando canal de envio…'
+    : opusBlockingMeta
+      ? 'Preparando gravador compatível com o WhatsApp Oficial…'
+      : opusFailedForMeta
+        ? 'Gravador de áudio indisponível — recarregue a página'
+        : 'Gravar áudio';
+
   return (
     <Button
       size="icon"
       variant="ghost"
       className="rounded-xl h-12 w-12 shrink-0 text-muted-foreground hover:text-foreground"
       onClick={startRecording}
-      disabled={disabled}
-      title="Gravar áudio"
+      disabled={isDisabled}
+      title={title}
     >
-      <Mic className="h-5 w-5" />
+      {opusBlockingMeta || providerPending
+        ? <Loader2 className="h-5 w-5 animate-spin" />
+        : <Mic className="h-5 w-5" />}
     </Button>
   );
 }
