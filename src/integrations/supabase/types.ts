@@ -2531,6 +2531,13 @@ export type Database = {
         Args: { _error: string; _job_id: string }
         Returns: undefined
       }
+      get_conversation_provider: {
+        Args: { p_conversation_id: string }
+        Returns: {
+          instance_id: string
+          provider: string
+        }[]
+      }
       get_member_workload: {
         Args: { p_tenant_id: string }
         Returns: {
