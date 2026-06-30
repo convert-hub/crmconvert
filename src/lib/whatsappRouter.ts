@@ -16,24 +16,25 @@ export async function getConversationProvider(conversationId: string): Promise<P
   const cached = providerCache.get(conversationId);
   if (cached) return cached;
 
-  const { data: conv } = await supabase
-    .from('conversations')
-    .select('whatsapp_instance_id')
-    .eq('id', conversationId)
-    .maybeSingle();
+  // RPC SECURITY DEFINER: autoriza saas_admin OR membro do tenant (qualquer role,
+  // inclusive attendant) e retorna SOMENTE (instance_id, provider) — nunca o token Meta.
+  const { data, error } = await supabase.rpc('get_conversation_provider', {
+    p_conversation_id: conversationId,
+  });
 
-  let info: ProviderInfo = { instance_id: null, provider: 'uazapi' };
-  const instanceId = (conv as any)?.whatsapp_instance_id ?? null;
-
-  if (instanceId) {
-    const { data: inst } = await supabase
-      .from('whatsapp_instances')
-      .select('id, provider')
-      .eq('id', instanceId)
-      .maybeSingle();
-    const prov = ((inst as any)?.provider === 'meta_cloud' ? 'meta_cloud' : 'uazapi') as WhatsAppProvider;
-    info = { instance_id: instanceId, provider: prov };
+  if (error) {
+    // Erro transitório: não cacheia para permitir retry; cai no default seguro.
+    console.warn('[whatsappRouter] get_conversation_provider RPC failed:', error.message);
+    return { instance_id: null, provider: 'uazapi' };
   }
+
+  const row = Array.isArray(data) && data.length > 0 ? (data[0] as { instance_id: string | null; provider: string | null }) : null;
+  const info: ProviderInfo = row && row.instance_id
+    ? {
+        instance_id: row.instance_id,
+        provider: row.provider === 'meta_cloud' ? 'meta_cloud' : 'uazapi',
+      }
+    : { instance_id: null, provider: 'uazapi' };
 
   providerCache.set(conversationId, info);
   return info;
