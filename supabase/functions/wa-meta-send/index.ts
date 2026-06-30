@@ -313,7 +313,15 @@ serve(async (req) => {
 
     // ── Upload media (URL → media_id) ─────────────────────────
     if (action === "upload_media") {
-      if (!body.media_url) return jsonResponse({ error: "media_url required" }, 400);
+      console.log("[wa-meta-send] upload_media start", {
+        type: body.type ?? null,
+        media_mime: body.media_mime ?? null,
+        filename: body.filename ?? null,
+        phone_number_id: phoneNumberId,
+      });
+      if (!body.media_url) {
+        return jsonResponse({ ok: false, code: "media_url_required", error: "URL da mídia não informada." }, 200);
+      }
       let fileResp: Response;
       try {
         fileResp = await fetch(body.media_url);
