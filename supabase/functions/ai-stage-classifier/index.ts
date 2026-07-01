@@ -45,6 +45,7 @@ Deno.serve(async (req) => {
     const mode: "suggestion" | "auto" = cfg.mode === "auto" ? "auto" : "suggestion";
     const minConfidence: number = typeof cfg.min_confidence === "number" ? cfg.min_confidence : 0.7;
     const direction: "forward_only" | "any" = cfg.direction === "any" ? "any" : "forward_only";
+    const excludeWonLost: boolean = cfg.exclude_won_lost !== false; // default true
 
     // 2) Resolve opportunity for this conversation
     const { data: conv } = await supabase
