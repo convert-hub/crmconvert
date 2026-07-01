@@ -30,7 +30,7 @@ const DEFAULTS: AiPipelineSettings = {
   min_confidence: 0.7,
   exclude_won_lost: true,
   direction: 'forward_only',
-  model: 'google/gemini-2.5-flash',
+  model: 'gpt-4.1-mini',
 };
 
 export default function AiPipelineCard() {
