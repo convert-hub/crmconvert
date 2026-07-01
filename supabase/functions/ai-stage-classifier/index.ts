@@ -11,8 +11,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const MODEL = Deno.env.get("AI_STAGE_CLASSIFIER_MODEL") || "google/gemini-3-flash-preview";
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 type Stage = {
   id: string;
