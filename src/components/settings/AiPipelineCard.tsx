@@ -142,6 +142,19 @@ export default function AiPipelineCard() {
           </div>
 
           <div className="space-y-2">
+            <Label>Modelo de IA</Label>
+            <Select value={cfg.model} disabled={!isAdmin || saving} onValueChange={(v) => persist({ ...cfg, model: v })}>
+              <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="google/gemini-2.5-flash">Gemini 2.5 Flash (rápido, recomendado)</SelectItem>
+                <SelectItem value="google/gemini-2.5-pro">Gemini 2.5 Pro (mais preciso, mais lento)</SelectItem>
+                <SelectItem value="anthropic/claude-sonnet-4">Claude Sonnet 4 (equilibrado)</SelectItem>
+                <SelectItem value="anthropic/claude-haiku-4">Claude Haiku 4 (rápido)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
             <Label>Direção permitida</Label>
             <Select value={cfg.direction} disabled={!isAdmin || saving} onValueChange={(v) => persist({ ...cfg, direction: v as any })}>
               <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
