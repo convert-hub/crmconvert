@@ -658,6 +658,7 @@ export type Database = {
           company_id: string | null
           consent_given: boolean | null
           created_at: string
+          ctwa_clid: string | null
           custom_fields: Json | null
           do_not_contact: boolean | null
           email: string | null
@@ -689,6 +690,7 @@ export type Database = {
           company_id?: string | null
           consent_given?: boolean | null
           created_at?: string
+          ctwa_clid?: string | null
           custom_fields?: Json | null
           do_not_contact?: boolean | null
           email?: string | null
@@ -720,6 +722,7 @@ export type Database = {
           company_id?: string | null
           consent_given?: boolean | null
           created_at?: string
+          ctwa_clid?: string | null
           custom_fields?: Json | null
           do_not_contact?: boolean | null
           email?: string | null
@@ -830,6 +833,7 @@ export type Database = {
           channel: Database["public"]["Enums"]["conversation_channel"]
           contact_id: string | null
           created_at: string
+          ctwa_clid: string | null
           id: string
           is_unanswered: boolean
           last_agent_message_at: string | null
@@ -849,6 +853,7 @@ export type Database = {
           channel?: Database["public"]["Enums"]["conversation_channel"]
           contact_id?: string | null
           created_at?: string
+          ctwa_clid?: string | null
           id?: string
           is_unanswered?: boolean
           last_agent_message_at?: string | null
@@ -868,6 +873,7 @@ export type Database = {
           channel?: Database["public"]["Enums"]["conversation_channel"]
           contact_id?: string | null
           created_at?: string
+          ctwa_clid?: string | null
           id?: string
           is_unanswered?: boolean
           last_agent_message_at?: string | null
@@ -1480,6 +1486,7 @@ export type Database = {
           contact_id: string | null
           conversation_state: Json | null
           created_at: string
+          ctwa_clid: string | null
           custom_fields: Json | null
           expected_close_date: string | null
           id: string
@@ -1507,6 +1514,7 @@ export type Database = {
           contact_id?: string | null
           conversation_state?: Json | null
           created_at?: string
+          ctwa_clid?: string | null
           custom_fields?: Json | null
           expected_close_date?: string | null
           id?: string
@@ -1534,6 +1542,7 @@ export type Database = {
           contact_id?: string | null
           conversation_state?: Json | null
           created_at?: string
+          ctwa_clid?: string | null
           custom_fields?: Json | null
           expected_close_date?: string | null
           id?: string
