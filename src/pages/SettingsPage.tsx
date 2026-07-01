@@ -840,7 +840,7 @@ export default function SettingsPage() {
                                       rows={5}
                                       placeholder="Ex: cliente confirmou interesse no produto e pediu proposta comercial."
                                       className="rounded-lg text-sm"
-                                      disabled={!isAdmin || s.is_won || s.is_lost}
+                                      disabled={!isAdmin}
                                       onBlur={async (e) => {
                                         const v = e.target.value.trim() || null;
                                         if (v === (s.ai_criteria || null)) return;
@@ -852,9 +852,7 @@ export default function SettingsPage() {
                                         }
                                       }}
                                     />
-                                    {(s.is_won || s.is_lost) && (
-                                      <p className="text-[11px] text-muted-foreground">Etapas de Ganho/Perdido não são movidas pela IA.</p>
-                                    )}
+                                    <p className="text-[11px] text-muted-foreground">Defina critérios para que a IA saiba quando um lead chegou a esta etapa (se permitido nas configurações de IA).</p>
                                   </div>
                                 </PopoverContent>
                               </Popover>
