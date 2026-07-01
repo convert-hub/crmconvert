@@ -68,6 +68,8 @@ export default function CreateOpportunityFromContactDialog({ open, onOpenChange,
       title,
       value: value ? parseFloat(value) : 0,
       contact_id: contact.id,
+      ctwa_clid: (contact as any).ctwa_clid ?? null,
+      source: contact.source ?? null,
     });
 
     setLoading(false);

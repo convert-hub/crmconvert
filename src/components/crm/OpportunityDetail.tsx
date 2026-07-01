@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Opportunity, Contact, Stage, Message, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Button } from '@/components/ui/button';
+import { CtwaBadge } from '@/components/shared/CtwaBadge';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
@@ -328,7 +329,10 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
       {/* Contact Info */}
       {opp.contact && (
         <div className="rounded-2xl bg-accent/50 p-4 space-y-2">
-          <h3 className="font-semibold text-foreground">{opp.contact.name}</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-foreground">{opp.contact.name}</h3>
+            <CtwaBadge contact={opp.contact as any} />
+          </div>
           <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
             {opp.contact.phone && <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" />{opp.contact.phone}</span>}
             {opp.contact.email && <span className="flex items-center gap-1"><Mail className="h-3.5 w-3.5" />{opp.contact.email}</span>}

@@ -37,6 +37,10 @@ export default function CreateOpportunityDialog({ open, onOpenChange, stageId, p
     if (!tenant) return;
     setLoading(true);
 
+    const picked = contacts.find(c => c.id === contactId);
+    const ctwaClid = (picked as any)?.ctwa_clid ?? null;
+    const pickedSource = picked?.source ?? null;
+
     const { error } = await supabase.from('opportunities').insert({
       tenant_id: tenant.id,
       pipeline_id: pipelineId,
@@ -44,6 +48,8 @@ export default function CreateOpportunityDialog({ open, onOpenChange, stageId, p
       title,
       value: value ? parseFloat(value) : 0,
       contact_id: contactId || null,
+      ctwa_clid: ctwaClid,
+      source: pickedSource,
     });
 
     setLoading(false);
