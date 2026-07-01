@@ -338,3 +338,36 @@ async function patchOppQualification(supabase: any, opp: any, ai_pipeline_last: 
     console.error("[ai-stage-classifier] patchOppQualification failed", e);
   }
 }
+
+async function logAiUsage(supabase: any, params: {
+  tenant_id: string;
+  model: string;
+  aiConfig: any;
+  tokens: number;
+  conversation_id: string;
+  opportunity_id: string;
+  suggestedId: string;
+  confidence: number;
+  reason: string;
+}) {
+  try {
+    await supabase.from("ai_logs").insert({
+      tenant_id: params.tenant_id,
+      task_type: "stage_classifier",
+      provider: "openai",
+      model: params.model,
+      tokens_used: params.tokens,
+      input_data: { conversation_id: params.conversation_id, opportunity_id: params.opportunity_id },
+      output_data: { suggested_stage_id: params.suggestedId, confidence: params.confidence, reason: params.reason },
+    });
+    if (params.aiConfig?.id) {
+      await supabase.from("ai_configs").update({
+        daily_usage: (params.aiConfig.daily_usage || 0) + 1,
+        monthly_usage: (params.aiConfig.monthly_usage || 0) + 1,
+        usage_reset_at: new Date().toISOString(),
+      }).eq("id", params.aiConfig.id);
+    }
+  } catch (e) {
+    console.error("[ai-stage-classifier] logAiUsage failed", e);
+  }
+}
