@@ -2252,6 +2252,15 @@ async function checkKeywordAndActivateAi(tenantId, contactId, conversationId, me
       contact_id: contactId, conversation_id: conversationId,
     });
     console.log(`[Worker] Created opportunity and activity for contact ${contactId} via keyword "${matchedKeyword}"`);
+
+    // Notify agents (fire-and-forget)
+    try {
+      fetch(`${process.env.SUPABASE_URL}/functions/v1/notify-new-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        body: JSON.stringify({ tenant_id: tenantId, contact_id: contactId, trigger: 'keyword' }),
+      }).catch(err => console.error('[Worker] notify-new-lead keyword failed', err));
+    } catch (err) { console.error('[Worker] notify-new-lead dispatch err', err); }
   }
 
   return true; // keyword matched and AI activated

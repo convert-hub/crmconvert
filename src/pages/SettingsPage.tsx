@@ -26,6 +26,8 @@ import BusinessHoursSettings from '@/components/settings/BusinessHoursSettings';
 import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnectionsCard';
 import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
 import LeadWebhooksCard from '@/components/settings/LeadWebhooksCard';
+import LeadNotificationsCard from '@/components/settings/LeadNotificationsCard';
+import ProfileSettingsCard from '@/components/settings/ProfileSettingsCard';
 
 interface CustomFieldDef {
   key: string;
@@ -668,6 +670,8 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="general" className="space-y-4 pt-4">
+          <ProfileSettingsCard />
+
           <Card className="glass-card rounded-2xl">
             <CardHeader><CardTitle>Dados da Empresa</CardTitle><CardDescription>Informações básicas do seu tenant</CardDescription></CardHeader>
             <CardContent className="space-y-4">
@@ -1076,8 +1080,10 @@ export default function SettingsPage() {
         <TabsContent value="integrations" className="space-y-4 pt-4">
           <WhatsAppIntegrationCard tenantId={tenant?.id} />
           <MetaCloudConnectionsCard />
+          <LeadNotificationsCard />
           <LeadWebhooksCard />
         </TabsContent>
+
 
         <TabsContent value="meta_templates" className="space-y-4 pt-4">
           <MetaTemplatesCard />

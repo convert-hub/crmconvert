@@ -1,161 +1,120 @@
 ## Objetivo
-Rastreamento unificado de origem CTWA (Click-to-WhatsApp) para Meta Cloud + UAZAPI, com atribuição única, correção do bug atual do Meta e backfill do histórico.
+Notificar atendentes via WhatsApp (UAZAPI do próprio tenant) quando um **novo lead** for criado por (a) mensagem inbound do WhatsApp ou (b) automação de palavra-chave. Nunca por criação manual/importação. Configurável por admin, opcional, silencioso quando faltar UAZAPI.
 
 ---
 
-## Verificação de path (confirmado)
+## 1. Schema / Configuração
 
-`webhook-uazapi/index.ts` linha 162: `const msg = body.message || body;` — ou seja, `msg` já é o sub-objeto message. **Path correto**: `msg.content?.contextInfo` (não `msg.message.content.contextInfo`).
+**Sem migration de tabela** — reaproveita `tenants.settings` (jsonb).
 
-`webhook-meta/index.ts`: `referral = msg.referral` (msg vem de `value.messages[i]`) — path já correto.
+Chave nova: `settings.lead_notifications`:
+```json
+{
+  "enabled": false,
+  "triggers": { "inbound": true, "keyword": true },
+  "recipient_membership_ids": []
+}
+```
+
+**Idempotência**: em vez de nova tabela, usar `contacts.custom_fields.lead_notified_at` (timestamp ISO). Um único UPDATE condicional `where id=? and (custom_fields->>'lead_notified_at') is null` garante trava atômica sem race (usar `.is('custom_fields->lead_notified_at', null)` no PostgREST). Se o UPDATE retornar 0 linhas → já notificado, sair.
+
+Nenhuma trigger de banco (não distingue origem).
 
 ---
 
-## 1. Migration de schema
+## 2. Nova Edge Function: `supabase/functions/notify-new-lead/index.ts`
 
-- `contacts.ctwa_clid text` (nullable) + índice `idx_contacts_ctwa_clid`.
-- `conversations.ctwa_clid text` (nullable).
-- `opportunities.ctwa_clid text` (nullable).
-- Sem alteração de RLS.
+- `verify_jwt = false` (adicionar em `supabase/config.toml`).
+- Autenticação interna: exigir header `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`; qualquer outro valor → 401.
+- Input (zod): `{ tenant_id: uuid, contact_id: uuid, trigger: 'inbound' | 'keyword' }`.
+- Fluxo:
+  1. Ler `tenants.settings.lead_notifications`. Se `enabled !== true` ou `triggers[trigger] !== true` → 200 `{ skipped: 'disabled' }`.
+  2. Trava idempotência via UPDATE condicional em `contacts.custom_fields` (merge preservando outras chaves com `jsonb_set` — usar RPC ou update com objeto reconstruído lido antes). Se já notificado → 200 `{ skipped: 'already_notified' }`.
+  3. Buscar instância UAZAPI ativa: `whatsapp_instances` where `tenant_id`, `provider='uazapi'`, `is_active=true` limit 1. Se não houver → log + 200 `{ skipped: 'no_uazapi' }`.
+  4. Buscar destinatários: `tenant_memberships` (ativos, in `recipient_membership_ids`) join `profiles(phone, full_name)`. Filtrar `phone` não nulo; logar warning dos sem telefone.
+  5. Buscar `contacts` (name, phone, source) do lead.
+  6. Montar mensagem pt-BR:
+     ```
+     🟢 Novo lead recebido!
+     Nome: {name}
+     Telefone: {phone}
+     Origem: {'Mensagem recebida' | 'Palavra-chave'}
+     Abra o CRM para atender.
+     ```
+  7. Para cada telefone: `POST {instance.api_url}/send/text` com header `token: instance.api_token_encrypted`, body `{ number: <digits>, text, delay: 0 }`. Try/catch por destinatário; logar falhas e seguir. Nunca throw.
+  8. Responder 200 `{ sent, failed, skipped_no_phone }`.
 
-## 2. Helper `_shared/ctwa.ts`
+Reuso: helper de normalização de telefone (`../_shared/phone.ts` já existe).
 
+---
+
+## 3. Ganchos
+
+### A) `supabase/functions/webhook-uazapi/index.ts`
+No bloco `if (!contact) { insert ... }` (linhas ~230-244), **apenas no ramo `newContact` (não no race-recovered, não quando `fromMe`)**, disparar fire-and-forget:
 ```ts
-type CtwaInput = {
-  provider: 'meta_cloud' | 'uazapi';
-  ctwa_clid?: string | null;
-  ad_id?: string | null;
-  network?: string | null;
-  source_url?: string | null;
-  headline?: string | null;
-  body?: string | null;
-  image_url?: string | null;
-  media_type?: string | null;
-};
-
-export function deriveNetworkFromUrl(sourceUrl?: string | null): string | null;
-// instagram.com → 'instagram'; facebook.com|fb.me|fb.com → 'facebook'; senão null.
-
-export function deriveNetworkFromApp(app?: string | null): string | null;
-// só retorna 'instagram'/'facebook' quando exatamente esses valores; senão null.
-
-export function buildCtwaPatch(existing, input): Record<string, unknown>;
+if (!fromMe && contact && contact.id === newContact?.id) {
+  EdgeRuntime.waitUntil(
+    fetch(`${SUPABASE_URL}/functions/v1/notify-new-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
+      body: JSON.stringify({ tenant_id: tenantId, contact_id: contact.id, trigger: 'inbound' }),
+    }).catch(e => console.error('notify-new-lead inbound failed', e))
+  );
+}
 ```
+Não chamar no ramo `existingContacts?.[0]` nem em `race-recovered`.
 
-Regras `buildCtwaPatch` (recebe contato existente com **custom_fields, ctwa_clid, ad_id, utm_***):
-- `source = 'ctwa'`.
-- `utm_source = network || existing.utm_source || 'meta'`.
-- `utm_medium = 'ctwa'`.
-- `utm_campaign = headline ?? existing.utm_campaign`.
-- `ad_id`: só sobrescreve quando `input.ad_id` for não-nulo (Meta). UAZAPI nunca toca.
-- `ctwa_clid`: **last-touch** — sempre atualiza quando `input.ctwa_clid` for não-nulo.
-- `custom_fields.ctwa`: merge com `existing.custom_fields.ctwa`:
-  - `first_seen_at`: preserva o existente; senão `now()`.
-  - `last_seen_at`: sempre `now()`.
-  - Demais campos (`provider`, `network`, `ctwa_clid`, `ad_id`, `headline`, `body`, `source_url`, `image_url`, `media_type`): `new ?? old` (não-destrutivo).
-- Preserva todas as outras chaves de `custom_fields`.
-
-## 3. `webhook-meta` — correção
-
-- **SELECT do contato**: estender para `id, utm_source, utm_campaign, ad_id, ctwa_clid, custom_fields` (nos dois lookups — inicial e race-recovery).
-- Substituir bloco `adContext`/`insertData`/backfill por:
-  - Construir `input = { provider:'meta_cloud', ctwa_clid: referral.ctwa_clid, ad_id: referral.source_id, network: deriveNetworkFromUrl(referral.source_url), source_url, headline, body, image_url: referral.image_url, media_type: referral.media_type }`.
-  - Aplicar `buildCtwaPatch` nos **três** ramos após contato resolvido: novo contato, contato pré-existente, contato race-recovered. Um único ponto após o `if (!contact) return`.
-- Persistir `conversations.ctwa_clid` só no INSERT da conversa (não sobrescrever em conversas antigas).
-- Bloco CTWA inteiro em try/catch interno; erro loga e segue (webhook segue retornando 200).
-
-## 4. `webhook-uazapi` — adicionar CTWA
-
-- **SELECT do contato**: estender para incluir `custom_fields, ctwa_clid, utm_source, utm_campaign, ad_id` (hoje é `select('*')` — verificar, mas estender explicitamente se necessário).
-- Após `if (!contact) return` (contato resolvido nos ramos novo/existente/race), extrair:
-  ```ts
-  const ci = msg?.content?.contextInfo;
-  if (ci?.entryPointConversionSource === 'ctwa_ad') {
-    const ear = ci.externalAdReply ?? {};
-    const input = {
-      provider: 'uazapi' as const,
-      ctwa_clid: null,
-      ad_id: null,
-      network: deriveNetworkFromApp(ci.entryPointConversionApp)
-              ?? deriveNetworkFromUrl(ear.sourceURL),
-      source_url: ear.sourceURL ?? null,
-      headline: ear.title ?? null,
-      body: ear.body ?? null,
-      image_url: ear.thumbnailUrl ?? null,
-      media_type: ear.mediaType ?? null,
-    };
-    const patch = buildCtwaPatch(contact, input);
-    await supabase.from('contacts').update(patch).eq('id', contact.id);
-  }
-  ```
-- Persistir `conversations.ctwa_clid` no INSERT quando o contato já tiver `ctwa_clid` (útil quando o clique original veio via Meta e a conversa foi criada via UAZAPI — raro, mas coerente).
-- Try/catch interno; nunca derrubar o ack.
-
-## 5. Migration de backfill (separada, reversível)
-
-Passo 1 (auditoria manual antes de aplicar):
-```sql
-select count(*), min(length(ad_id)), max(length(ad_id))
-  from public.contacts
- where ad_id ~ '^Af' and length(ad_id) > 40;
-select id, ad_id, campaign_id from public.contacts
- where ad_id ~ '^Af' and length(ad_id) > 40 limit 20;
+### B) `worker/index.js` — `checkKeywordAndActivateAi` (~linha 2254)
+Logo após o log `Created opportunity and activity for contact ...`:
+```js
+fetch(`${process.env.SUPABASE_URL}/functions/v1/notify-new-lead`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+  body: JSON.stringify({ tenant_id: tenantId, contact_id: contactId, trigger: 'keyword' }),
+}).catch(err => console.error('[Worker] notify-new-lead keyword failed', err));
 ```
+Bloco já é gated por "não havia oportunidade aberta" → trava natural. A idempotência da edge cobre o caso de inbound+keyword no mesmo lead.
 
-Passo 2 (UPDATE — em PG, SET usa valores antigos da linha, então swap em um único UPDATE é seguro):
-```sql
-update public.contacts
-   set ctwa_clid = ad_id,
-       ad_id     = campaign_id,
-       custom_fields = coalesce(custom_fields,'{}'::jsonb)
-                     || jsonb_build_object('ctwa',
-                        coalesce(custom_fields->'ctwa','{}'::jsonb)
-                        || jsonb_build_object(
-                           'ctwa_clid', ad_id,
-                           'ad_id', campaign_id,
-                           'backfilled_at', now()))
- where ad_id ~ '^Af' and length(ad_id) > 40;
-```
-Reversível via `custom_fields.ctwa.backfilled_at` + valores antigos preservados no bloco.
-
-## 6. Propagação para `opportunities.ctwa_clid`
-
-- Onde oportunidades são criadas a partir de contato/conversa: `CreateOpportunityDialog.tsx`, `CreateOpportunityFromContactDialog.tsx`, `webhook-form-intake`, `webhook-uazapi` (se houver auto-criação), `worker` (keyword automations que criam opp). Em cada ponto, ao insertar a opportunity, copiar `ctwa_clid` e (se ainda vazio) `source` do contato.
-- Escopo mínimo desta entrega: fazer nos dois dialogs de UI. Backend/worker fica para a fase de reports (registrado aqui para não esquecer).
-
-## 7. UI — badge de origem
-
-- `src/lib/ctwa.ts`: `getCtwaInfo(contact)` → `{ network, headline, sourceUrl } | null` quando `source==='ctwa'` + `custom_fields.ctwa` existir.
-- `src/components/shared/CtwaBadge.tsx`: badge minimalista "Anúncio · {network}" com ícone `Megaphone`, tooltip com headline, `sourceUrl` como link externo. Sem label redundante ("Origem:" fica no tooltip).
-- Inserir em:
-  - `ChatPanel.tsx` (header, ao lado do nome).
-  - `OpportunityDetail.tsx` (bloco de info).
-  - `ContactsPage.tsx` (drawer/painel do contato).
+Nenhum outro insert de `contacts` é tocado (manual/importação continuam silenciosos).
 
 ---
 
-## Riscos
+## 4. UI
 
-1. **Path errado do contextInfo (UAZAPI)** — confirmado `msg.content?.contextInfo` (msg = body.message || body).
-2. **Merge destrutivo de custom_fields** — mitigado ao incluir `custom_fields` no SELECT e fazer merge no app antes do UPDATE.
-3. **Ramo de race sem patch** — patch aplicado num único ponto pós-resolução do contato, cobrindo os três caminhos.
-4. **deriveNetwork errado no Meta** — usar domínio do `source_url`; `source_type` (`ad`/`post`) ignorado como rede.
-5. **Backfill** — heurística `^Af` + len>40; risco de falso-positivo baixíssimo (IDs de anúncio são numéricos). SELECT de auditoria antes.
-6. **UAZAPI sem ctwa_clid/ad_id** — reports precisam tolerar nulls; CAPI só para Meta.
-7. **Webhook 200** — bloco CTWA em try/catch, sem throw.
-8. **utm_source legado** — não reescrever histórico; padrão novo só em eventos novos.
-9. **`conversations.ctwa_clid`** — só no INSERT (preserva atribuição original).
-10. **Não tocar em `webhook-meta-leads`**.
+### a) Campo "Telefone (WhatsApp)" no perfil do usuário
+Localizar tela de perfil atual (provavelmente em `SettingsPage.tsx` / componente de perfil). Adicionar input com máscara BR gravando `profiles.phone`. Validação via `normalizeBrazilPhone` (`src/lib/phone.ts`). Texto de apoio: "Número usado para receber notificações de novos leads."
+
+### b) Novo card `src/components/settings/LeadNotificationsCard.tsx`
+Padrão visual do `LeadWebhooksCard`:
+- Switch **Ativar notificações** (`enabled`).
+- Dois switches de gatilho: **Mensagem recebida (webhook)**, **Palavra-chave**.
+- Multi-seletor de atendentes: lista `tenant_memberships` ativos (join profiles pra mostrar nome + telefone). Badge âmbar "sem telefone" ao lado de quem faltar `profiles.phone`. Grava `recipient_membership_ids`.
+- Somente `role === 'admin'` edita; outros veem read-only.
+- Persiste via `update tenants set settings = jsonb_set(...)` mantendo demais chaves.
+
+Registrar o card na `SettingsPage.tsx` ao lado do `LeadWebhooksCard`.
 
 ---
 
-## Ordem de execução
+## 5. Ordem de execução
 
-1. Migration de schema (colunas + índices).
-2. Migration de backfill separada (com SELECT de auditoria).
-3. `_shared/ctwa.ts`.
-4. Ajuste `webhook-meta` (SELECT ampliado + 3 ramos + INSERT conversation).
-5. Ajuste `webhook-uazapi` (SELECT ampliado + captura CTWA + INSERT conversation).
-6. Propagação `opportunities.ctwa_clid` nos 2 dialogs.
-7. `ctwa.ts` + `CtwaBadge` + 3 pontos de UI.
-8. Verificação com mensagem-teste de cada provedor.
+1. `supabase/functions/notify-new-lead/index.ts` (+ entrada em `config.toml`).
+2. Gancho no `webhook-uazapi` (apenas no ramo de contato novo, não `fromMe`).
+3. Gancho no `worker/index.js` dentro do bloco de criação de oportunidade por keyword.
+4. Campo `phone` na UI de perfil.
+5. `LeadNotificationsCard` + registro em `SettingsPage`.
+6. Teste manual: (a) ativar, escolher 1 atendente com telefone, enviar mensagem de número novo → recebe notificação; (b) mesmo lead disparando keyword depois → não duplica; (c) tenant sem UAZAPI → skip silencioso.
+
+---
+
+## Riscos e mitigações
+
+1. **Duplicação inbound+keyword** — resolvida pela trava atômica em `contacts.custom_fields.lead_notified_at`.
+2. **Race em criação de contato** — só notifica no ramo `newContact` (não em race-recovered nem existente).
+3. **Perda de outras chaves em `custom_fields`** — merge feito lendo antes e reescrevendo objeto, ou via `jsonb_set` explícito.
+4. **Preservar outras chaves em `settings`** — mesmo padrão do `LeadWebhooksCard` (spread do settings atual + patch).
+5. **UAZAPI ausente / envio falho** — nunca lançar erro; sempre 200 com `skipped/failed` para não travar o webhook chamador.
+6. **`fromMe`** — não notificar mensagens enviadas pelo próprio operador (checar antes do fire-and-forget).
+7. **Importação/criação manual** — não são tocadas; nenhum trigger de banco.
+8. **Segurança da edge** — só aceita chamadas com `SUPABASE_SERVICE_ROLE_KEY`; nunca exposta ao front.

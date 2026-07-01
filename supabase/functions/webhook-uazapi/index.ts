@@ -227,6 +227,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     .limit(1);
 
   let contact = existingContacts?.[0];
+  let createdNewContact = false;
   if (!contact) {
     // For outbound (fromMe) messages, senderName is the agent's name, not the contact's.
     const name = fromMe ? normPhone : (senderName || normPhone);
@@ -240,6 +241,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
       console.log(`webhook-uazapi: race-recovered contact ${contact?.id} for ${normPhone}`);
     } else {
       contact = newContact;
+      createdNewContact = !!newContact;
       console.log(`webhook-uazapi: created contact ${contact?.id} for ${normPhone}`);
     }
   }
@@ -248,6 +250,20 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     console.error('webhook-uazapi: failed to find/create contact');
     return;
   }
+
+  // Notify agents: only on a genuine NEW inbound lead (not fromMe, not race-recovered, not existing).
+  if (createdNewContact && !fromMe) {
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+    const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const p = fetch(`${SUPABASE_URL}/functions/v1/notify-new-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SERVICE}` },
+      body: JSON.stringify({ tenant_id: tenantId, contact_id: contact.id, trigger: 'inbound' }),
+    }).catch(e => console.error('notify-new-lead inbound err', e));
+    // Fire-and-forget; keep webhook fast.
+    try { (globalThis as any).EdgeRuntime?.waitUntil?.(p); } catch { /* noop */ }
+  }
+
 
   // CTWA attribution (UAZAPI). Payload path: msg.content.contextInfo (msg = body.message || body).
   // Fire-and-forget; never break the webhook.
