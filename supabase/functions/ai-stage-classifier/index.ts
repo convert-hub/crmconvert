@@ -179,30 +179,28 @@ Formato esperado:
       })),
     };
 
-    // 7) Call Lovable AI Gateway
-    const apiKey = Deno.env.get("LOVABLE_API_KEY");
-    if (!apiKey) return json({ error: "LOVABLE_API_KEY missing" }, 500);
-
-    const aiResp = await fetch(GATEWAY_URL, {
+    // 7) Call OpenAI directly
+    const aiResp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(userPayload) },
         ],
         response_format: { type: "json_object" },
         temperature: 0.1,
+        max_tokens: 300,
       }),
     });
 
     if (!aiResp.ok) {
       const errText = await aiResp.text();
-      console.error("[ai-stage-classifier] gateway error", aiResp.status, errText);
+      console.error("[ai-stage-classifier] openai error", aiResp.status, errText);
       if (aiResp.status === 429) return json({ error: "rate_limited" }, 429);
       if (aiResp.status === 402) return json({ error: "credits_exhausted" }, 402);
       return json({ error: "ai_gateway_failed" }, 502);
