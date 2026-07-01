@@ -21,6 +21,7 @@ type AiPipelineSettings = {
   min_confidence: number;
   exclude_won_lost: boolean;
   direction: 'forward_only' | 'any';
+  model: string;
 };
 
 const DEFAULTS: AiPipelineSettings = {
@@ -29,6 +30,7 @@ const DEFAULTS: AiPipelineSettings = {
   min_confidence: 0.7,
   exclude_won_lost: true,
   direction: 'forward_only',
+  model: 'google/gemini-2.5-flash',
 };
 
 export default function AiPipelineCard() {
@@ -137,6 +139,19 @@ export default function AiPipelineCard() {
               onValueChange={(v) => setCfg({ ...cfg, min_confidence: v[0] })}
               onValueCommit={(v) => persist({ ...cfg, min_confidence: v[0] })} />
             <p className="text-xs text-muted-foreground">Sugestões abaixo desse limiar são descartadas.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Modelo de IA</Label>
+            <Select value={cfg.model} disabled={!isAdmin || saving} onValueChange={(v) => persist({ ...cfg, model: v })}>
+              <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="google/gemini-2.5-flash">Gemini 2.5 Flash (rápido, recomendado)</SelectItem>
+                <SelectItem value="google/gemini-2.5-pro">Gemini 2.5 Pro (mais preciso, mais lento)</SelectItem>
+                <SelectItem value="anthropic/claude-sonnet-4">Claude Sonnet 4 (equilibrado)</SelectItem>
+                <SelectItem value="anthropic/claude-haiku-4">Claude Haiku 4 (rápido)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2">
