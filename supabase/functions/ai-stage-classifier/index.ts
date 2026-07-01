@@ -11,8 +11,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const MODEL = Deno.env.get("AI_STAGE_CLASSIFIER_MODEL") || "google/gemini-3-flash-preview";
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 type Stage = {
   id: string;
@@ -46,6 +44,31 @@ Deno.serve(async (req) => {
     const minConfidence: number = typeof cfg.min_confidence === "number" ? cfg.min_confidence : 0.7;
     const direction: "forward_only" | "any" = cfg.direction === "any" ? "any" : "forward_only";
     const excludeWonLost: boolean = cfg.exclude_won_lost !== false; // default true
+
+    // Resolve API key: ai_configs(stage_classifier) → global_api_key → env OPENAI_API_KEY
+    const { data: aiConfig } = await supabase
+      .from("ai_configs")
+      .select("*, global_api_key:global_api_keys(*)")
+      .eq("tenant_id", tenant_id)
+      .eq("task_type", "stage_classifier")
+      .maybeSingle();
+
+    let apiKey: string | null = null;
+    let model = "gpt-4o-mini";
+    if (aiConfig) {
+      model = aiConfig.model || model;
+      if (aiConfig.api_key_encrypted) {
+        apiKey = aiConfig.api_key_encrypted;
+      } else if (aiConfig.global_api_key?.api_key_encrypted) {
+        apiKey = aiConfig.global_api_key.api_key_encrypted;
+      }
+    }
+    if (!apiKey) {
+      apiKey = Deno.env.get("OPENAI_API_KEY") || null;
+    }
+    if (!apiKey) {
+      return json({ error: "ai_not_configured" }, 400);
+    }
 
     // 2) Resolve opportunity for this conversation
     const { data: conv } = await supabase
@@ -156,30 +179,28 @@ Formato esperado:
       })),
     };
 
-    // 7) Call Lovable AI Gateway
-    const apiKey = Deno.env.get("LOVABLE_API_KEY");
-    if (!apiKey) return json({ error: "LOVABLE_API_KEY missing" }, 500);
-
-    const aiResp = await fetch(GATEWAY_URL, {
+    // 7) Call OpenAI directly
+    const aiResp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(userPayload) },
         ],
         response_format: { type: "json_object" },
         temperature: 0.1,
+        max_tokens: 300,
       }),
     });
 
     if (!aiResp.ok) {
       const errText = await aiResp.text();
-      console.error("[ai-stage-classifier] gateway error", aiResp.status, errText);
+      console.error("[ai-stage-classifier] openai error", aiResp.status, errText);
       if (aiResp.status === 429) return json({ error: "rate_limited" }, 429);
       if (aiResp.status === 402) return json({ error: "credits_exhausted" }, 402);
       return json({ error: "ai_gateway_failed" }, 502);
@@ -255,6 +276,12 @@ Formato esperado:
       }
       ai_pipeline_last.status = "suggested";
       await patchOppQualification(supabase, opp, ai_pipeline_last);
+      await logAiUsage(supabase, {
+        tenant_id, model, aiConfig,
+        tokens: aiData?.usage?.total_tokens || 0,
+        conversation_id, opportunity_id: opp.id,
+        suggestedId: suggestedStage.id, confidence, reason,
+      });
       return json({ ok: true, action: "suggested", from: currentStage.id, to: suggestedStage.id, confidence });
     }
 
@@ -282,6 +309,12 @@ Formato esperado:
     ai_pipeline_last.status = "applied";
     ai_pipeline_last.applied = true;
     await patchOppQualification(supabase, opp, ai_pipeline_last);
+    await logAiUsage(supabase, {
+      tenant_id, model, aiConfig,
+      tokens: aiData?.usage?.total_tokens || 0,
+      conversation_id, opportunity_id: opp.id,
+      suggestedId: suggestedStage.id, confidence, reason,
+    });
     return json({ ok: true, action: "applied", from: currentStage.id, to: suggestedStage.id, confidence });
   } catch (e) {
     console.error("[ai-stage-classifier] error", e);
@@ -303,5 +336,38 @@ async function patchOppQualification(supabase: any, opp: any, ai_pipeline_last: 
     await supabase.from("opportunities").update({ qualification_data: q }).eq("id", opp.id);
   } catch (e) {
     console.error("[ai-stage-classifier] patchOppQualification failed", e);
+  }
+}
+
+async function logAiUsage(supabase: any, params: {
+  tenant_id: string;
+  model: string;
+  aiConfig: any;
+  tokens: number;
+  conversation_id: string;
+  opportunity_id: string;
+  suggestedId: string;
+  confidence: number;
+  reason: string;
+}) {
+  try {
+    await supabase.from("ai_logs").insert({
+      tenant_id: params.tenant_id,
+      task_type: "stage_classifier",
+      provider: "openai",
+      model: params.model,
+      tokens_used: params.tokens,
+      input_data: { conversation_id: params.conversation_id, opportunity_id: params.opportunity_id },
+      output_data: { suggested_stage_id: params.suggestedId, confidence: params.confidence, reason: params.reason },
+    });
+    if (params.aiConfig?.id) {
+      await supabase.from("ai_configs").update({
+        daily_usage: (params.aiConfig.daily_usage || 0) + 1,
+        monthly_usage: (params.aiConfig.monthly_usage || 0) + 1,
+        usage_reset_at: new Date().toISOString(),
+      }).eq("id", params.aiConfig.id);
+    }
+  } catch (e) {
+    console.error("[ai-stage-classifier] logAiUsage failed", e);
   }
 }
