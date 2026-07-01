@@ -249,6 +249,30 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     return;
   }
 
+  // CTWA attribution (UAZAPI). Payload path: msg.content.contextInfo (msg = body.message || body).
+  // Fire-and-forget; never break the webhook.
+  try {
+    const ci = msg?.content?.contextInfo;
+    if (ci?.entryPointConversionSource === 'ctwa_ad') {
+      const { buildCtwaPatch, deriveNetworkFromApp, deriveNetworkFromUrl } = await import('../_shared/ctwa.ts');
+      const ear = ci.externalAdReply ?? {};
+      const patch = buildCtwaPatch(contact, {
+        provider: 'uazapi',
+        ctwa_clid: null,
+        ad_id: null,
+        network: deriveNetworkFromApp(ci.entryPointConversionApp) ?? deriveNetworkFromUrl(ear.sourceURL),
+        source_url: ear.sourceURL ?? null,
+        headline: ear.title ?? null,
+        body: ear.body ?? null,
+        image_url: ear.thumbnailUrl ?? null,
+        media_type: ear.mediaType ?? null,
+      });
+      await supabase.from('contacts').update(patch).eq('id', contact.id);
+    }
+  } catch (e) {
+    console.error('[webhook-uazapi] ctwa attribution failed', e);
+  }
+
   // Find or create conversation
   const { data: existingConvs } = await supabase.from('conversations')
     .select('*')
@@ -268,6 +292,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
       provider_chat_id: chatid,
       whatsapp_instance_id: instanceId,
       last_message_at: new Date().toISOString(),
+      ctwa_clid: (contact as any).ctwa_clid ?? null,
     }).select().single();
     conversation = newConv;
     console.log(`webhook-uazapi: created conversation ${conversation?.id} (instance=${instanceId || 'none'})`);
@@ -276,6 +301,7 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     await supabase.from('conversations').update({ whatsapp_instance_id: instanceId }).eq('id', conversation.id);
     conversation.whatsapp_instance_id = instanceId;
   }
+
 
   if (!conversation) {
     console.error('webhook-uazapi: failed to find/create conversation');
