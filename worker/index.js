@@ -1569,6 +1569,37 @@ const handlers = {
     });
   },
 
+  async ai_stage_classify(payload) {
+    const { tenant_id, conversation_id } = payload || {};
+    if (!tenant_id || !conversation_id) {
+      return { skipped: true, reason: 'missing tenant_id or conversation_id' };
+    }
+    try {
+      const resp = await fetch(`${process.env.SUPABASE_URL}/functions/v1/ai-stage-classifier`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+        body: JSON.stringify({ tenant_id, conversation_id }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        console.error('[Worker] ai_stage_classify non-2xx', resp.status, data);
+        // Do not throw for expected soft errors that shouldn't retry endlessly
+        if (resp.status === 402 || resp.status === 429) {
+          return { skipped: true, reason: `gateway_${resp.status}` };
+        }
+        throw new Error(`ai-stage-classifier ${resp.status}: ${JSON.stringify(data)}`);
+      }
+      return data;
+    } catch (err) {
+      console.error('[Worker] ai_stage_classify error', err);
+      throw err;
+    }
+  },
+
+
   async send_scheduled_message(payload) {
     const { scheduled_message_id } = payload;
     if (!scheduled_message_id) throw new Error('Missing scheduled_message_id');

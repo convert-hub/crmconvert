@@ -35,6 +35,8 @@ interface StageMove {
   created_at: string;
   is_ai_move: boolean;
   ai_reason: string | null;
+  status?: string | null;
+  confidence_score?: number | null;
 }
 
 interface TimelineItem {
@@ -59,6 +61,8 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [stageMoves, setStageMoves] = useState<StageMove[]>([]);
+  const [pendingSuggestion, setPendingSuggestion] = useState<any | null>(null);
+  const [suggBusy, setSuggBusy] = useState(false);
   const [newMessage, setNewMessage] = useState('');
   const [newNote, setNewNote] = useState('');
   const [sending, setSending] = useState(false);
@@ -148,9 +152,14 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
       });
 
-    // Load stage moves
+    // Load stage moves (only applied/manual)
     supabase.from('stage_moves').select('*').eq('opportunity_id', opportunityId).order('created_at')
-      .then(({ data }) => setStageMoves((data as unknown as StageMove[]) ?? []));
+      .then(({ data }) => setStageMoves(((data as any[]) ?? []).filter(m => (m.status ?? 'applied') === 'applied') as StageMove[]));
+
+    // Load pending AI suggestion (only most recent)
+    supabase.from('stage_moves').select('*').eq('opportunity_id', opportunityId).eq('status', 'suggested')
+      .order('created_at', { ascending: false }).limit(1)
+      .then(({ data }) => setPendingSuggestion((data as any[])?.[0] || null));
 
     loadActivities();
   }, [opportunityId]);
@@ -324,8 +333,109 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
     none: 'border-border/50 bg-card/50',
   };
 
+  const approveSuggestion = async () => {
+    if (!pendingSuggestion || !membership?.id || !opp) return;
+    setSuggBusy(true);
+    try {
+      if (opp.stage_id !== pendingSuggestion.from_stage_id) {
+        await supabase.from('stage_moves').update({
+          status: 'rejected',
+          resolved_by: membership.id,
+          resolved_at: new Date().toISOString(),
+          ai_reason: (pendingSuggestion.ai_reason || '') + ' [auto-rejeitada: cartão já mudou]',
+        }).eq('id', pendingSuggestion.id);
+        toast.info('Sugestão descartada — o cartão já mudou de etapa.');
+        setPendingSuggestion(null);
+        return;
+      }
+      const { error } = await supabase.from('opportunities')
+        .update({ stage_id: pendingSuggestion.to_stage_id, updated_at: new Date().toISOString() })
+        .eq('id', opp.id);
+      if (error) { toast.error(error.message); return; }
+      await supabase.from('stage_moves').update({
+        status: 'applied',
+        resolved_by: membership.id,
+        resolved_at: new Date().toISOString(),
+      }).eq('id', pendingSuggestion.id);
+      toast.success('Sugestão aplicada');
+      setOpp(prev => prev ? { ...prev, stage_id: pendingSuggestion.to_stage_id } : prev);
+      setStageMoves(prev => [...prev, { ...pendingSuggestion, status: 'applied' }]);
+      setPendingSuggestion(null);
+    } finally { setSuggBusy(false); }
+  };
+
+  const ignoreSuggestion = async () => {
+    if (!pendingSuggestion || !membership?.id) return;
+    setSuggBusy(true);
+    try {
+      await supabase.from('stage_moves').update({
+        status: 'rejected',
+        resolved_by: membership.id,
+        resolved_at: new Date().toISOString(),
+      }).eq('id', pendingSuggestion.id);
+      setPendingSuggestion(null);
+    } finally { setSuggBusy(false); }
+  };
+
+  const undoStageMove = async (sm: StageMove) => {
+    if (!opp || !membership?.id) return;
+    // Anti-obsolescence: only undo if current stage still equals the move's target
+    if (opp.stage_id !== sm.to_stage_id) {
+      toast.error('O cartão já mudou de etapa desde então — não é possível desfazer.');
+      return;
+    }
+    if (!sm.from_stage_id) {
+      toast.error('Sem etapa anterior para desfazer.');
+      return;
+    }
+    const targetStage = sm.from_stage_id;
+    const { error } = await supabase.from('opportunities')
+      .update({ stage_id: targetStage, updated_at: new Date().toISOString() })
+      .eq('id', opp.id);
+    if (error) { toast.error(error.message); return; }
+    // Register the undo as a manual reverse move
+    await supabase.from('stage_moves').insert({
+      tenant_id: opp.tenant_id,
+      opportunity_id: opp.id,
+      from_stage_id: sm.to_stage_id,
+      to_stage_id: targetStage,
+      is_ai_move: false,
+      status: 'applied',
+      ai_reason: 'Desfeito manualmente',
+      moved_by: membership.id,
+    } as any);
+    setOpp(prev => prev ? { ...prev, stage_id: targetStage } : prev);
+    const { data } = await supabase.from('stage_moves').select('*').eq('opportunity_id', opp.id).order('created_at');
+    setStageMoves(((data as any[]) ?? []).filter(m => (m.status ?? 'applied') === 'applied') as StageMove[]);
+    toast.success('Movimentação desfeita');
+  };
+
+  const suggFromStageName = pendingSuggestion ? getStageName(pendingSuggestion.from_stage_id) : '';
+  const suggToStageName = pendingSuggestion ? getStageName(pendingSuggestion.to_stage_id) : '';
+
   return (
     <div className="space-y-6 py-4">
+      {pendingSuggestion && (
+        <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-primary uppercase tracking-wide">Sugestão da IA</span>
+            {pendingSuggestion.confidence_score != null && (
+              <Badge variant="outline" className="rounded-full text-[10px]">{Math.round(pendingSuggestion.confidence_score * 100)}% confiança</Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 text-sm text-foreground">
+            <span>{suggFromStageName}</span>
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="font-medium">{suggToStageName}</span>
+          </div>
+          {pendingSuggestion.ai_reason && <p className="text-xs text-muted-foreground italic">{pendingSuggestion.ai_reason}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" className="rounded-xl" disabled={suggBusy} onClick={approveSuggestion}>Aprovar</Button>
+            <Button size="sm" variant="outline" className="rounded-xl" disabled={suggBusy} onClick={ignoreSuggestion}>Ignorar</Button>
+          </div>
+        </div>
+      )}
+
       {/* Contact Info */}
       {opp.contact && (
         <div className="rounded-2xl bg-accent/50 p-4 space-y-2">

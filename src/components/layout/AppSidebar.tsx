@@ -3,7 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Kanban, MessageSquare, Settings,
-  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch, Building2, ChevronDown, Send
+  Activity, Zap, Brain, FileText, AlertTriangle, LogOut, Shield, GitBranch, Building2, ChevronDown, Send, Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getTenantBranding } from '@/hooks/useTenantBranding';
@@ -23,6 +23,7 @@ const navItems = [
 
 const adminItems = [
   { icon: MessageSquare, label: 'Conversas', path: '/inbox', roles: ['admin', 'manager', 'attendant'] as const },
+  { icon: Sparkles, label: 'Sugestões IA', path: '/ai-suggestions', roles: ['admin', 'manager', 'attendant'] as const, badgeKey: 'ai_suggestions' as const },
   { icon: Send, label: 'Campanhas', path: '/campaigns', roles: ['admin', 'manager'] as const },
   { icon: Zap, label: 'Automações', path: '/automations', roles: ['admin', 'manager'] as const },
   { icon: GitBranch, label: 'Flow Builder', path: '/flow-builder', roles: ['admin'] as const },
@@ -63,8 +64,29 @@ export default function AppSidebar() {
     item => role && (item.roles as readonly string[]).includes(role)
   );
 
-  const NavButton = ({ item }: { item: typeof navItems[0] }) => {
+  const [suggestionCount, setSuggestionCount] = useState(0);
+  useEffect(() => {
+    if (!tenant?.id) return;
+    let cancelled = false;
+    const fetchCount = async () => {
+      const { count } = await supabase
+        .from('stage_moves')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenant.id)
+        .eq('status', 'suggested');
+      if (!cancelled) setSuggestionCount(count || 0);
+    };
+    fetchCount();
+    const t = setInterval(fetchCount, 60000);
+    const ch = supabase.channel(`sidebar-ai-sugg-${tenant.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stage_moves', filter: `tenant_id=eq.${tenant.id}` }, fetchCount)
+      .subscribe();
+    return () => { cancelled = true; clearInterval(t); supabase.removeChannel(ch); };
+  }, [tenant?.id]);
+
+  const NavButton = ({ item }: { item: (typeof navItems)[0] & { badgeKey?: string } }) => {
     const isActive = location.pathname === item.path;
+    const badge = item.badgeKey === 'ai_suggestions' && suggestionCount > 0 ? suggestionCount : null;
     return (
       <button
         onClick={() => navigate(item.path)}
@@ -76,7 +98,13 @@ export default function AppSidebar() {
         )}
       >
         <item.icon className="h-4 w-4" strokeWidth={1.75} />
-        {item.label}
+        <span className="flex-1 text-left">{item.label}</span>
+        {badge !== null && (
+          <span className={cn(
+            "inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-semibold",
+            isActive ? "bg-primary-foreground text-primary" : "bg-primary text-primary-foreground"
+          )}>{badge > 99 ? '99+' : badge}</span>
+        )}
       </button>
     );
   };

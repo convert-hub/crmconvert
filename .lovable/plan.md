@@ -1,42 +1,87 @@
+
 ## Objetivo
-Mover os dados pessoais do usuário (nome, telefone) de Configurações > Geral para um modal acessível pelo bloco do usuário na sidebar. Configurações fica só com dados da EMPRESA.
+IA que lê as últimas mensagens de cada conversa com oportunidade vinculada, decide em qual `stage` o lead está e — conforme o modo — SUGERE ou MOVE o cartão, sempre gravando motivo, confiança e critérios em `stage_moves`. Default seguro: sugestão. Reaproveita `stages`, `stage_moves`, `enqueue_job`/worker e o padrão do `ai-copilot`.
 
-## Arquivos
+## Ordem de execução (migrations → backend → UI)
 
-**Novo:** `src/components/layout/ProfileDialog.tsx`
-- Dialog do shadcn. Título: "Meus dados".
-- Estado local + `useEffect` que lê `profiles.full_name, phone` do usuário logado (mesmo padrão do `ProfileSettingsCard`).
-- Campos:
-  - Nome completo — editável.
-  - Telefone (WhatsApp) — editável, validado por `normalizeBrazilPhone` (`@/lib/phone`).
-  - E-mail — somente leitura, vindo de `user.email` (via `useAuth`).
-  - Função (role) — badge somente leitura.
-- Botão "Salvar" faz `update` em `profiles where user_id = auth.uid()`, toast sonner, fecha o modal e chama um callback `onSaved` pra sidebar atualizar o nome exibido.
-- Reaproveita integralmente a lógica de `ProfileSettingsCard` (mesma query, mesma validação, mesmo update) — não duplica regra.
+### 1. Migration A — schema
+- `stages`: adicionar `ai_criteria text null`.
+- `stage_moves`:
+  - `status text not null default 'applied'` com `CHECK (status in ('suggested','applied','rejected'))`.
+  - `resolved_by uuid null`, `resolved_at timestamptz null`.
+  - Backfill implícito: linhas antigas ficam `applied` pelo default.
+  - Índice parcial `(tenant_id, created_at desc) WHERE status='suggested'` para a central.
+- `job_queue.idempotency_key`: **garantir `UNIQUE`** (se ainda não for). Sem isso, dois webhooks simultâneos com a mesma chave podem inserir dois jobs (ver Risco 1). Se a coluna já for única, é no-op.
+- RLS: acrescentar UPDATE em `stage_moves` para `admin/manager/attendant` do tenant (necessário para Aprovar/Ignorar/Desfazer). `readonly` fica de fora.
+- Config em `tenants.settings.ai_pipeline` — sem migration, JSONB livre. Defaults lidos no código:
+  ```json
+  { "enabled": false, "mode": "suggestion", "min_confidence": 0.7,
+    "exclude_won_lost": true, "direction": "forward_only" }
+  ```
 
-**Editado:** `src/components/layout/AppSidebar.tsx`
-- Adiciona `useState` para `profileOpen` e um `refreshKey` local pra forçar releitura do nome depois de salvar (ou usa `profile` do contexto se ele expuser refresh; se não, mantém um estado `displayName` sincronizado).
-- Refatora o bloco `{/* User */}` em DOIS elementos irmãos dentro do mesmo container flex:
-  1. `<button onClick={() => setProfileOpen(true)}>` envolvendo APENAS avatar + nome + role. Classes: `flex-1 flex items-center gap-3 rounded-lg px-2 py-1.5 cursor-pointer hover:bg-accent transition-colors text-left`.
-  2. `<button onClick={signOut}>` do LogOut permanece SEPARADO, fora do primeiro botão, como já é hoje.
-- Renderiza `<ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />` no fim do aside.
+### 2. Edge Function `ai-stage-classifier` (nova, `verify_jwt=false`, chamada só pelo worker)
+Entrada: `{ tenant_id, conversation_id }`.
+1. Resolve `opportunity` (via `conversations.opportunity_id` ou última opp aberta do contato). Sem opp → sai.
+2. Lê `tenants.settings.ai_pipeline`. `enabled=false` → sai.
+3. **Debounce em nível de dado** (segunda linha de defesa): se existir `stage_moves` para essa opp criada nos últimos 120s por IA, sai. Cobre o caso do idempotency_key falhar por race.
+4. Carrega stages do pipeline da opp, exclui `is_won`/`is_lost`, ordena por `position`.
+5. Carrega últimas 6 messages **não internas** + contato (nome, `custom_fields.ctwa`) + stage atual.
+6. Chama Claude Haiku (`claude-haiku-4-5`) com JSON estrito e catálogo fechado de stages:
+   ```json
+   { "suggested_stage_id": "...", "confidence": 0.0-1.0,
+     "reason": "curto", "criteria_met": ["..."] }
+   ```
+7. **Guard-rails**: id ∈ lista carregada; `!= stage atual`; `confidence >= min_confidence`; se `forward_only`, `position` > atual; nunca is_won/is_lost.
+8. Modo `suggestion` → insere `stage_moves { is_ai_move:true, status:'suggested', confidence_score, ai_reason, criteria_met, moved_by:null }`. Modo `auto` → transação: `update opportunities.stage_id` + insert `stage_moves status='applied'`.
+9. Grava último parecer em `opportunities.qualification_data.ai_pipeline_last` para debug/UI.
 
-**Conflito clique logout × modal:** resolvido estruturalmente porque os dois botões são irmãos, não aninhados. HTML nem permite `<button>` dentro de `<button>`, então o logout não pode disparar o modal, e vice-versa. Nenhum `stopPropagation` necessário.
+### 3. Gatilho (enfileiramento nos webhooks)
+Após persistir mensagem INBOUND real, em `webhook-uazapi/index.ts` (dentro de `handleIncomingMessage`) e `webhook-meta/index.ts` (ramo equivalente):
+```ts
+await supabase.rpc('enqueue_job', {
+  _type: 'ai_stage_classify',
+  _payload: { tenant_id, conversation_id },
+  _tenant_id: tenant_id,
+  _idempotency_key: `ai_stage:${conversation_id}:${Math.floor(Date.now()/120000)}`
+});
+```
+`enqueue_job` já faz lookup por `idempotency_key` e retorna o id existente antes de inserir — confirmado no código da função. A chave por janela de 2 min garante 1 chamada de modelo por conversa por janela.
 
-**Editado:** `src/pages/SettingsPage.tsx`
-- Remove o import e o uso de `<ProfileSettingsCard />` na aba `value="general"`.
-- Mantém a aba Geral (com os demais cards da empresa).
+### 4. Worker — handler `ai_stage_classify`
+Em `worker/index.js`: novo `case` que invoca `functions/v1/ai-stage-classifier` com service role. Falha → `fail_job` cuida do backoff.
 
-**Deletado:** `src/components/settings/ProfileSettingsCard.tsx`
-- Conteúdo migra pro `ProfileDialog`. Não há outros consumidores (grep já confirmado no contexto).
+### 5. UI
+- **`PipelinePage.tsx`** — editor de stage ganha textarea "Como a IA reconhece esta etapa" → `stages.ai_criteria`.
+- **`SettingsPage.tsx`** — nova aba "IA de Pipeline" com card `AiPipelineCard.tsx`:
+  - Switch enabled, RadioGroup mode (Sugestão/Automático — trocar pra auto exige confirm), Slider min_confidence (0.5–0.95), Select direction, Switch informativo "nunca mexer em Ganho/Perdido" (sempre on nesta v1). Persiste merge em `tenants.settings.ai_pipeline`.
+  - Tabela das stages do pipeline default com `ai_criteria` editável inline.
+- **Central `/ai-suggestions`** — lista `stage_moves status='suggested'` com lead, de→para, motivo, confiança, ações Aprovar/Ignorar. Contador na sidebar (polling 30s).
+  - **Aprovar**: revalida `stage_moves.from_stage_id == opportunity.stage_id atual`. Se divergir, marca automaticamente `rejected` com motivo "stage já mudou" e avisa na UI. Se bater, transação: update opp + `status='applied' + resolved_by/at`.
+  - **Ignorar**: `status='rejected' + resolved_by/at`.
+- **Tarjinha inline** em `OpportunityDetail.tsx` quando houver sugestão pendente da opp.
+- **Histórico** em `OpportunityDetail.tsx`: timeline das últimas 10 `stage_moves`. Botão **Desfazer** aparece só para `is_ai_move=true, status='applied'` das últimas 24h.
+  - **Trava anti-obsolescência do Desfazer** (simétrica ao Aprovar): antes de reverter, checa `opportunity.stage_id == stage_moves.to_stage_id`. Se divergir (alguém já moveu para outra etapa depois), bloqueia com toast "o cartão já mudou de etapa — desfazer indisponível" e não toca em nada. Se bater, transação: `update opportunities.stage_id = from_stage_id` + `update stage_moves set undone=true`.
 
-## Atualização do nome na sidebar após salvar
-O `AuthContext` já expõe `profile`. Duas opções:
-- (Preferida) `ProfileDialog` recebe `onSaved(newName)` e a sidebar mantém um `displayName` local que sobrescreve `profile?.full_name` até o próximo reload — evita mexer no AuthContext.
-- Se `AuthContext` tiver um `refreshProfile()`, chamar ele. Vou checar em build; se não existir, uso a opção local.
+## Riscos e mitigações
+1. **Race no enqueue_job** — `SELECT ... IF NULL THEN INSERT` sem UNIQUE deixa brecha para dois webhooks concorrentes inserirem duplicata. Mitigação primária: `UNIQUE` em `job_queue.idempotency_key` (na Migration A). Mitigação secundária dentro da função: checagem de `stage_moves` recente (últimos 120s) — cobre até o caso do UNIQUE falhar por qualquer motivo.
+2. **Custo/latência** — debounce 120s + Haiku + máx 6 msgs + catálogo fechado.
+3. **Alucinação de stage** — valida id ∈ lista antes de gravar.
+4. **Ligar sem querer em massa** — default `enabled=false`, `mode='suggestion'`; trocar pra auto exige confirm.
+5. **Regressão de etapa** — `forward_only` bloqueia por padrão.
+6. **Aprovar sugestão obsoleta** — revalida `from_stage_id == stage atual`, senão auto-rejeita.
+7. **Desfazer movimento obsoleto** — mesma trava: só reverte se `stage_id atual == to_stage_id`.
+8. **RLS de UPDATE em `stage_moves`** — precisa policy nova para permitir Aprovar/Ignorar/Desfazer respeitando papel.
+9. **Ruído em conversas sem opp** — v1 não cria opp automaticamente.
+10. **Nota interna** — filtro `is_internal=false` na leitura das mensagens.
 
-## Não-alvo
-- Notificações de lead: intocadas.
-- Logout: comportamento idêntico.
-- Aba Configurações > Geral: continua existindo, só sem o card pessoal.
-- E-mail: somente leitura nesta versão (edição fica pra depois — envolve `supabase.auth.updateUser`).
+## Fora do escopo desta v1
+- Criar opp automaticamente quando não existir.
+- Backfill de conversas antigas.
+- Métricas de acurácia da IA (aprovadas vs ignoradas).
+- Multi-pipeline por opp.
+
+## Detalhes técnicos
+- Modelo: `claude-haiku-4-5` via mesma secret do `ai-copilot`; resposta JSON, sem streaming.
+- `stage_moves.moved_by` fica `null` para sugestões da IA (`is_ai_move=true` é o sinal).
+- Movimento manual segue gravando `stage_moves { is_ai_move:false, status:'applied' }` pelo default — comportamento inalterado.
+- Realtime opcional em `stage_moves` filtrado por `status='suggested'` para o badge; se pesar, cai pra polling 30s.
