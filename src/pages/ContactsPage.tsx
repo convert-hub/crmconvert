@@ -246,7 +246,12 @@ export default function ContactsPage() {
             <TableBody>
               {contacts.map(c => (
                 <TableRow key={c.id} className="group cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => !isReadonly && openEdit(c)}>
-                  <TableCell className="text-[13px] font-medium text-foreground">{c.name}</TableCell>
+                  <TableCell className="text-[13px] font-medium text-foreground">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">{c.name}</span>
+                      <CtwaBadge contact={c as any} />
+                    </div>
+                  </TableCell>
                   <TableCell className="text-[13px]">{c.phone && <span className="flex items-center gap-1.5 text-muted-foreground"><Phone className="h-3 w-3" strokeWidth={1.5} />{c.phone}</span>}</TableCell>
                   <TableCell className="text-[13px]">{c.email && <span className="flex items-center gap-1.5 text-muted-foreground"><Mail className="h-3 w-3" strokeWidth={1.5} />{c.email}</span>}</TableCell>
                   <TableCell>
