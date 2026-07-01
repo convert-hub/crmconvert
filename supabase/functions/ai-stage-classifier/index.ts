@@ -45,6 +45,7 @@ Deno.serve(async (req) => {
     const mode: "suggestion" | "auto" = cfg.mode === "auto" ? "auto" : "suggestion";
     const minConfidence: number = typeof cfg.min_confidence === "number" ? cfg.min_confidence : 0.7;
     const direction: "forward_only" | "any" = cfg.direction === "any" ? "any" : "forward_only";
+    const excludeWonLost: boolean = cfg.exclude_won_lost !== false; // default true
 
     // 2) Resolve opportunity for this conversation
     const { data: conv } = await supabase
@@ -84,18 +85,22 @@ Deno.serve(async (req) => {
       .limit(1);
     if (recent && recent.length > 0) return json({ skipped: "debounced" });
 
-    // 4) Load stages of the pipeline (exclude won/lost)
+    // 4) Load stages of the pipeline (optionally exclude won/lost based on tenant config)
     const { data: allStages } = await supabase
       .from("stages")
       .select("id,name,position,is_won,is_lost,ai_criteria")
       .eq("tenant_id", tenant_id)
       .eq("pipeline_id", opp.pipeline_id)
       .order("position", { ascending: true });
-    const stages = (allStages || []).filter((s) => !s.is_won && !s.is_lost) as Stage[];
-    if (stages.length < 2) return json({ skipped: "not_enough_stages" });
 
-    const currentStage = stages.find((s) => s.id === opp.stage_id);
-    if (!currentStage) return json({ skipped: "current_stage_terminal_or_unknown" });
+    const currentStage = (allStages || []).find((s) => s.id === opp.stage_id) as Stage | undefined;
+    if (!currentStage) return json({ skipped: "stage_not_found" });
+    if (currentStage.is_won || currentStage.is_lost) return json({ skipped: "already_terminal" });
+
+    const stages = (excludeWonLost
+      ? (allStages || []).filter((s) => !s.is_won && !s.is_lost)
+      : (allStages || [])) as Stage[];
+    if (stages.length < 2) return json({ skipped: "not_enough_stages" });
 
     // 5) Load last 6 non-internal messages + contact
     const { data: msgs } = await supabase

@@ -9,7 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Loader2, Brain } from 'lucide-react';
+import { Loader2, Brain, Zap } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -38,6 +38,8 @@ export default function AiPipelineCard() {
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState<AiPipelineSettings>(DEFAULTS);
   const [confirmAuto, setConfirmAuto] = useState(false);
+  const [confirmAllowTerminal, setConfirmAllowTerminal] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   useEffect(() => {
     if (!tenant?.id) return;
@@ -64,6 +66,23 @@ export default function AiPipelineCard() {
   const requestModeChange = (mode: 'suggestion' | 'auto') => {
     if (mode === 'auto' && cfg.mode !== 'auto') { setConfirmAuto(true); return; }
     persist({ ...cfg, mode });
+  };
+
+  const requestExcludeChange = (checked: boolean) => {
+    // switch checked = "excluir terminais" (preservar). Desligar = permitir mover para terminal.
+    if (!checked && cfg.exclude_won_lost) { setConfirmAllowTerminal(true); return; }
+    persist({ ...cfg, exclude_won_lost: checked });
+  };
+
+  const runBackfill = async () => {
+    if (!tenant?.id) return;
+    setBackfilling(true);
+    const { data, error } = await supabase.rpc('backfill_ai_stage_classify' as any, { _tenant_id: tenant.id });
+    setBackfilling(false);
+    if (error) { toast.error('Erro: ' + error.message); return; }
+    const count = (data as number) ?? 0;
+    if (count === 0) toast.info('Nenhuma conversa elegível encontrada.');
+    else toast.success(`${count} conversas enfileiradas para classificação.`);
   };
 
   if (loading) return (
@@ -131,12 +150,37 @@ export default function AiPipelineCard() {
             </Select>
           </div>
 
-          <div className="flex items-center justify-between opacity-60">
+          <div className="flex items-center justify-between">
             <div>
-              <Label>Nunca mover etapas de Ganho/Perdido</Label>
-              <p className="text-xs text-muted-foreground">Etapas terminais são sempre preservadas.</p>
+              <Label>{cfg.exclude_won_lost ? 'Nunca mover para Ganho/Perdido' : 'Permitir mover para Ganho/Perdido'}</Label>
+              <p className="text-xs text-muted-foreground">
+                {cfg.exclude_won_lost
+                  ? 'Etapas terminais são sempre preservadas.'
+                  : 'A IA pode sugerir ou mover cartões para etapas terminais.'}
+              </p>
             </div>
-            <Switch checked disabled />
+            <Switch
+              checked={cfg.exclude_won_lost}
+              disabled={!isAdmin || saving}
+              onCheckedChange={requestExcludeChange}
+            />
+          </div>
+
+          <div className="border-t border-border pt-4 space-y-3">
+            <div>
+              <Label>Classificação em lote</Label>
+              <p className="text-xs text-muted-foreground">Analisa todas as conversas ativas que têm oportunidade aberta e gera sugestões de etapa. Útil ao ativar a IA pela primeira vez.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl gap-2"
+              disabled={!cfg.enabled || saving || !isAdmin || backfilling}
+              onClick={runBackfill}
+            >
+              {backfilling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+              Classificar conversas existentes
+            </Button>
           </div>
 
           {!isAdmin && <p className="text-xs text-muted-foreground">Apenas admins e gerentes podem alterar essas configurações.</p>}
@@ -155,6 +199,22 @@ export default function AiPipelineCard() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={() => { setConfirmAuto(false); persist({ ...cfg, mode: 'auto' }); }}>Ativar automático</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmAllowTerminal} onOpenChange={setConfirmAllowTerminal}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permitir etapas terminais?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A IA poderá mover cartões para etapas de Ganho ou Perdido. Movimentos ficam registrados e podem ser desfeitos.
+              Recomendamos manter ativado até validar o comportamento da IA.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setConfirmAllowTerminal(false); persist({ ...cfg, exclude_won_lost: false }); }}>Permitir etapas terminais</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

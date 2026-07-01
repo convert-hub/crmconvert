@@ -2520,6 +2520,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      backfill_ai_stage_classify: {
+        Args: { _tenant_id: string }
+        Returns: number
+      }
       can_view_all_in_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       claim_campaign_recipients: {
         Args: { _campaign_id: string; _limit: number }
