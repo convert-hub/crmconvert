@@ -21,6 +21,7 @@ type AiPipelineSettings = {
   min_confidence: number;
   exclude_won_lost: boolean;
   direction: 'forward_only' | 'any';
+  model: string;
 };
 
 const DEFAULTS: AiPipelineSettings = {
@@ -29,6 +30,7 @@ const DEFAULTS: AiPipelineSettings = {
   min_confidence: 0.7,
   exclude_won_lost: true,
   direction: 'forward_only',
+  model: 'google/gemini-2.5-flash',
 };
 
 export default function AiPipelineCard() {
