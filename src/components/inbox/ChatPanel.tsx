@@ -615,7 +615,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">{effectiveContact.name.slice(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground text-sm truncate">{effectiveContact.name}</h3>
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-semibold text-foreground text-sm truncate">{effectiveContact.name}</h3>
+              <CtwaBadge contact={effectiveContact as any} />
+            </div>
             <span className="text-xs text-muted-foreground">
               {effectiveContact.phone} · {effectiveChannel}
               {providerInfo?.provider === 'meta_cloud' && <> · <span className="text-primary">WhatsApp Oficial</span></>}
