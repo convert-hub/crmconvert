@@ -159,50 +159,43 @@ async function handleInboundMessage(
   const timestamp = msg.timestamp ? new Date(parseInt(msg.timestamp) * 1000).toISOString() : new Date().toISOString();
 
   // Extract referral data (Click-to-WhatsApp ad context)
-  const referral = msg.referral || msg.context?.referred_product || null;
-  const adContext = msg.referral as
-    | { source_url?: string; headline?: string; body?: string; source_type?: string; source_id?: string; ctwa_clid?: string; media_type?: string }
-    | undefined;
+  const referral = (msg.referral || null) as
+    | { source_url?: string; headline?: string; body?: string; source_type?: string; source_id?: string; ctwa_clid?: string; media_type?: string; image_url?: string }
+    | null;
 
   // 1) Find or create contact (by normalized phone within tenant)
   const { normalizeBrazilPhone } = await import("../_shared/phone.ts");
+  const { buildCtwaPatch, deriveNetworkFromUrl } = await import("../_shared/ctwa.ts");
   const normPhone = normalizeBrazilPhone(fromPhone);
   if (!normPhone) return;
 
+  const CONTACT_COLS = "id, utm_source, utm_campaign, ad_id, ctwa_clid, custom_fields";
+
   let { data: contact } = await supabase
     .from("contacts")
-    .select("id, utm_source, utm_campaign, ad_id")
+    .select(CONTACT_COLS)
     .eq("tenant_id", tenantId)
     .eq("phone", normPhone)
     .limit(1)
     .maybeSingle();
 
   if (!contact) {
-    const insertData: any = {
-      tenant_id: tenantId,
-      name: profileName || normPhone,
-      phone: normPhone,
-      source: adContext ? "facebook_ads" : "whatsapp_meta",
-      status: "lead",
-    };
-    if (adContext) {
-      insertData.utm_source = "facebook_ads";
-      insertData.utm_medium = adContext.source_type ?? "ctwa";
-      insertData.utm_campaign = adContext.headline ?? null;
-      insertData.utm_content = adContext.body ?? null;
-      insertData.ad_id = adContext.ctwa_clid ?? adContext.source_id ?? null;
-      insertData.campaign_id = adContext.source_id ?? null;
-    }
     const { data: newContact, error: insErr } = await supabase
       .from("contacts")
-      .insert(insertData)
-      .select("id, utm_source, utm_campaign, ad_id")
+      .insert({
+        tenant_id: tenantId,
+        name: profileName || normPhone,
+        phone: normPhone,
+        source: referral ? "ctwa" : "whatsapp_meta",
+        status: "lead",
+      })
+      .select(CONTACT_COLS)
       .single();
     if (insErr && (insErr as any).code === '23505') {
       // Race: outro webhook criou o mesmo contato — refaz o lookup.
       const { data: race } = await supabase
         .from("contacts")
-        .select("id, utm_source, utm_campaign, ad_id")
+        .select(CONTACT_COLS)
         .eq("tenant_id", tenantId)
         .eq("phone", normPhone)
         .single();
@@ -210,18 +203,28 @@ async function handleInboundMessage(
     } else {
       contact = newContact;
     }
-  } else if (adContext && !contact.utm_source) {
-    // Backfill UTMs on existing contact only when empty (don't overwrite better data)
-    await supabase.from("contacts").update({
-      utm_source: "facebook_ads",
-      utm_medium: adContext.source_type ?? "ctwa",
-      utm_campaign: adContext.headline ?? null,
-      utm_content: adContext.body ?? null,
-      ad_id: adContext.ctwa_clid ?? adContext.source_id ?? null,
-      campaign_id: adContext.source_id ?? null,
-    }).eq("id", contact.id);
   }
   if (!contact) return;
+
+  // 1b) Apply CTWA attribution patch (covers new/existing/race-recovered — never throw).
+  if (referral) {
+    try {
+      const patch = buildCtwaPatch(contact, {
+        provider: "meta_cloud",
+        ctwa_clid: referral.ctwa_clid ?? null,
+        ad_id: referral.source_id ?? null,
+        network: deriveNetworkFromUrl(referral.source_url),
+        source_url: referral.source_url ?? null,
+        headline: referral.headline ?? null,
+        body: referral.body ?? null,
+        image_url: referral.image_url ?? null,
+        media_type: referral.media_type ?? null,
+      });
+      await supabase.from("contacts").update(patch).eq("id", contact.id);
+    } catch (e) {
+      console.error("[webhook-meta] ctwa attribution failed", e);
+    }
+  }
 
   // 2) Find or create conversation tied to this instance
   let { data: conversation } = await supabase
@@ -243,12 +246,14 @@ async function handleInboundMessage(
         whatsapp_instance_id: instance.id,
         channel: "whatsapp",
         status: "waiting_agent",
+        ctwa_clid: referral?.ctwa_clid ?? null,
       })
       .select("id")
       .single();
     conversation = newConv;
   }
   if (!conversation) return;
+
 
   // 3) Extract text/media
   let content: string | null = null;
