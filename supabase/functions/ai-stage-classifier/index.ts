@@ -45,6 +45,31 @@ Deno.serve(async (req) => {
     const direction: "forward_only" | "any" = cfg.direction === "any" ? "any" : "forward_only";
     const excludeWonLost: boolean = cfg.exclude_won_lost !== false; // default true
 
+    // Resolve API key: ai_configs(stage_classifier) → global_api_key → env OPENAI_API_KEY
+    const { data: aiConfig } = await supabase
+      .from("ai_configs")
+      .select("*, global_api_key:global_api_keys(*)")
+      .eq("tenant_id", tenant_id)
+      .eq("task_type", "stage_classifier")
+      .maybeSingle();
+
+    let apiKey: string | null = null;
+    let model = "gpt-4o-mini";
+    if (aiConfig) {
+      model = aiConfig.model || model;
+      if (aiConfig.api_key_encrypted) {
+        apiKey = aiConfig.api_key_encrypted;
+      } else if (aiConfig.global_api_key?.api_key_encrypted) {
+        apiKey = aiConfig.global_api_key.api_key_encrypted;
+      }
+    }
+    if (!apiKey) {
+      apiKey = Deno.env.get("OPENAI_API_KEY") || null;
+    }
+    if (!apiKey) {
+      return json({ error: "ai_not_configured" }, 400);
+    }
+
     // 2) Resolve opportunity for this conversation
     const { data: conv } = await supabase
       .from("conversations")
