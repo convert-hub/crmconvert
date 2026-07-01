@@ -12,6 +12,7 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
+import ProfileDialog from './ProfileDialog';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -41,6 +42,10 @@ export default function AppSidebar() {
   // Load tenant names for the switcher
   const [tenantNames, setTenantNames] = useState<Record<string, string>>({});
   const hasMultipleTenants = allMemberships.length > 1;
+
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [displayName, setDisplayName] = useState<string | null>(null);
+  const currentName = displayName ?? profile?.full_name ?? 'Usuário';
 
   useEffect(() => {
     if (!hasMultipleTenants) return;
@@ -159,19 +164,34 @@ export default function AppSidebar() {
 
       {/* User */}
       <div className="p-3 border-t border-sidebar-border">
-        <div className="flex items-center gap-3 px-2 py-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-semibold">
-            {profile?.full_name?.[0]?.toUpperCase() ?? 'U'}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-medium truncate">{profile?.full_name ?? 'Usuário'}</p>
-            <p className="text-[11px] text-muted-foreground capitalize">{role ?? ''}</p>
-          </div>
-          <button onClick={signOut} className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-lg hover:bg-accent">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setProfileOpen(true)}
+            className="flex-1 min-w-0 flex items-center gap-3 rounded-lg px-2 py-1.5 text-left cursor-pointer hover:bg-accent transition-colors"
+          >
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-semibold">
+              {currentName?.[0]?.toUpperCase() ?? 'U'}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-medium truncate">{currentName}</p>
+              <p className="text-[11px] text-muted-foreground capitalize">{role ?? ''}</p>
+            </div>
+          </button>
+          <button
+            onClick={signOut}
+            aria-label="Sair"
+            className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-lg hover:bg-accent"
+          >
             <LogOut className="h-3.5 w-3.5" strokeWidth={1.75} />
           </button>
         </div>
       </div>
+
+      <ProfileDialog
+        open={profileOpen}
+        onOpenChange={setProfileOpen}
+        onSaved={(name) => setDisplayName(name || null)}
+      />
     </aside>
   );
 }
