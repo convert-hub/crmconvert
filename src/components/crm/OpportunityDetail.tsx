@@ -635,21 +635,31 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
                       <p className="text-xs text-foreground mt-0.5 line-clamp-2">{item.data.content || '[Mídia]'}</p>
                     </div>
                   )}
-                  {item.type === 'stage_move' && (
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-medium text-warning">Movido de etapa</span>
-                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                  {item.type === 'stage_move' && (() => {
+                    const sm = item.data as StageMove;
+                    const isLatestMove = stageMoves[stageMoves.length - 1]?.id === sm.id;
+                    const canUndo = sm.is_ai_move && isLatestMove && opp?.stage_id === sm.to_stage_id && !!sm.from_stage_id
+                      && (Date.now() - new Date(sm.created_at).getTime() < 24 * 3600 * 1000);
+                    return (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-medium text-warning">Movido de etapa</span>
+                          <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-foreground mt-0.5">
+                          <span>{getStageName(sm.from_stage_id)}</span>
+                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          <span className="font-medium">{getStageName(sm.to_stage_id)}</span>
+                          {sm.is_ai_move && <Badge variant="secondary" className="text-[9px] px-1 py-0 rounded-full">IA</Badge>}
+                          {sm.confidence_score != null && <span className="text-[9px] text-muted-foreground">{Math.round(sm.confidence_score * 100)}%</span>}
+                          {canUndo && (
+                            <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[10px]" onClick={() => undoStageMove(sm)}>Desfazer</Button>
+                          )}
+                        </div>
+                        {sm.ai_reason && <p className="text-[10px] text-muted-foreground mt-0.5 italic">{sm.ai_reason}</p>}
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-foreground mt-0.5">
-                        <span>{getStageName(item.data.from_stage_id)}</span>
-                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                        <span className="font-medium">{getStageName(item.data.to_stage_id)}</span>
-                        {item.data.is_ai_move && <Badge variant="secondary" className="text-[9px] px-1 py-0 rounded-full">IA</Badge>}
-                      </div>
-                      {item.data.ai_reason && <p className="text-[10px] text-muted-foreground mt-0.5 italic">{item.data.ai_reason}</p>}
-                    </div>
-                  )}
+                    );
+                  })()}
                   {item.type === 'note' && (
                     <div>
                       <div className="flex items-center gap-2">
