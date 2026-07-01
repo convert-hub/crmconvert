@@ -27,7 +27,7 @@ import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnections
 import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
 import LeadWebhooksCard from '@/components/settings/LeadWebhooksCard';
 import LeadNotificationsCard from '@/components/settings/LeadNotificationsCard';
-import ProfileSettingsCard from '@/components/settings/ProfileSettingsCard';
+
 
 interface CustomFieldDef {
   key: string;
@@ -670,7 +670,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="general" className="space-y-4 pt-4">
-          <ProfileSettingsCard />
+
 
           <Card className="glass-card rounded-2xl">
             <CardHeader><CardTitle>Dados da Empresa</CardTitle><CardDescription>Informações básicas do seu tenant</CardDescription></CardHeader>
