@@ -309,6 +309,12 @@ Formato esperado:
     ai_pipeline_last.status = "applied";
     ai_pipeline_last.applied = true;
     await patchOppQualification(supabase, opp, ai_pipeline_last);
+    await logAiUsage(supabase, {
+      tenant_id, model, aiConfig,
+      tokens: aiData?.usage?.total_tokens || 0,
+      conversation_id, opportunity_id: opp.id,
+      suggestedId: suggestedStage.id, confidence, reason,
+    });
     return json({ ok: true, action: "applied", from: currentStage.id, to: suggestedStage.id, confidence });
   } catch (e) {
     console.error("[ai-stage-classifier] error", e);
