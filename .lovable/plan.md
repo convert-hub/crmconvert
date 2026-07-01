@@ -1,69 +1,44 @@
-# Plano — Ajustes IA de Pipeline
+# Migrar `ai-stage-classifier` para OpenAI direto
 
-## 1. Switch funcional "Ganho/Perdido" — `src/components/settings/AiPipelineCard.tsx`
+Alterar apenas `supabase/functions/ai-stage-classifier/index.ts`, mantendo intactos prompt, guard-rails, lógica de `stage_moves`, obsolescência e modo suggestion/auto.
 
-- Remover `opacity-60` do wrapper.
-- Trocar `<Switch checked disabled />` por switch controlado por `cfg.exclude_won_lost`.
-- Label/descrição dinâmicos:
-  - `true` (default): "Nunca mover para Ganho/Perdido" / "Etapas terminais são sempre preservadas."
-  - `false`: "Permitir mover para Ganho/Perdido" / "A IA pode sugerir ou mover cartões para etapas terminais."
-- Ao DESLIGAR (`true → false`), abrir `AlertDialog` (state `confirmAllowTerminal`) no mesmo padrão do `confirmAuto`:
-  - Título: "Permitir etapas terminais?"
-  - Descrição: "A IA poderá mover cartões para etapas de Ganho ou Perdido. Movimentos ficam registrados e podem ser desfeitos. Recomendamos manter ativado até validar o comportamento da IA."
-  - Ação: "Permitir etapas terminais" → `persist({ ...cfg, exclude_won_lost: false })`
-- Ligar para `true` persiste direto.
+## Mudanças
 
-## 2. Backend respeita `exclude_won_lost` — `supabase/functions/ai-stage-classifier/index.ts`
+**1. Topo do arquivo**
+- Remover `GATEWAY_URL` (Lovable).
+- Remover a constante `MODEL` (modelo passa a vir do `ai_configs` ou default `gpt-4o-mini`).
+- Remover leitura de `LOVABLE_API_KEY`.
 
-- Extrair: `const excludeWonLost: boolean = cfg.exclude_won_lost !== false;`
-- Substituir bloco "4) Load stages":
-  ```ts
-  const currentStage = (allStages || []).find(s => s.id === opp.stage_id);
-  if (!currentStage) return json({ skipped: "stage_not_found" });
-  if (currentStage.is_won || currentStage.is_lost) return json({ skipped: "already_terminal" });
-  const stages = excludeWonLost
-    ? (allStages || []).filter(s => !s.is_won && !s.is_lost) as Stage[]
-    : (allStages || []) as Stage[];
-  ```
-- Remove early return `current_stage_terminal_or_unknown`. Regra: nunca reclassificar quem já está em terminal; desbloqueio serve só para MOVER PARA terminal.
+**2. Resolução de API key (após carregar config do tenant, seção 1)**
+Adicionar cadeia de fallback idêntica à do `ai-generate`:
+1. `ai_configs` do tenant com `task_type = "stage_classifier"` (join com `global_api_keys`).
+2. Se `api_key_encrypted` do registro do tenant existir, usa.
+3. Senão, `global_api_key.api_key_encrypted`.
+4. Senão, `Deno.env.get("OPENAI_API_KEY")`.
+5. Se nenhuma → retornar `{ error: "ai_not_configured" }` com status 400.
 
-## 3. Editor de `ai_criteria` em terminais — `src/pages/SettingsPage.tsx`
+Também extrair `model` do `aiConfig.model` (default `gpt-4o-mini`).
 
-- Popover de critério IA na tab pipeline: remover `s.is_won || s.is_lost` do `disabled` do Textarea (manter só `!isAdmin`).
-- Nova mensagem: "Defina critérios para que a IA saiba quando um lead chegou a esta etapa (se permitido nas configurações de IA)."
+**3. Chamada da IA (seção 7)**
+Substituir `fetch(GATEWAY_URL, ...)` por `fetch("https://api.openai.com/v1/chat/completions", ...)` com:
+- Header `Authorization: Bearer ${apiKey}`.
+- Body: `{ model, messages, response_format: { type: "json_object" }, temperature: 0.1, max_tokens: 300 }`.
+- Manter o parse do JSON de resposta e o tratamento de erros existente.
 
-## 4. Botão "Classificar conversas existentes" — `AiPipelineCard.tsx`
+**4. Log de uso (após insert em `stage_moves`, seção 9)**
+Após persistir a sugestão/movimento (em ambos os modos `suggestion` e `auto`), inserir em `ai_logs`:
+- `tenant_id`, `task_type: "stage_classifier"`, `provider: "openai"`, `model`,
+- `tokens_used: aiData?.usage?.total_tokens || 0`,
+- `input_data: { conversation_id, opportunity_id }`,
+- `output_data: { suggested_stage_id, confidence, reason }`.
 
-Dentro do mesmo Card, antes do aviso de "Apenas admins":
-- Separador (`border-t pt-4`).
-- Título "Classificação em lote" + descrição "Analisa todas as conversas ativas que têm oportunidade aberta e gera sugestões de etapa. Útil ao ativar a IA pela primeira vez."
-- Botão com ícone `Zap` + estado `backfilling`:
-  - `disabled = !cfg.enabled || saving || !isAdmin || backfilling`
-  - Ao clicar: `supabase.rpc('backfill_ai_stage_classify', { _tenant_id: tenant.id })`
-  - `count === 0` → `toast.info('Nenhuma conversa elegível encontrada.')`
-  - `count > 0` → `toast.success(\`\${count} conversas enfileiradas para classificação.\`)`
-  - Erro → `toast.error('Erro: ' + error.message)`
+E, se `aiConfig?.id` existir, atualizar contadores:
+- `daily_usage += 1`, `monthly_usage += 1`, `usage_reset_at = now()`.
 
-## 5. Migration — RPC `backfill_ai_stage_classify`
-
-Criar via `supabase--migration` a função `public.backfill_ai_stage_classify(_tenant_id uuid) RETURNS integer`:
-- Checagem de segurança no início: `if not is_member_of_tenant(_tenant_id) and not is_saas_admin() then raise exception 'forbidden'; end if;`
-- Percorre `conversations` do tenant vinculadas a `opportunities` `status='open'` (por `opportunity_id` ou por `contact_id`).
-- Só inclui conversas com pelo menos uma mensagem não interna.
-- Ignora quando já existe `job_queue` (`type='ai_stage_classify'`) `pending`/`running` para a mesma conversa.
-- Enfileira via `enqueue_job` com idempotency única por minuto:
-  ```
-  'ai_classify_bf_' || _conv.conversation_id::text || '_' || to_char(now(), 'YYYYMMDD_HH24MI')
-  ```
-  Permite re-rodar o backfill (no máximo 1x por minuto por conversa).
-- `GRANT EXECUTE ... TO authenticated;` (SECURITY DEFINER).
-
-## 6. Deploy da edge function
-
-Reeditar `supabase/functions/ai-stage-classifier/index.ts` (a alteração do item 2 já força o deploy automático).
+## O que NÃO muda
+- Debounce, obsolescência, filtros `exclude_won_lost`, guard-rail de etapas terminais, formato do prompt, criação de `stage_moves`, RLS.
+- Nenhum outro arquivo é tocado.
 
 ## Riscos
-
-- **Reclassificação de contas já ganhas/perdidas:** mitigado pelo guard `already_terminal`.
-- **Backfill em massa:** pode gerar muitos jobs de IA (custo). O `min_confidence` e o debounce protegem; texto do card avisa o admin.
-- **RPC exposta ao `authenticated`:** protegida por membership check + filtro `_tenant_id`, sem SQL dinâmico.
+- Se o tenant não tiver `ai_configs(stage_classifier)` nem `OPENAI_API_KEY` no env, a classificação passa a falhar com `ai_not_configured` (antes funcionava via `LOVABLE_API_KEY`). Aceitável — é o padrão já usado no `ai-generate`.
+- O seletor de modelo introduzido recentemente no `AiPipelineCard` (`settings.ai_pipeline.model`) não é lido por esta função; continuará sem efeito para o classifier até uma tarefa futura (fora do escopo desta alteração).
