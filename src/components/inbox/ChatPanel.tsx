@@ -33,6 +33,7 @@ import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
 import VariablePicker from '@/components/shared/VariablePicker';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+import { CtwaBadge } from '@/components/shared/CtwaBadge';
 interface QuickReply {
   id: string;
   shortcut: string;
