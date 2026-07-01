@@ -528,6 +528,21 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
       console.error('webhook-uazapi: failed to enqueue AI job:', e);
     }
   }
+
+  // Enqueue AI Pipeline stage classification (debounced 2min per conversation)
+  if (!fromMe && savedMsg?.id) {
+    try {
+      const window = Math.floor(Date.now() / 120000);
+      await supabase.rpc('enqueue_job', {
+        _type: 'ai_stage_classify',
+        _payload: JSON.stringify({ tenant_id: tenantId, conversation_id: conversation.id }),
+        _tenant_id: tenantId,
+        _idempotency_key: `ai_stage:${conversation.id}:${window}`,
+      });
+    } catch (e) {
+      console.error('webhook-uazapi: failed to enqueue ai_stage_classify:', e);
+    }
+  }
 }
 
 async function handleStatusUpdate(supabase: any, tenantId: string, body: any) {

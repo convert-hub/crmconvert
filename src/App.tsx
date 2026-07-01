@@ -23,6 +23,7 @@ import CampaignsPage from "@/pages/CampaignsPage";
 import CampaignDetailPage from "@/pages/CampaignDetailPage";
 
 import ActivitiesPage from "@/pages/ActivitiesPage";
+import AiSuggestionsPage from "@/pages/AiSuggestionsPage";
 import AdminLayout from "@/pages/admin/AdminLayout";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminTenants from "@/pages/admin/AdminTenants";
@@ -78,6 +79,7 @@ function AppRoutes() {
         <Route path="flow-builder" element={<FlowBuilderPage />} />
         <Route path="prompt-studio" element={<PromptStudioPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="ai-suggestions" element={<AiSuggestionsPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="reports" element={<ReportsPage />} />
       </Route>

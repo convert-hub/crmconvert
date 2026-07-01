@@ -380,6 +380,19 @@ async function handleInboundMessage(
   if (convUpdErr) {
     console.error("[webhook-meta] update_conversation_failed", { conversation_id: conversation.id, error: convUpdErr.message });
   }
+
+  // 7) Enqueue AI Pipeline stage classification (debounced 2min per conversation)
+  try {
+    const window = Math.floor(Date.now() / 120000);
+    await supabase.rpc("enqueue_job", {
+      _type: "ai_stage_classify",
+      _payload: JSON.stringify({ tenant_id: tenantId, conversation_id: conversation.id }),
+      _tenant_id: tenantId,
+      _idempotency_key: `ai_stage:${conversation.id}:${window}`,
+    });
+  } catch (e) {
+    console.error("[webhook-meta] enqueue ai_stage_classify failed", e);
+  }
 }
 
 async function getUnread(supabase: any, conversationId: string): Promise<number> {

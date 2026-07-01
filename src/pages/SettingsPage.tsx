@@ -27,6 +27,10 @@ import MetaCloudConnectionsCard from '@/components/settings/MetaCloudConnections
 import MetaTemplatesCard from '@/components/settings/MetaTemplatesCard';
 import LeadWebhooksCard from '@/components/settings/LeadWebhooksCard';
 import LeadNotificationsCard from '@/components/settings/LeadNotificationsCard';
+import AiPipelineCard from '@/components/settings/AiPipelineCard';
+import { Textarea } from '@/components/ui/textarea';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Sparkles } from 'lucide-react';
 
 
 interface CustomFieldDef {
@@ -37,7 +41,7 @@ interface CustomFieldDef {
 }
 
 interface Member { id: string; user_id: string; role: string; is_active: boolean; profile?: { full_name: string | null; phone: string | null }; }
-interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_minutes: number | null; }
+interface StageRow { id: string; name: string; color: string; position: number; is_won: boolean; is_lost: boolean; inactivity_minutes: number | null; ai_criteria: string | null; }
 interface AiConfig { id: string; task_type: string; provider: string; model: string; daily_limit: number; monthly_limit: number; daily_usage: number; monthly_usage: number; }
 
 // TODO: reativar qa_review e stage_classifier quando backend for implementado
@@ -764,7 +768,7 @@ export default function SettingsPage() {
               <DndContext sensors={reorderSensors} collisionDetection={closestCenter} onDragEnd={handleStagesDragEnd}>
                 <Table>
                   <TableHeader><TableRow className="hover:bg-transparent">
-                    <TableHead className="w-20">Pos.</TableHead><TableHead className="w-12">Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (HH:MM)</TableHead><TableHead className="w-10"></TableHead>
+                    <TableHead className="w-20">Pos.</TableHead><TableHead className="w-12">Cor</TableHead><TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Inatividade (HH:MM)</TableHead><TableHead className="w-28">Critério IA</TableHead><TableHead className="w-10"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     <SortableContext items={stages.map(s => s.id)} strategy={verticalListSortingStrategy}>
@@ -813,6 +817,47 @@ export default function SettingsPage() {
                               ) : (
                                 <span className="text-muted-foreground text-sm">{totalMin > 0 ? `${hh}:${mm}` : '—'}</span>
                               )}
+                            </TableCell>
+                            <TableCell>
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn("h-8 rounded-lg gap-1.5 text-xs", s.ai_criteria ? "text-primary" : "text-muted-foreground")}
+                                    title={s.ai_criteria || 'Definir critério da IA'}
+                                  >
+                                    <Sparkles className="h-3.5 w-3.5" />
+                                    {s.ai_criteria ? 'Editar' : 'Definir'}
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-80" align="end">
+                                  <div className="space-y-2">
+                                    <Label className="text-xs">Critério IA para "{s.name}"</Label>
+                                    <p className="text-[11px] text-muted-foreground">Descreva o que o lead precisa ter dito/feito para estar nesta etapa. A IA usa isso para decidir movimentações.</p>
+                                    <Textarea
+                                      defaultValue={s.ai_criteria || ''}
+                                      rows={5}
+                                      placeholder="Ex: cliente confirmou interesse no produto e pediu proposta comercial."
+                                      className="rounded-lg text-sm"
+                                      disabled={!isAdmin || s.is_won || s.is_lost}
+                                      onBlur={async (e) => {
+                                        const v = e.target.value.trim() || null;
+                                        if (v === (s.ai_criteria || null)) return;
+                                        const { error } = await supabase.from('stages').update({ ai_criteria: v } as any).eq('id', s.id);
+                                        if (error) toast.error(error.message);
+                                        else {
+                                          setStages(prev => prev.map(st => st.id === s.id ? { ...st, ai_criteria: v } : st));
+                                          toast.success('Critério salvo');
+                                        }
+                                      }}
+                                    />
+                                    {(s.is_won || s.is_lost) && (
+                                      <p className="text-[11px] text-muted-foreground">Etapas de Ganho/Perdido não são movidas pela IA.</p>
+                                    )}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
                             </TableCell>
                           </SortableStageRow>
                         );
@@ -1013,6 +1058,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="ai" className="space-y-4 pt-4">
+          <AiPipelineCard />
           <Card className="glass-card rounded-2xl">
             <CardHeader className="flex flex-row items-center justify-between">
               <div><CardTitle>Configuração de IA</CardTitle><CardDescription>Provedores, modelos e limites</CardDescription></div>

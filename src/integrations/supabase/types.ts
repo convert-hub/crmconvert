@@ -1969,6 +1969,9 @@ export type Database = {
           is_ai_move: boolean | null
           moved_by: string | null
           opportunity_id: string
+          resolved_at: string | null
+          resolved_by: string | null
+          status: string
           tenant_id: string
           to_stage_id: string
           undone: boolean | null
@@ -1983,6 +1986,9 @@ export type Database = {
           is_ai_move?: boolean | null
           moved_by?: string | null
           opportunity_id: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
           tenant_id: string
           to_stage_id: string
           undone?: boolean | null
@@ -1997,6 +2003,9 @@ export type Database = {
           is_ai_move?: boolean | null
           moved_by?: string | null
           opportunity_id?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
           tenant_id?: string
           to_stage_id?: string
           undone?: boolean | null
@@ -2034,6 +2043,7 @@ export type Database = {
       }
       stages: {
         Row: {
+          ai_criteria: string | null
           color: string | null
           created_at: string
           id: string
@@ -2047,6 +2057,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          ai_criteria?: string | null
           color?: string | null
           created_at?: string
           id?: string
@@ -2060,6 +2071,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          ai_criteria?: string | null
           color?: string | null
           created_at?: string
           id?: string
