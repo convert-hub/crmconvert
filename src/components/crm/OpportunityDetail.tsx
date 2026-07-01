@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Opportunity, Contact, Stage, Message, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Button } from '@/components/ui/button';
+import { CtwaBadge } from '@/components/shared/CtwaBadge';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
