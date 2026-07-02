@@ -381,7 +381,29 @@ async function handleInboundMessage(
     console.error("[webhook-meta] update_conversation_failed", { conversation_id: conversation.id, error: convUpdErr.message });
   }
 
-  // 7) Enqueue AI Pipeline stage classification (debounced 2min per conversation)
+  // 7) Enqueue AI processing (worker handles keyword→lead conversion + AI reply)
+  if (insertedMsg?.id) {
+    try {
+      await supabase.rpc("enqueue_job", {
+        _type: "process_uazapi_message",
+        _payload: JSON.stringify({
+          tenant_id: tenantId,
+          conversation_id: conversation.id,
+          contact_id: contact.id,
+          message_text: content ?? "",
+          message_id: insertedMsg.id,
+          already_saved: true,
+          provider: "meta_cloud",
+        }),
+        _tenant_id: tenantId,
+        _idempotency_key: `meta-ai-${insertedMsg.id}`,
+      });
+    } catch (e) {
+      console.error("[webhook-meta] enqueue process_uazapi_message failed", e);
+    }
+  }
+
+  // 8) Enqueue AI Pipeline stage classification (debounced 2min per conversation)
   try {
     const window = Math.floor(Date.now() / 120000);
     await supabase.rpc("enqueue_job", {
