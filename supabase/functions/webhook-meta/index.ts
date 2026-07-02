@@ -323,7 +323,7 @@ async function handleInboundMessage(
     return;
   }
 
-  const { error: insMsgErr } = await supabase.from("messages").insert({
+  const { data: insertedMsg, error: insMsgErr } = await supabase.from("messages").insert({
     tenant_id: tenantId,
     conversation_id: conversation.id,
     direction: "inbound",
@@ -333,7 +333,7 @@ async function handleInboundMessage(
     provider_message_id: providerMessageId,
     provider_metadata: { provider: "meta_cloud", raw: msg, meta_media_id: mediaId },
     created_at: timestamp,
-  });
+  }).select("id").maybeSingle();
   if (insMsgErr) {
     if ((insMsgErr as any).code === "23505") {
       console.log("[webhook-meta] duplicate_inbound_race_ignored", { provider_message_id: providerMessageId });
@@ -381,7 +381,29 @@ async function handleInboundMessage(
     console.error("[webhook-meta] update_conversation_failed", { conversation_id: conversation.id, error: convUpdErr.message });
   }
 
-  // 7) Enqueue AI Pipeline stage classification (debounced 2min per conversation)
+  // 7) Enqueue AI processing (worker handles keyword→lead conversion + AI reply)
+  if (insertedMsg?.id) {
+    try {
+      await supabase.rpc("enqueue_job", {
+        _type: "process_uazapi_message",
+        _payload: JSON.stringify({
+          tenant_id: tenantId,
+          conversation_id: conversation.id,
+          contact_id: contact.id,
+          message_text: content ?? "",
+          message_id: insertedMsg.id,
+          already_saved: true,
+          provider: "meta_cloud",
+        }),
+        _tenant_id: tenantId,
+        _idempotency_key: `meta-ai-${insertedMsg.id}`,
+      });
+    } catch (e) {
+      console.error("[webhook-meta] enqueue process_uazapi_message failed", e);
+    }
+  }
+
+  // 8) Enqueue AI Pipeline stage classification (debounced 2min per conversation)
   try {
     const window = Math.floor(Date.now() / 120000);
     await supabase.rpc("enqueue_job", {
