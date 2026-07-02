@@ -2599,21 +2599,38 @@ export type Database = {
       is_member_of_tenant: { Args: { _tenant_id: string }; Returns: boolean }
       is_saas_admin: { Args: never; Returns: boolean }
       normalize_brazil_phone: { Args: { input: string }; Returns: string }
-      pipeline_stage_aggregates: {
-        Args: {
-          _assignee?: string
-          _pipeline_id: string
-          _priority?: string
-          _tag?: string
-          _value_max?: number
-          _value_min?: number
-        }
-        Returns: {
-          cnt: number
-          stage_id: string
-          total: number
-        }[]
-      }
+      pipeline_stage_aggregates:
+        | {
+            Args: {
+              _assignee?: string
+              _pipeline_id: string
+              _priority?: string
+              _tag?: string
+              _value_max?: number
+              _value_min?: number
+            }
+            Returns: {
+              cnt: number
+              stage_id: string
+              total: number
+            }[]
+          }
+        | {
+            Args: {
+              _assignee?: string
+              _pipeline_id: string
+              _priority?: string
+              _tag?: string
+              _unassigned?: boolean
+              _value_max?: number
+              _value_min?: number
+            }
+            Returns: {
+              cnt: number
+              stage_id: string
+              total: number
+            }[]
+          }
       reap_stuck_sending: { Args: { _campaign_id: string }; Returns: undefined }
       recompute_campaign_counters: {
         Args: { _campaign_id: string }
@@ -2673,52 +2690,104 @@ export type Database = {
               similarity: number
             }[]
           }
-      search_pipeline_opportunities: {
-        Args: {
-          _assignee?: string
-          _limit?: number
-          _pipeline_id: string
-          _priority?: string
-          _tag?: string
-          _term?: string
-          _value_max?: number
-          _value_min?: number
-        }
-        Returns: {
-          assigned_to: string | null
-          company_id: string | null
-          contact_id: string | null
-          conversation_state: Json | null
-          created_at: string
-          ctwa_clid: string | null
-          custom_fields: Json | null
-          expected_close_date: string | null
-          id: string
-          loss_reason: string | null
-          next_action: string | null
-          next_action_date: string | null
-          pipeline_id: string
-          position: number | null
-          priority: Database["public"]["Enums"]["opportunity_priority"] | null
-          qualification_data: Json | null
-          source: string | null
-          stage_id: string
-          status: Database["public"]["Enums"]["opportunity_status"]
-          tenant_id: string
-          title: string
-          updated_at: string
-          utm_campaign: string | null
-          utm_medium: string | null
-          utm_source: string | null
-          value: number | null
-        }[]
-        SetofOptions: {
-          from: "*"
-          to: "opportunities"
-          isOneToOne: false
-          isSetofReturn: true
-        }
-      }
+      search_pipeline_opportunities:
+        | {
+            Args: {
+              _assignee?: string
+              _limit?: number
+              _pipeline_id: string
+              _priority?: string
+              _tag?: string
+              _term?: string
+              _value_max?: number
+              _value_min?: number
+            }
+            Returns: {
+              assigned_to: string | null
+              company_id: string | null
+              contact_id: string | null
+              conversation_state: Json | null
+              created_at: string
+              ctwa_clid: string | null
+              custom_fields: Json | null
+              expected_close_date: string | null
+              id: string
+              loss_reason: string | null
+              next_action: string | null
+              next_action_date: string | null
+              pipeline_id: string
+              position: number | null
+              priority:
+                | Database["public"]["Enums"]["opportunity_priority"]
+                | null
+              qualification_data: Json | null
+              source: string | null
+              stage_id: string
+              status: Database["public"]["Enums"]["opportunity_status"]
+              tenant_id: string
+              title: string
+              updated_at: string
+              utm_campaign: string | null
+              utm_medium: string | null
+              utm_source: string | null
+              value: number | null
+            }[]
+            SetofOptions: {
+              from: "*"
+              to: "opportunities"
+              isOneToOne: false
+              isSetofReturn: true
+            }
+          }
+        | {
+            Args: {
+              _assignee?: string
+              _limit?: number
+              _pipeline_id: string
+              _priority?: string
+              _tag?: string
+              _term?: string
+              _unassigned?: boolean
+              _value_max?: number
+              _value_min?: number
+            }
+            Returns: {
+              assigned_to: string | null
+              company_id: string | null
+              contact_id: string | null
+              conversation_state: Json | null
+              created_at: string
+              ctwa_clid: string | null
+              custom_fields: Json | null
+              expected_close_date: string | null
+              id: string
+              loss_reason: string | null
+              next_action: string | null
+              next_action_date: string | null
+              pipeline_id: string
+              position: number | null
+              priority:
+                | Database["public"]["Enums"]["opportunity_priority"]
+                | null
+              qualification_data: Json | null
+              source: string | null
+              stage_id: string
+              status: Database["public"]["Enums"]["opportunity_status"]
+              tenant_id: string
+              title: string
+              updated_at: string
+              utm_campaign: string | null
+              utm_medium: string | null
+              utm_source: string | null
+              value: number | null
+            }[]
+            SetofOptions: {
+              from: "*"
+              to: "opportunities"
+              isOneToOne: false
+              isSetofReturn: true
+            }
+          }
     }
     Enums: {
       activity_type:
