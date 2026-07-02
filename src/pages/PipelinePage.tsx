@@ -1,13 +1,13 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Pipeline, Stage, Opportunity, Contact, Conversation, Activity, TenantMembership, Profile } from '@/types/crm';
+import type { Pipeline, Stage, Opportunity, Contact, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban, CheckSquare, MessageSquare, Target, Search } from 'lucide-react';
+import { Plus, User, DollarSign, Clock, GripVertical, MessageCircle, AlertTriangle, CalendarClock, Cake, Filter, X, Flame, Trash2, Kanban, CheckSquare, MessageSquare, Search } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
@@ -38,42 +38,37 @@ interface CustomFieldDef {
 }
 
 interface Filters {
-  assignee: string; // 'all' | membership_id
-  priority: string; // 'all' | priority value
-  tag: string;      // '' | tag name
+  assignee: string; // 'all' | 'unassigned' | membership_id
+  priority: string;
+  tag: string;
   valueMin: string;
   valueMax: string;
 }
 
 const emptyFilters: Filters = { assignee: 'all', priority: 'all', tag: '', valueMin: '', valueMax: '' };
 
+const PAGE_SIZE = 50;
+const SEARCH_LIMIT = 300;
+const SELECT_COLS = 'id,tenant_id,title,value,priority,status,stage_id,pipeline_id,assigned_to,contact_id,updated_at,created_at,position,custom_fields, contact:contacts(id,name,phone,tags,birth_date)';
+
 // ─── Engagement Score ───
 function calcEngagementScore(opp: Opportunity & { contact?: Contact }, msgCounts: Record<string, number>): number {
   let score = 0;
   const contactId = opp.contact_id;
   const msgs = contactId ? (msgCounts[contactId] || 0) : 0;
-
-  // Message volume (max 30 pts)
   score += Math.min(msgs * 3, 30);
-
-  // Recency (max 30 pts) — how recently updated
   const daysSinceUpdate = differenceInDays(new Date(), new Date(opp.updated_at));
   if (daysSinceUpdate <= 1) score += 30;
   else if (daysSinceUpdate <= 3) score += 20;
   else if (daysSinceUpdate <= 7) score += 10;
   else if (daysSinceUpdate <= 14) score += 5;
-
-  // Value (max 20 pts)
   const val = Number(opp.value || 0);
   if (val >= 10000) score += 20;
   else if (val >= 5000) score += 15;
   else if (val >= 1000) score += 10;
   else if (val > 0) score += 5;
-
-  // Priority (max 20 pts)
   const pMap: Record<string, number> = { urgent: 20, high: 15, medium: 10, low: 5 };
   score += pMap[opp.priority] || 0;
-
   return Math.min(score, 100);
 }
 
@@ -88,9 +83,10 @@ function EngagementBadge({ score }: { score: number }) {
 }
 
 // ─── Droppable Column ───
-function DroppableColumn({ stage, children, count, total, onAdd }: {
+function DroppableColumn({ stage, children, count, total, onAdd, matchCount }: {
   stage: Stage; children: React.ReactNode; count: number; total: number;
   onAdd: () => void;
+  matchCount?: number | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `stage-${stage.id}` });
   return (
@@ -101,6 +97,11 @@ function DroppableColumn({ stage, children, count, total, onAdd }: {
           <div className="h-3 w-3 rounded-full shadow-sm" style={{ backgroundColor: stage.color }} />
           <span className="text-sm font-semibold text-foreground">{stage.name}</span>
           <Badge variant="secondary" className="text-[10px] h-5 px-1.5 rounded-full bg-muted">{count}</Badge>
+          {matchCount != null && (
+            <Badge variant="default" className="text-[10px] h-5 px-1.5 rounded-full" title="Resultados na busca">
+              {matchCount}
+            </Badge>
+          )}
         </div>
         <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground" onClick={onAdd}>
           <Plus className="h-4 w-4" />
@@ -225,7 +226,6 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
             ))}
           </div>
         )}
-        {/* Custom fields */}
         {customFieldDefs.length > 0 && (opp as any).custom_fields && Object.keys((opp as any).custom_fields).length > 0 && (
           <div className="flex flex-wrap gap-1 pl-5">
             {customFieldDefs.slice(0, 3).map(fd => {
@@ -320,18 +320,32 @@ function FilterBar({ filters, onChange, members, allTags }: {
   );
 }
 
+type Opp = Opportunity & { contact?: Contact };
+
 // ─── Main Component ───
 export default function PipelinePage() {
   const { tenant, role } = useAuth();
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState<string>('');
   const [stages, setStages] = useState<Stage[]>([]);
-  const [opportunities, setOpportunities] = useState<(Opportunity & { contact?: Contact })[]>([]);
+
+  // Paginated data per stage (navigation mode)
+  const [oppsByStageState, setOppsByStageState] = useState<Record<string, Opp[]>>({});
+  const [pageByStage, setPageByStage] = useState<Record<string, number>>({});
+  const [loadingByStage, setLoadingByStage] = useState<Record<string, boolean>>({});
+
+  // Real aggregates from RPC (source of truth for column headers + global totals)
+  const [aggregatesByStage, setAggregatesByStage] = useState<Record<string, { count: number; total: number }>>({});
+
+  // Search results (search mode)
+  const [searchResults, setSearchResults] = useState<Opp[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
   const [selectedOpp, setSelectedOpp] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [createStageId, setCreateStageId] = useState<string>('');
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [chatOpp, setChatOpp] = useState<(Opportunity & { contact?: Contact }) | null>(null);
+  const [chatOpp, setChatOpp] = useState<Opp | null>(null);
   const [chatConvId, setChatConvId] = useState<string | null>(null);
   const [chatConvStatus, setChatConvStatus] = useState<string>('open');
   const [unreadByContact, setUnreadByContact] = useState<Record<string, number>>({});
@@ -354,39 +368,56 @@ export default function PipelinePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Collect all unique tags for filter
+  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
+  const isSearchMode = search.trim().length > 0 || hasActiveFilters;
+
+  // Flat view — used for engagement/activities/drag lookups
+  const allLoadedOpps = useMemo<Opp[]>(() => {
+    if (isSearchMode) return searchResults;
+    return Object.values(oppsByStageState).flat();
+  }, [isSearchMode, searchResults, oppsByStageState]);
+
+  // Group search results by stage
+  const searchByStage = useMemo(() => {
+    const map: Record<string, Opp[]> = {};
+    for (const o of searchResults) {
+      (map[o.stage_id] ||= []).push(o);
+    }
+    return map;
+  }, [searchResults]);
+
+  const oppsByStage = useCallback((stageId: string): Opp[] => {
+    const src = isSearchMode ? (searchByStage[stageId] || []) : (oppsByStageState[stageId] || []);
+    return [...src].sort((a, b) => {
+      const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
+      const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
+      if (posA !== posB) return posA - posB;
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
+  }, [isSearchMode, searchByStage, oppsByStageState]);
+
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    for (const o of opportunities) {
-      if (o.contact?.tags) o.contact.tags.forEach(t => set.add(t));
-    }
+    for (const o of allLoadedOpps) if (o.contact?.tags) o.contact.tags.forEach(t => set.add(t));
     return [...set].sort();
-  }, [opportunities]);
+  }, [allLoadedOpps]);
 
-  // Apply filters
-  const filteredOpportunities = useMemo(() => {
-    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
-    const termRaw = search.trim();
-    const term = norm(termRaw);
-    const termDigits = termRaw.replace(/\D/g, '');
-    return opportunities.filter(o => {
-      if (filters.assignee === 'unassigned' && o.assigned_to) return false;
-      if (filters.assignee !== 'all' && filters.assignee !== 'unassigned' && o.assigned_to !== filters.assignee) return false;
-      if (filters.priority !== 'all' && o.priority !== filters.priority) return false;
-      if (filters.tag && (!o.contact?.tags || !o.contact.tags.includes(filters.tag))) return false;
-      if (filters.valueMin && Number(o.value || 0) < Number(filters.valueMin)) return false;
-      if (filters.valueMax && Number(o.value || 0) > Number(filters.valueMax)) return false;
-      if (term) {
-        const title = norm(o.title || '');
-        const name = norm(o.contact?.name || '');
-        const phoneDigits = (o.contact?.phone || '').replace(/\D/g, '');
-        const matchText = title.includes(term) || name.includes(term);
-        const matchPhone = termDigits.length > 0 && phoneDigits.includes(termDigits);
-        if (!matchText && !matchPhone) return false;
-      }
-      return true;
-    });
-  }, [opportunities, filters, search]);
+  // Build RPC filter args
+  const filterArgs = useMemo(() => ({
+    _assignee: filters.assignee !== 'all' && filters.assignee !== 'unassigned' ? filters.assignee : null,
+    _unassigned: filters.assignee === 'unassigned',
+    _priority: filters.priority !== 'all' ? filters.priority : null,
+    _tag: filters.tag || null,
+    _value_min: filters.valueMin ? Number(filters.valueMin) : null,
+    _value_max: filters.valueMax ? Number(filters.valueMax) : null,
+  }), [filters]);
+
+  // Global totals from aggregates
+  const globalAggregate = useMemo(() => {
+    let count = 0, total = 0;
+    for (const a of Object.values(aggregatesByStage)) { count += a.count; total += a.total; }
+    return { count, total };
+  }, [aggregatesByStage]);
 
   const resetUnreadForContact = useCallback(async (contactId: string | null) => {
     if (!tenant || !contactId) return;
@@ -407,7 +438,7 @@ export default function PipelinePage() {
     });
   }, [tenant]);
 
-  const openChat = async (opp: Opportunity & { contact?: Contact }) => {
+  const openChat = async (opp: Opp) => {
     if (!tenant || !opp.contact_id) return;
     const { data: convs } = await supabase.from('conversations')
       .select('id, status, channel')
@@ -457,85 +488,168 @@ export default function PipelinePage() {
           setSelectedPipeline(def.id);
         }
       });
-    // Load members for filter
     supabase.from('tenant_memberships').select('*, profile:profiles(*)').eq('tenant_id', tenant.id).eq('is_active', true)
       .then(({ data }) => {
         setMembers((data as unknown as (TenantMembership & { profile?: Profile })[]) ?? []);
       });
   }, [tenant]);
 
-  const loadOpps = useCallback(() => {
-    if (!selectedPipeline || !tenant) return;
-    supabase.from('opportunities').select('*, contact:contacts(*)').eq('pipeline_id', selectedPipeline)
+  // Update last-customer-interaction map from loaded contacts (best-effort, scoped to visible cards)
+  const refreshLastInteraction = useCallback(async (opps: Opp[]) => {
+    if (!tenant || opps.length === 0) return;
+    const contactIds = [...new Set(opps.map(o => o.contact_id).filter(Boolean) as string[])];
+    if (contactIds.length === 0) return;
+    const { data: convs } = await supabase.from('conversations')
+      .select('contact_id, last_customer_message_at')
+      .eq('tenant_id', tenant.id)
+      .in('contact_id', contactIds)
+      .not('last_customer_message_at', 'is', null);
+    const map: Record<string, string> = {};
+    for (const c of (convs ?? []) as { contact_id: string; last_customer_message_at: string }[]) {
+      if (!c.contact_id || !c.last_customer_message_at) continue;
+      const prev = map[c.contact_id];
+      if (!prev || new Date(c.last_customer_message_at) > new Date(prev)) {
+        map[c.contact_id] = c.last_customer_message_at;
+      }
+    }
+    setLastContactInteractionByContact(prev => ({ ...prev, ...map }));
+  }, [tenant]);
+
+  const loadStageAggregates = useCallback(async () => {
+    if (!selectedPipeline) return;
+    const { data, error } = await supabase.rpc('pipeline_stage_aggregates' as any, {
+      _pipeline_id: selectedPipeline,
+      ...filterArgs,
+    });
+    if (error) { console.error('[pipeline_stage_aggregates]', error); return; }
+    const map: Record<string, { count: number; total: number }> = {};
+    for (const r of ((data as any[]) || [])) {
+      map[r.stage_id] = { count: Number(r.cnt || 0), total: Number(r.total || 0) };
+    }
+    setAggregatesByStage(map);
+  }, [selectedPipeline, filterArgs]);
+
+  const mergeStageRows = (existing: Opp[], rows: Opp[]): Opp[] => {
+    const byId: Record<string, Opp> = {};
+    for (const o of existing) byId[o.id] = o;
+    for (const o of rows) byId[o.id] = o;
+    return Object.values(byId);
+  };
+
+  const fetchStagePage = useCallback(async (stageId: string, page: number): Promise<Opp[]> => {
+    if (!selectedPipeline) return [];
+    const { data, error } = await supabase.from('opportunities')
+      .select(SELECT_COLS)
+      .eq('pipeline_id', selectedPipeline)
+      .eq('stage_id', stageId)
       .order('position', { ascending: true })
       .order('updated_at', { ascending: false })
-      .then(async ({ data }) => {
-        const opps = (data as unknown as (Opportunity & { contact?: Contact })[]) ?? [];
-        setOpportunities(opps);
-        const contactIds = [...new Set(opps.map(o => o.contact_id).filter(Boolean) as string[])];
-        if (contactIds.length === 0) { setLastContactInteractionByContact({}); return; }
-        const { data: convs } = await supabase.from('conversations')
-          .select('contact_id, last_customer_message_at')
-          .eq('tenant_id', tenant.id)
-          .in('contact_id', contactIds)
-          .not('last_customer_message_at', 'is', null);
-        const map: Record<string, string> = {};
-        for (const c of (convs ?? []) as { contact_id: string; last_customer_message_at: string }[]) {
-          if (!c.contact_id || !c.last_customer_message_at) continue;
-          const prev = map[c.contact_id];
-          if (!prev || new Date(c.last_customer_message_at) > new Date(prev)) {
-            map[c.contact_id] = c.last_customer_message_at;
-          }
-        }
-        setLastContactInteractionByContact(map);
-      });
-  }, [selectedPipeline, tenant]);
+      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+    if (error) { console.error('[fetchStagePage]', error); return []; }
+    return (data as unknown as Opp[]) || [];
+  }, [selectedPipeline]);
 
-  // Load message counts per contact for engagement score
+  const loadStagePage = useCallback(async (stageId: string, page: number, append: boolean) => {
+    setLoadingByStage(prev => ({ ...prev, [stageId]: true }));
+    const rows = await fetchStagePage(stageId, page);
+    setOppsByStageState(prev => {
+      const next = append ? mergeStageRows(prev[stageId] || [], rows) : rows;
+      return { ...prev, [stageId]: next };
+    });
+    setPageByStage(prev => ({ ...prev, [stageId]: page }));
+    setLoadingByStage(prev => ({ ...prev, [stageId]: false }));
+    refreshLastInteraction(rows);
+  }, [fetchStagePage, refreshLastInteraction]);
+
+  const loadAllStagesFirstPage = useCallback(async () => {
+    if (stages.length === 0) return;
+    const results = await Promise.all(stages.map(s => fetchStagePage(s.id, 0).then(rows => [s.id, rows] as const)));
+    const map: Record<string, Opp[]> = {};
+    const pages: Record<string, number> = {};
+    const allRows: Opp[] = [];
+    for (const [id, rows] of results) {
+      map[id] = rows;
+      pages[id] = 0;
+      allRows.push(...rows);
+    }
+    setOppsByStageState(map);
+    setPageByStage(pages);
+    refreshLastInteraction(allRows);
+  }, [stages, fetchStagePage, refreshLastInteraction]);
+
+  // Refetch page 0 for each already-visible stage; merge to preserve loaded extras
+  const refreshLoadedStages = useCallback(async () => {
+    if (stages.length === 0) return;
+    const targets = stages.filter(s => (oppsByStageState[s.id]?.length ?? 0) > 0);
+    if (targets.length === 0) return;
+    await Promise.all(targets.map(async s => {
+      const rows = await fetchStagePage(s.id, 0);
+      setOppsByStageState(prev => ({ ...prev, [s.id]: mergeStageRows(prev[s.id] || [], rows) }));
+    }));
+  }, [stages, oppsByStageState, fetchStagePage]);
+
+  const loadSearchResults = useCallback(async () => {
+    if (!selectedPipeline) return;
+    setSearchLoading(true);
+    const term = search.trim();
+    const { data, error } = await supabase.rpc('search_pipeline_opportunities' as any, {
+      _pipeline_id: selectedPipeline,
+      _term: term || null,
+      ...filterArgs,
+      _limit: SEARCH_LIMIT,
+    });
+    if (error) { console.error('[search_pipeline_opportunities]', error); setSearchLoading(false); return; }
+    const rows = ((data as any[]) || []);
+    // Hydrate contacts
+    const contactIds = [...new Set(rows.map(r => r.contact_id).filter(Boolean))] as string[];
+    let contactsMap: Record<string, Contact> = {};
+    if (contactIds.length > 0) {
+      const { data: contacts } = await supabase.from('contacts')
+        .select('id,name,phone,tags,birth_date')
+        .in('id', contactIds);
+      for (const c of ((contacts as unknown as Contact[]) || [])) contactsMap[c.id] = c;
+    }
+    const hydrated = rows.map(r => ({ ...r, contact: r.contact_id ? contactsMap[r.contact_id] : undefined })) as Opp[];
+    setSearchResults(hydrated);
+    setSearchLoading(false);
+    refreshLastInteraction(hydrated);
+  }, [selectedPipeline, search, filterArgs, refreshLastInteraction]);
+
+  // Debounced search
+  useEffect(() => {
+    if (!isSearchMode) { setSearchResults([]); return; }
+    const t = setTimeout(() => { loadSearchResults(); }, 250);
+    return () => clearTimeout(t);
+  }, [isSearchMode, loadSearchResults]);
+
+  // Aggregates reload whenever pipeline or filters change
+  useEffect(() => { loadStageAggregates(); }, [loadStageAggregates]);
+
+  // Load message counts (best-effort — engagement score)
   const loadMsgCounts = useCallback(() => {
     if (!tenant) return;
     supabase.from('conversations')
-      .select('contact_id')
+      .select('id, contact_id')
       .eq('tenant_id', tenant.id)
       .not('contact_id', 'is', null)
-      .then(async ({ data: convs }) => {
-        if (!convs || convs.length === 0) return;
-        // Get unique contact_ids that have opportunities
-        const contactIds = [...new Set(convs.map(c => c.contact_id).filter(Boolean) as string[])];
-        // Count messages per conversation, then aggregate per contact
-        const counts: Record<string, number> = {};
-        // Use a simpler approach: count recent messages (last 30 days) grouped by contact
+      .then(async ({ data: convData }) => {
+        if (!convData || convData.length === 0) { setMsgCountsByContact({}); return; }
+        const convMap: Record<string, string> = {};
+        for (const c of convData) { if (c.contact_id) convMap[c.id] = c.contact_id; }
         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const { data: msgs } = await supabase.from('messages')
           .select('conversation_id')
           .eq('tenant_id', tenant.id)
           .gte('created_at', thirtyDaysAgo);
-        
-        if (msgs) {
-          // Map conversation to contact
-          const convToContact: Record<string, string> = {};
-          for (const c of convs) {
-            if (c.contact_id) convToContact[c.contact_id] = c.contact_id;
-          }
-          // We need conv_id -> contact_id mapping
-          const { data: convData } = await supabase.from('conversations')
-            .select('id, contact_id')
-            .eq('tenant_id', tenant.id)
-            .not('contact_id', 'is', null);
-          const convMap: Record<string, string> = {};
-          for (const c of (convData ?? [])) {
-            if (c.contact_id) convMap[c.id] = c.contact_id;
-          }
-          for (const m of msgs) {
-            const cid = convMap[m.conversation_id];
-            if (cid) counts[cid] = (counts[cid] || 0) + 1;
-          }
+        const counts: Record<string, number> = {};
+        for (const m of (msgs ?? [])) {
+          const cid = convMap[m.conversation_id];
+          if (cid) counts[cid] = (counts[cid] || 0) + 1;
         }
         setMsgCountsByContact(counts);
       });
   }, [tenant]);
 
-  // Load pending activities for all opportunities in the pipeline
   const loadActivities = useCallback(() => {
     if (!selectedPipeline || !tenant) return;
     supabase.from('activities')
@@ -557,35 +671,36 @@ export default function PipelinePage() {
       });
   }, [selectedPipeline, tenant]);
 
+  // Load stages when pipeline changes
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
     supabase.from('stages').select('*').eq('pipeline_id', selectedPipeline).order('position')
       .then(({ data }) => setStages((data as unknown as Stage[]) ?? []));
-    loadOpps();
+    setOppsByStageState({});
+    setPageByStage({});
     loadActivities();
     loadMsgCounts();
-  }, [selectedPipeline, tenant, loadOpps, loadActivities, loadMsgCounts]);
+  }, [selectedPipeline, tenant, loadActivities, loadMsgCounts]);
 
-  // Load unread / pending-response signal per contact
+  // Load first page for all stages once stages arrive (navigation mode)
+  useEffect(() => {
+    if (isSearchMode) return;
+    if (stages.length === 0) return;
+    loadAllStagesFirstPage();
+  }, [stages, isSearchMode, loadAllStagesFirstPage]);
+
   const loadUnreads = useCallback(async () => {
     if (!tenant) return;
-
     const { data: conversations } = await supabase.from('conversations')
       .select('id, contact_id, unread_count, status')
       .eq('tenant_id', tenant.id)
       .in('status', ['open', 'waiting_customer', 'waiting_agent']);
 
     const convs = (conversations ?? []) as {
-      id: string;
-      contact_id: string | null;
-      unread_count: number | null;
-      status: string;
+      id: string; contact_id: string | null; unread_count: number | null; status: string;
     }[];
 
-    if (convs.length === 0) {
-      setUnreadByContact({});
-      return;
-    }
+    if (convs.length === 0) { setUnreadByContact({}); return; }
 
     const convIds = convs.map(c => c.id);
     const { data: messages } = await supabase.from('messages')
@@ -604,24 +719,22 @@ export default function PipelinePage() {
     const map: Record<string, number> = {};
     for (const c of convs) {
       if (!c.contact_id) continue;
-
       const lastDirection = lastDirectionByConversation[c.id];
       const isLastInbound = lastDirection === 'inbound';
       if (!isLastInbound) continue;
-
       const unread = c.unread_count || 0;
       const pendingByStatus = c.status === 'waiting_agent';
       const signal = pendingByStatus ? Math.max(unread, 1) : unread;
-
-      if (signal > 0) {
-        map[c.contact_id] = (map[c.contact_id] || 0) + signal;
-      }
+      if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
     }
-
     setUnreadByContact(map);
   }, [tenant]);
 
   useEffect(() => { loadUnreads(); }, [loadUnreads]);
+
+  // Realtime + polling. Refresh only what's needed.
+  const isSearchModeRef = useRef(isSearchMode);
+  useEffect(() => { isSearchModeRef.current = isSearchMode; }, [isSearchMode]);
 
   useEffect(() => {
     if (!selectedPipeline || !tenant) return;
@@ -630,47 +743,32 @@ export default function PipelinePage() {
     let pollingTimer: ReturnType<typeof setInterval> | null = null;
 
     const refreshAll = () => {
-      loadOpps();
+      loadStageAggregates();
       loadUnreads();
+      if (isSearchModeRef.current) loadSearchResults();
+      else refreshLoadedStages();
     };
 
     const scheduleRefresh = (delay = 700) => {
       if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
-      realtimeRefreshTimer = setTimeout(() => {
-        refreshAll();
-      }, delay);
+      realtimeRefreshTimer = setTimeout(() => { refreshAll(); }, delay);
     };
 
-    // Fallback contínuo para não depender de F5 se o websocket oscilar
     pollingTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        refreshAll();
-      }
+      if (document.visibilityState === 'visible') refreshAll();
     }, 2000);
 
     const handleForegroundRefresh = () => {
-      if (document.visibilityState === 'visible') {
-        scheduleRefresh(120);
-      }
+      if (document.visibilityState === 'visible') scheduleRefresh(120);
     };
 
     const channel = supabase
       .channel(`pipeline-updates-${tenant.id}-${selectedPipeline}-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => {
-        scheduleRefresh(120);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        scheduleRefresh(120);
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        scheduleRefresh(120);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => scheduleRefresh(120))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(120))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(120))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          scheduleRefresh(80);
-        }
-      });
+      .subscribe((status) => { if (status === 'SUBSCRIBED') scheduleRefresh(80); });
 
     window.addEventListener('focus', handleForegroundRefresh);
     document.addEventListener('visibilitychange', handleForegroundRefresh);
@@ -682,16 +780,48 @@ export default function PipelinePage() {
       document.removeEventListener('visibilitychange', handleForegroundRefresh);
       supabase.removeChannel(channel);
     };
-  }, [selectedPipeline, tenant, loadOpps, loadUnreads, loadActivities]);
+  }, [selectedPipeline, tenant, loadStageAggregates, loadUnreads, loadSearchResults, refreshLoadedStages, loadActivities]);
+
+  const touchOppUpdatedAt = useCallback((oppId: string) => {
+    const iso = new Date().toISOString();
+    setOppsByStageState(prev => {
+      const next: Record<string, Opp[]> = {};
+      for (const k of Object.keys(prev)) next[k] = prev[k].map(o => o.id === oppId ? { ...o, updated_at: iso } : o);
+      return next;
+    });
+    setSearchResults(prev => prev.map(o => o.id === oppId ? { ...o, updated_at: iso } : o));
+  }, []);
 
   const moveOpportunity = async (oppId: string, newStageId: string) => {
-    const opp = opportunities.find(o => o.id === oppId);
+    const opp = allLoadedOpps.find(o => o.id === oppId);
     if (!opp || !tenant) return;
     const fromStageId = opp.stage_id;
+    if (fromStageId === newStageId) return;
     const stage = stages.find(s => s.id === newStageId);
     const newStatus = stage?.is_won ? 'won' : stage?.is_lost ? 'lost' : 'open';
     const nowIso = new Date().toISOString();
-    setOpportunities(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any, position: 0, updated_at: nowIso } : o));
+    const value = Number(opp.value || 0);
+
+    // Optimistic bucket transfer
+    setOppsByStageState(prev => {
+      const from = (prev[fromStageId] || []).filter(o => o.id !== oppId);
+      const moved: Opp = { ...opp, stage_id: newStageId, status: newStatus as any, position: 0, updated_at: nowIso };
+      const to = [moved, ...(prev[newStageId] || []).filter(o => o.id !== oppId)];
+      return { ...prev, [fromStageId]: from, [newStageId]: to };
+    });
+    setSearchResults(prev => prev.map(o => o.id === oppId ? { ...o, stage_id: newStageId, status: newStatus as any, position: 0, updated_at: nowIso } : o));
+
+    // Optimistic aggregate adjust
+    setAggregatesByStage(prev => {
+      const from = prev[fromStageId] || { count: 0, total: 0 };
+      const to = prev[newStageId] || { count: 0, total: 0 };
+      return {
+        ...prev,
+        [fromStageId]: { count: Math.max(0, from.count - 1), total: Math.max(0, from.total - value) },
+        [newStageId]: { count: to.count + 1, total: to.total + value },
+      };
+    });
+
     await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus, position: 0, updated_at: nowIso }).eq('id', oppId);
 
     await supabase.rpc('enqueue_job', {
@@ -708,6 +838,9 @@ export default function PipelinePage() {
       }),
       _tenant_id: tenant.id,
     });
+
+    // Reconcile aggregates from server after the write settles
+    loadStageAggregates();
   };
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string);
@@ -718,10 +851,10 @@ export default function PipelinePage() {
     if (!over) return;
 
     const overId = over.id as string;
-    const activeOpp = opportunities.find(o => o.id === active.id);
+    const activeOpp = allLoadedOpps.find(o => o.id === active.id);
     if (!activeOpp) return;
 
-    const overOpp = overId.startsWith('stage-') ? null : opportunities.find(o => o.id === overId);
+    const overOpp = overId.startsWith('stage-') ? null : allLoadedOpps.find(o => o.id === overId);
     const targetStageId = overId.startsWith('stage-')
       ? overId.replace('stage-', '')
       : overOpp?.stage_id;
@@ -747,10 +880,15 @@ export default function PipelinePage() {
     const updates = reordered.map((o, index) => ({ id: o.id, position: index + 1 }));
     const positionById = Object.fromEntries(updates.map(u => [u.id, u.position]));
 
-    setOpportunities(prev => prev.map(o => (
-      positionById[o.id] !== undefined
-        ? { ...o, position: positionById[o.id] as number }
-        : o
+    // Update local state in the correct bucket
+    setOppsByStageState(prev => ({
+      ...prev,
+      [activeOpp.stage_id]: (prev[activeOpp.stage_id] || []).map(o => (
+        positionById[o.id] !== undefined ? { ...o, position: positionById[o.id] as number } : o
+      )),
+    }));
+    setSearchResults(prev => prev.map(o => (
+      positionById[o.id] !== undefined ? { ...o, position: positionById[o.id] as number } : o
     )));
 
     await Promise.all(
@@ -758,12 +896,12 @@ export default function PipelinePage() {
         supabase.from('opportunities').update({ position: u.position }).eq('id', u.id)
       )
     );
-
-    loadOpps();
   };
 
   const { getOpportunityLinked, deleteOpportunityCascade, loading: cascadeLoading } = useCascadeDelete();
   const [cascadeData, setCascadeData] = useState<OpportunityLinked | null>(null);
+
+  const canDeleteOpportunity = role !== 'readonly' && role !== null;
 
   const handleDeleteOpportunity = async (oppId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -776,20 +914,8 @@ export default function PipelinePage() {
     setCascadeData(linked);
   };
 
-  const oppsByStage = (stageId: string) => filteredOpportunities
-    .filter(o => o.stage_id === stageId)
-    .sort((a, b) => {
-      const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
-      const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
-      if (posA !== posB) return posA - posB;
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-    });
-  const stageTotal = (stageId: string) => oppsByStage(stageId).reduce((s, o) => s + Number(o.value || 0), 0);
-
-  // Determine the alert status for each card
   const getOppAlertStatus = (opp: Opportunity): CardAlertStatus => {
     if (opp.status !== 'open') return 'normal';
-
     const pendingActivities = activitiesByOpp[opp.id];
     if (pendingActivities && pendingActivities.length > 0) {
       const now = Date.now();
@@ -805,12 +931,10 @@ export default function PipelinePage() {
       if (hasSoon) return 'soon';
       return 'scheduled';
     }
-
     const stage = stages.find(s => s.id === opp.stage_id);
     if (!stage || !stage.inactivity_minutes || stage.inactivity_minutes <= 0) return 'normal';
     const threshold = Date.now() - stage.inactivity_minutes * 60 * 1000;
     if (new Date(opp.updated_at).getTime() < threshold) return 'inactive';
-
     return 'normal';
   };
 
@@ -842,17 +966,20 @@ export default function PipelinePage() {
       setPipelines([p]);
       setSelectedPipeline(p.id);
       toast.success('Pipeline criado com sucesso!');
-    } catch (e) {
+    } catch {
       toast.error('Erro inesperado ao criar pipeline');
     } finally {
       setCreatingPipeline(false);
     }
   };
 
-  const activeOpp = activeId ? opportunities.find(o => o.id === activeId) : null;
-  const canDeleteOpportunity = role !== 'readonly' && role !== null;
+  const refreshAfterMutation = useCallback(() => {
+    loadStageAggregates();
+    if (isSearchMode) loadSearchResults();
+    else loadAllStagesFirstPage();
+  }, [loadStageAggregates, isSearchMode, loadSearchResults, loadAllStagesFirstPage]);
 
-  const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '' || search.trim() !== '';
+  const activeOpp = activeId ? allLoadedOpps.find(o => o.id === activeId) : null;
 
   // Empty state: no pipeline exists
   if (pipelines.length === 0 && !selectedPipeline) {
@@ -896,9 +1023,16 @@ export default function PipelinePage() {
           <FilterBar filters={filters} onChange={setFilters} members={members} allTags={allTags} />
         </div>
         <div className="text-sm text-muted-foreground">
-          {hasActiveFilters && <span className="text-primary font-medium mr-2">{filteredOpportunities.length} de {opportunities.length}</span>}
-          {!hasActiveFilters && <>{opportunities.length} oportunidade{opportunities.length !== 1 ? 's' : ''} · </>}
-          R$ {filteredOpportunities.reduce((s, o) => s + (o.value || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          {isSearchMode ? (
+            <span className="text-primary font-medium">
+              {searchLoading ? 'Buscando…' : `Busca — ${searchResults.length} resultado${searchResults.length !== 1 ? 's' : ''}${searchResults.length >= SEARCH_LIMIT ? ' (limite 300, refine)' : ''}`}
+            </span>
+          ) : (
+            <>
+              {globalAggregate.count} oportunidade{globalAggregate.count !== 1 ? 's' : ''} ·{' '}
+              R$ {globalAggregate.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </>
+          )}
         </div>
       </header>
 
@@ -906,24 +1040,44 @@ export default function PipelinePage() {
       <div className="flex-1 overflow-x-auto p-4 pt-0">
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="flex gap-4 h-full min-w-max">
-            {stages.map(stage => (
-              <DroppableColumn key={stage.id} stage={stage} count={oppsByStage(stage.id).length}
-                total={stageTotal(stage.id)} onAdd={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
-                <SortableContext items={oppsByStage(stage.id).map(o => o.id)} strategy={verticalListSortingStrategy}>
-                  {oppsByStage(stage.id).map(opp => (
-                    <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
-                      onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
-                      onDelete={(e) => handleDeleteOpportunity(opp.id, e)}
-                      alertStatus={getOppAlertStatus(opp)}
-                      unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
-                      customFieldDefs={customFieldDefs}
-                      canDelete={canDeleteOpportunity}
-                      lastContactInteractionAt={opp.contact_id ? lastContactInteractionByContact[opp.contact_id] : null}
-                      engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
-                  ))}
-                </SortableContext>
-              </DroppableColumn>
-            ))}
+            {stages.map(stage => {
+              const stageOpps = oppsByStage(stage.id);
+              const agg = aggregatesByStage[stage.id] || { count: 0, total: 0 };
+              const loadedCount = (oppsByStageState[stage.id] || []).length;
+              const showLoadMore = !isSearchMode && loadedCount < agg.count;
+              const remaining = Math.max(0, agg.count - loadedCount);
+              return (
+                <DroppableColumn key={stage.id} stage={stage}
+                  count={agg.count}
+                  total={agg.total}
+                  matchCount={isSearchMode ? stageOpps.length : null}
+                  onAdd={() => { setCreateStageId(stage.id); setShowCreate(true); }}>
+                  <SortableContext items={stageOpps.map(o => o.id)} strategy={verticalListSortingStrategy}>
+                    {stageOpps.map(opp => (
+                      <SortableOppCard key={opp.id} opp={opp} onClick={() => { setSelectedOpp(opp.id); resetUnreadForContact(opp.contact_id); }}
+                        onWhatsApp={(e) => { e.stopPropagation(); openChat(opp); }}
+                        onDelete={(e) => handleDeleteOpportunity(opp.id, e)}
+                        alertStatus={getOppAlertStatus(opp)}
+                        unreadCount={opp.contact_id ? (unreadByContact[opp.contact_id] || 0) : 0}
+                        customFieldDefs={customFieldDefs}
+                        canDelete={canDeleteOpportunity}
+                        lastContactInteractionAt={opp.contact_id ? lastContactInteractionByContact[opp.contact_id] : null}
+                        engagementScore={calcEngagementScore(opp, msgCountsByContact)} />
+                    ))}
+                  </SortableContext>
+                  {showLoadMore && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full h-8 text-[11px] rounded-lg text-muted-foreground hover:text-foreground"
+                      disabled={!!loadingByStage[stage.id]}
+                      onClick={() => loadStagePage(stage.id, (pageByStage[stage.id] ?? 0) + 1, true)}>
+                      {loadingByStage[stage.id] ? 'Carregando…' : `Carregar mais (${remaining})`}
+                    </Button>
+                  )}
+                </DroppableColumn>
+              );
+            })}
           </div>
           <DragOverlay>
             {activeOpp && (
@@ -948,13 +1102,11 @@ export default function PipelinePage() {
       </Sheet>
 
       <CreateOpportunityDialog open={showCreate} onOpenChange={setShowCreate} stageId={createStageId}
-        pipelineId={selectedPipeline} onCreated={loadOpps} />
+        pipelineId={selectedPipeline} onCreated={refreshAfterMutation} />
 
       {/* WhatsApp Chat Dialog */}
       <Dialog open={!!chatOpp} onOpenChange={(open) => { if (!open) {
-        if (chatOpp) {
-          setOpportunities(prev => prev.map(o => o.id === chatOpp.id ? { ...o, updated_at: new Date().toISOString() } : o));
-        }
+        if (chatOpp) touchOppUpdatedAt(chatOpp.id);
         setChatOpp(null); setChatConvId(null);
       } }}>
         <DialogContent className="max-w-2xl h-[80vh] p-0 rounded-2xl overflow-hidden flex flex-col">
@@ -992,8 +1144,13 @@ export default function PipelinePage() {
           const contactId = cascadeData?.contactId || null;
           const success = await deleteOpportunityCascade(oppId, contactId, toDelete);
           if (success) {
-            setOpportunities(prev => prev.filter(o => o.id !== oppId));
-            if (toDelete.includes("contact")) loadOpps();
+            setOppsByStageState(prev => {
+              const next: Record<string, Opp[]> = {};
+              for (const k of Object.keys(prev)) next[k] = prev[k].filter(o => o.id !== oppId);
+              return next;
+            });
+            setSearchResults(prev => prev.filter(o => o.id !== oppId));
+            refreshAfterMutation();
           }
           setDeleteOppId(null);
           setCascadeData(null);
