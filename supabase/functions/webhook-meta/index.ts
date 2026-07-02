@@ -323,7 +323,7 @@ async function handleInboundMessage(
     return;
   }
 
-  const { error: insMsgErr } = await supabase.from("messages").insert({
+  const { data: insertedMsg, error: insMsgErr } = await supabase.from("messages").insert({
     tenant_id: tenantId,
     conversation_id: conversation.id,
     direction: "inbound",
@@ -333,7 +333,7 @@ async function handleInboundMessage(
     provider_message_id: providerMessageId,
     provider_metadata: { provider: "meta_cloud", raw: msg, meta_media_id: mediaId },
     created_at: timestamp,
-  });
+  }).select("id").maybeSingle();
   if (insMsgErr) {
     if ((insMsgErr as any).code === "23505") {
       console.log("[webhook-meta] duplicate_inbound_race_ignored", { provider_message_id: providerMessageId });
