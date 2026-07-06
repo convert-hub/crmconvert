@@ -645,14 +645,16 @@ async function handleConnectionEvent(supabase: any, tenantId: string, body: any)
       await supabase.from('whatsapp_instances')
         .update(updateData)
         .eq('tenant_id', tenantId)
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .eq('provider', 'uazapi'); // nunca sobrescreve instâncias de outro provider (ex: Meta Cloud)
     }
   } else if (status === 'disconnected' && (body.type === 'LoggedOut' || instance.lastDisconnectReason?.includes('logged out'))) {
     // Only deactivate on explicit logout, not temporary disconnects
     await supabase.from('whatsapp_instances')
       .update({ is_active: false })
       .eq('tenant_id', tenantId)
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .eq('provider', 'uazapi'); // só desativa a UAZAPI; nunca derruba a instância Meta Cloud
     console.log(`webhook-uazapi: instance deactivated due to logout for tenant ${tenantId}`);
   }
 }

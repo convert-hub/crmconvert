@@ -137,9 +137,19 @@ serve(async (req) => {
           console.error('Webhook setup failed (non-critical):', whErr);
         }
 
-        // 3. Save instance to DB
+        // 3. Save instance to DB.
+        // First, deactivate any previous ACTIVE UAZAPI instance of this tenant so we never
+        // accumulate múltiplas linhas UAZAPI ativas. Escopado a provider='uazapi' para
+        // jamais tocar em instâncias de outro provider (ex: Meta Cloud).
+        await supabaseAdmin.from('whatsapp_instances')
+          .update({ is_active: false })
+          .eq('tenant_id', effectiveTenantId)
+          .eq('provider', 'uazapi')
+          .eq('is_active', true);
+
         await supabaseAdmin.from('whatsapp_instances').insert({
           tenant_id: effectiveTenantId,
+          provider: 'uazapi',
           instance_name: instName,
           api_url: apiBase,
           api_token_encrypted: instanceToken,

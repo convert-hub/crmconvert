@@ -449,11 +449,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             // despite the upstream error. UI renders it with failed indicator (red bubble + "!" badge).
             if (savedMsg?.id) {
               await supabase.from('messages').update({
-                provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida', failed_at: new Date().toISOString() } as any,
+                provider_metadata: { status: 'failed', error_message: (typeof res.error === 'string' ? res.error : 'Falha no envio'), failed_at: new Date().toISOString() } as any,
               }).eq('id', savedMsg.id);
               if (currentConvIdRef.current === capturedConvId) {
                 setMessages(prev => prev.map(m => (m.id === optimisticId || m.id === savedMsg.id)
-                  ? { ...m, id: savedMsg.id, provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida' } } as any
+                  ? { ...m, id: savedMsg.id, provider_metadata: { status: 'failed', error_message: (typeof res.error === 'string' ? res.error : 'Falha no envio') } } as any
                   : m));
               }
             }
@@ -571,11 +571,11 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       if (!res.ok) {
         // Mark as failed instead of deleting — media may have actually been delivered despite error.
         await supabase.from('messages').update({
-          provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida', failed_at: new Date().toISOString() } as any,
+          provider_metadata: { status: 'failed', error_message: (typeof res.error === 'string' ? res.error : 'Falha no envio'), failed_at: new Date().toISOString() } as any,
         }).eq('id', savedMsg.id);
         if (currentConvIdRef.current === capturedConvId) {
           setMessages(prev => prev.map(m => m.id === savedMsg.id
-            ? { ...m, provider_metadata: { status: 'failed', error_message: res.error || 'Falha desconhecida' } } as any
+            ? { ...m, provider_metadata: { status: 'failed', error_message: (typeof res.error === 'string' ? res.error : 'Falha no envio') } } as any
             : m));
         }
         if (res.code?.endsWith('_mime_unsupported')) {

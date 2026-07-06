@@ -53,6 +53,20 @@ export interface SendResult {
   code?: string;
 }
 
+/**
+ * Normaliza o campo de erro vindo das edge functions para SEMPRE um texto legível.
+ * Alguns caminhos retornavam um booleano (`true`), que acabava exibido cru como "true"
+ * na conversa. Aqui: string vira string; objeto vira JSON; booleano/número são descartados
+ * (retorna undefined) para o caller cair no fallback de mensagem padrão.
+ */
+function asErrorText(e: unknown): string | undefined {
+  if (typeof e === 'string') return e.trim() || undefined;
+  if (e && typeof e === 'object') {
+    try { return JSON.stringify(e); } catch { return undefined; }
+  }
+  return undefined;
+}
+
 export async function sendText(params: {
   conversationId: string;
   tenantId: string;
@@ -74,7 +88,7 @@ export async function sendText(params: {
       },
     });
     if (error || data?.error || data?.ok === false) {
-      return { ok: false, error: data?.error || error?.message || 'Falha no envio Meta', code: data?.code };
+      return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio Meta', code: data?.code };
     }
     return { ok: true, provider_message_id: data?.provider_message_id ?? null };
   }
@@ -92,7 +106,7 @@ export async function sendText(params: {
   // Note: uazapi-proxy now always returns 200 with { ok, error?, code? } for UAZAPI-level failures.
   // We check data.ok / data.error explicitly; `error` from invoke is only set for real HTTP failures.
   if (error || data?.error || data?.ok === false) {
-    return { ok: false, error: data?.error || error?.message, code: data?.code };
+    return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio', code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
@@ -130,7 +144,7 @@ export async function sendMedia(params: {
     if (upRes.error || upRes.data?.ok === false || upRes.data?.error) {
       return {
         ok: false,
-        error: upRes.data?.error || upRes.error?.message || 'Falha ao subir mídia para Meta',
+        error: asErrorText(upRes.data?.error) || upRes.error?.message || 'Falha ao subir mídia para Meta',
         code: upRes.data?.code,
       };
     }
@@ -152,7 +166,7 @@ export async function sendMedia(params: {
     if (sendRes.error || sendRes.data?.error || sendRes.data?.ok === false) {
       return {
         ok: false,
-        error: sendRes.data?.error || sendRes.error?.message || 'Falha no envio Meta',
+        error: asErrorText(sendRes.data?.error) || sendRes.error?.message || 'Falha no envio Meta',
         code: sendRes.data?.code,
         meta_media_id: metaMediaId,
       };
@@ -177,7 +191,7 @@ export async function sendMedia(params: {
   });
   // uazapi-proxy now returns 200 with { ok, error?, code? } for UAZAPI failures.
   if (error || data?.error || data?.ok === false) {
-    return { ok: false, error: data?.error || error?.message, code: data?.code };
+    return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio', code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
