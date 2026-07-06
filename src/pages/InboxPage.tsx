@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Conversation, Contact } from '@/types/crm';
+import type { Conversation, Contact, WhatsAppInstance } from '@/types/crm';
 import { Badge } from '@/components/ui/badge';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
 import { useCascadeDelete, type ConversationLinked } from '@/hooks/useCascadeDelete';
@@ -19,6 +19,19 @@ import { toast } from 'sonner';
 import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
+
+const last4Digits = (phone?: string | null) => {
+  const d = (phone ?? '').replace(/\D/g, '');
+  return d.length >= 4 ? d.slice(-4) : d;
+};
+
+const instanceLabel = (inst?: WhatsAppInstance | null) => {
+  if (!inst) return 'Sem canal';
+  const base = inst.provider === 'meta_cloud' ? 'API Oficial' : 'UAZAPI';
+  const tail = last4Digits(inst.phone_number) || inst.display_name || inst.id.slice(0, 4);
+  return `${base} (${tail})`;
+};
+
 
 function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated }: {
   contact?: Contact;
