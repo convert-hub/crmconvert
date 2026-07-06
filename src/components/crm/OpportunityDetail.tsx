@@ -707,7 +707,8 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </TabsContent>
 
