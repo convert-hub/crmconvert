@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Conversation, Contact } from '@/types/crm';
+import type { Conversation, Contact, WhatsAppInstance } from '@/types/crm';
 import { Badge } from '@/components/ui/badge';
 import { CascadeDeleteDialog } from '@/components/shared/CascadeDeleteDialog';
 import { useCascadeDelete, type ConversationLinked } from '@/hooks/useCascadeDelete';
@@ -20,14 +20,29 @@ import StartConversationDialog from '@/components/crm/StartConversationDialog';
 import CreateOpportunityFromContactDialog from '@/components/crm/CreateOpportunityFromContactDialog';
 import ChatPanel from '@/components/inbox/ChatPanel';
 
-function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated }: {
+const last4Digits = (phone?: string | null) => {
+  const d = (phone ?? '').replace(/\D/g, '');
+  return d.length >= 4 ? d.slice(-4) : d;
+};
+
+const instanceLabel = (inst?: WhatsAppInstance | null) => {
+  if (!inst) return 'Sem canal';
+  const base = inst.provider === 'meta_cloud' ? 'API Oficial' : 'UAZAPI';
+  const tail = last4Digits(inst.phone_number) || inst.display_name || inst.id.slice(0, 4);
+  return `${base} (${tail})`;
+};
+
+
+function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated, instanceText }: {
   contact?: Contact;
   channel?: string;
   status?: string;
   statusColors: Record<string, string>;
   onNameSaved: (name: string) => void;
   aiActivated?: boolean;
+  instanceText?: string | null;
 }) {
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(contact?.name ?? '');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -72,7 +87,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiAct
             )}
           </div>
         )}
-        <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
+        <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}{instanceText ? ` · ${instanceText}` : ''}</span>
       </div>
       <div className="ml-auto flex items-center gap-2">
         {aiActivated && (
@@ -107,6 +122,52 @@ export default function InboxPage() {
       return (v === 'unread' || v === 'unanswered') ? v : 'all';
     } catch { return 'all'; }
   });
+  const [instances, setInstances] = useState<WhatsAppInstance[]>([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(() => {
+    try { return localStorage.getItem('inbox:instanceFilter') || null; } catch { return null; }
+  });
+
+  const instancesById = useMemo(() => {
+    const map: Record<string, WhatsAppInstance> = {};
+    for (const i of instances) map[i.id] = i;
+    return map;
+  }, [instances]);
+  const showInstanceUI = instances.length >= 2;
+
+  useEffect(() => {
+    if (!tenant) return;
+    supabase.from('whatsapp_instances')
+      .select('id, provider, phone_number, display_name, instance_name, is_active, tenant_id, api_url, created_at, updated_at')
+      .eq('tenant_id', tenant.id)
+      .eq('is_active', true)
+      .then(({ data }) => {
+        const list = (data as unknown as WhatsAppInstance[]) ?? [];
+        setInstances(list);
+        setSelectedInstanceId(prev => {
+          if (prev && !list.some(i => i.id === prev)) {
+            try { localStorage.removeItem('inbox:instanceFilter'); } catch {}
+            return null;
+          }
+          return prev;
+        });
+      });
+  }, [tenant?.id]);
+
+  useEffect(() => {
+    try {
+      if (selectedInstanceId) localStorage.setItem('inbox:instanceFilter', selectedInstanceId);
+      else localStorage.removeItem('inbox:instanceFilter');
+    } catch {}
+  }, [selectedInstanceId]);
+
+  const changeInstanceFilter = (id: string | null) => {
+    if (id === selectedInstanceId) return;
+    setConversations([]);
+    setLoadedCount(0);
+    setTotalCount(null);
+    setSelectedInstanceId(id);
+  };
+
 
   useEffect(() => {
     try { localStorage.setItem('inbox:filter', filterMode); } catch {}
@@ -136,8 +197,10 @@ export default function InboxPage() {
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
     if (filterMode === 'unanswered') query = query.eq('is_unanswered', true);
+    if (selectedInstanceId) query = query.eq('whatsapp_instance_id', selectedInstanceId);
     return query;
   };
+
 
   const loadConversations = async () => {
     if (!tenant) return;
@@ -167,7 +230,7 @@ export default function InboxPage() {
     setLoadingMore(false);
   };
 
-  useEffect(() => { if (!searching) loadConversations(); }, [tenant?.id, role, membership?.id, filterMode]);
+  useEffect(() => { if (!searching) loadConversations(); }, [tenant?.id, role, membership?.id, filterMode, selectedInstanceId]);
 
   // Server-side search: when user types, query DB directly so old conversations are findable.
   useEffect(() => {
@@ -198,13 +261,15 @@ export default function InboxPage() {
       }
       if (filterMode === 'unread') q = q.gt('unread_count', 0);
       if (filterMode === 'unanswered') q = q.eq('is_unanswered', true);
+      if (selectedInstanceId) q = q.eq('whatsapp_instance_id', selectedInstanceId);
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
       setLoadedCount(convs.length);
     }, 300);
     return () => clearTimeout(handle);
-  }, [search, tenant?.id, role, membership?.id, filterMode]);
+  }, [search, tenant?.id, role, membership?.id, filterMode, selectedInstanceId]);
+
 
   // Reload base list when search is cleared
   useEffect(() => {
@@ -340,7 +405,27 @@ export default function InboxPage() {
               )}
             </button>
           </div>
+          {showInstanceUI && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <button
+                onClick={() => changeInstanceFilter(null)}
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
+                  selectedInstanceId === null ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                )}>Todos os canais</button>
+              {instances.map(inst => (
+                <button
+                  key={inst.id}
+                  onClick={() => changeInstanceFilter(inst.id)}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
+                    selectedInstanceId === inst.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                  )}>{instanceLabel(inst)}</button>
+              ))}
+            </div>
+          )}
         </div>
+
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.map(conv => (
             <div key={conv.id} onClick={() => setSelectedConv(conv.id)}
@@ -378,14 +463,24 @@ export default function InboxPage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 mt-1.5">
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <Badge variant="outline" className={`text-[10px] rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
                     {(conv.metadata as any)?.ai_activated === true && (
                       <Badge variant="outline" className="text-[10px] rounded-full bg-violet-500/10 text-violet-600 border-violet-500/20 gap-0.5">
                         <Bot className="h-2.5 w-2.5" />IA
                       </Badge>
                     )}
+                    {showInstanceUI && (() => {
+                      const inst = conv.whatsapp_instance_id ? instancesById[conv.whatsapp_instance_id] : null;
+                      if (!inst) {
+                        return <Badge variant="outline" className="text-[10px] rounded-full bg-muted text-muted-foreground border-border">Sem canal</Badge>;
+                      }
+                      return inst.provider === 'meta_cloud'
+                        ? <Badge variant="outline" className="text-[10px] rounded-full bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Oficial</Badge>
+                        : <Badge variant="outline" className="text-[10px] rounded-full bg-orange-500/10 text-orange-600 border-orange-500/20">UAZAPI</Badge>;
+                    })()}
                   </div>
+
                 </div>
               </div>
             </div>
@@ -415,6 +510,8 @@ export default function InboxPage() {
                 status={selectedData?.status}
                 statusColors={statusColors}
                 aiActivated={(selectedData?.metadata as any)?.ai_activated === true}
+                instanceText={showInstanceUI ? instanceLabel(selectedData?.whatsapp_instance_id ? instancesById[selectedData.whatsapp_instance_id] : null) : null}
+
                 onNameSaved={(newName) => {
                   setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
                 }}

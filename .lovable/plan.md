@@ -1,159 +1,66 @@
-## Objetivo
+# Diferenciar instâncias WhatsApp na Inbox
 
-Corrigir `src/pages/PipelinePage.tsx` para escalar em tenants com muitos milhares de oportunidades, eliminando o corte silencioso em ~1000 linhas do PostgREST e garantindo que contadores, totais e busca reflitam a base inteira — sem abrir brecha entre tenants.
+Alterar **apenas** `src/pages/InboxPage.tsx`. Regra chave: UI só muda se o tenant tiver ≥2 instâncias ativas.
 
-## Diagnóstico
+## 1. Carregamento de instâncias
 
-- `loadOpps` faz `.select('*, contact:contacts(*)').eq('pipeline_id', ...)` sem `.range/.limit` → PostgREST corta em ~1000. Com 1680 opps abertas, ~680 ficam invisíveis para quadro, busca e totais.
-- `filteredOpportunities`, `allTags`, `oppsByStage` e `count`/`stageTotal` derivam do array truncado.
-- Realtime/polling chama `loadOpps` inteira → custo amplificado em tenants grandes.
-
-## Arquitetura
-
-Dois modos derivados de estado (`mode = (search.trim() || hasActiveFilter(filters)) ? 'search' : 'navigation'`) + agregados sempre vindos de RPC segura.
-
-```text
-Header de cada coluna  → SEMPRE RPC de agregados (count + sum), por stage_id
-Corpo da coluna:
-  navigation → paginação por coluna (50/página, botão "Carregar mais")
-  search     → RPC única de busca (limit 300), distribuída por etapa
-```
-
-## Migration (obrigatória — sem fallback client-side)
-
-Duas RPCs `SECURITY DEFINER` com checagem de tenant embutida (mesmo padrão de `get_conversation_provider`). Nenhuma alteração de schema/RLS.
-
-### 1) `pipeline_stage_aggregates` — contadores/totais reais
-
-```sql
-create or replace function public.pipeline_stage_aggregates(
-  _pipeline_id uuid,
-  _assignee uuid default null,
-  _priority text default null,
-  _tag text default null,
-  _value_min numeric default null,
-  _value_max numeric default null
-) returns table(stage_id uuid, cnt bigint, total numeric)
-language sql stable security definer set search_path=public as $$
-  select o.stage_id, count(*)::bigint, coalesce(sum(o.value),0)::numeric
-  from public.opportunities o
-  left join public.contacts c on c.id = o.contact_id
-  where o.pipeline_id = _pipeline_id
-    and exists (
-      select 1 from public.pipelines p
-      where p.id = _pipeline_id
-        and (public.is_saas_admin() or public.is_member_of_tenant(p.tenant_id))
-    )
-    and (_assignee is null or o.assigned_to = _assignee)
-    and (_priority is null or o.priority::text = _priority)
-    and (_tag is null or _tag = any(c.tags))
-    and (_value_min is null or o.value >= _value_min)
-    and (_value_max is null or o.value <= _value_max)
-  group by o.stage_id;
-$$;
-```
-
-Sem acesso ao tenant → 0 linhas. Fecha o mesmo tipo de furo dos incidentes anteriores.
-
-### 2) `search_pipeline_opportunities` — busca server-side confiável
-
-Substitui o `.or()` frágil misturando tabela base + relacionamento embutido (que o PostgREST não suporta bem).
-
-```sql
-create or replace function public.search_pipeline_opportunities(
-  _pipeline_id uuid,
-  _term text default null,
-  _assignee uuid default null,
-  _priority text default null,
-  _tag text default null,
-  _value_min numeric default null,
-  _value_max numeric default null,
-  _limit int default 300
-) returns setof public.opportunities
-language sql stable security definer set search_path=public as $$
-  select o.*
-  from public.opportunities o
-  left join public.contacts c on c.id = o.contact_id
-  where o.pipeline_id = _pipeline_id
-    and exists (
-      select 1 from public.pipelines p
-      where p.id = _pipeline_id
-        and (public.is_saas_admin() or public.is_member_of_tenant(p.tenant_id))
-    )
-    and (_assignee is null or o.assigned_to = _assignee)
-    and (_priority is null or o.priority::text = _priority)
-    and (_tag  is null or _tag = any(c.tags))
-    and (_value_min is null or o.value >= _value_min)
-    and (_value_max is null or o.value <= _value_max)
-    and (
-      _term is null
-      or o.title ilike '%'||_term||'%'
-      or c.name  ilike '%'||_term||'%'
-      or regexp_replace(coalesce(c.phone,''),'\D','','g')
-         ilike '%'||regexp_replace(_term,'\D','','g')||'%'
-    )
-  order by o.position asc, o.updated_at desc
-  limit _limit;
-$$;
-```
-
-Frontend hidrata `contact` num segundo `select` (`contacts.in('id', contactIds)`), evitando shape customizado no retorno da RPC.
-
-## Refactor de `PipelinePage.tsx`
-
-### Estados novos
-`aggregatesByStage: Record<stageId, {count, total}>`, `oppsByStageState: Record<stageId, Opp[]>`, `pageByStage: Record<stageId, number>`, `loadingByStage`, `searchResults: Opp[]`, `searchLoading`, `mode` (derivado). Manter `opportunities` como visão achatada derivada (compat com engagement/activities/drag lookup).
-
-### Loaders
-
-- `loadStageAggregates()` → `supabase.rpc('pipeline_stage_aggregates', {...filters})`. Disparado em mudança de pipeline, filtros, e após cada `moveOpportunity`/refresh.
-- `loadStagePage(stageId, page=0)` — apenas em modo navegação:
+- Novo state: `instances: WhatsAppInstance[]` e `instancesById: Record<string, WhatsAppInstance>` (memo).
+- No `useEffect` inicial (dependente de `tenant.id`), buscar:
   ```ts
-  supabase.from('opportunities')
-    .select('id,title,value,priority,status,stage_id,assigned_to,contact_id,updated_at,position,custom_fields, contact:contacts(id,name,phone,tags,birth_date)')
-    .eq('pipeline_id', selectedPipeline).eq('stage_id', stageId)
-    .order('position', { ascending: true }).order('updated_at', { ascending: false })
-    .range(page*50, page*50+49);
+  supabase.from('whatsapp_instances')
+    .select('id, provider, phone_number, display_name, instance_name, is_active')
+    .eq('tenant_id', tenant.id)
+    .eq('is_active', true)
   ```
-  Página 0 carregada para todas as etapas em paralelo ao entrar no pipeline. "Carregar mais" aparece quando `loaded.length < aggregate.count`.
-- `loadSearchResults()` (debounced 250ms) — em modo busca: chama a RPC, depois `supabase.from('contacts').select(...).in('id', contactIds)` para hidratar. Agrupa por `stage_id` em memória (`searchByStage`).
+- Derivar `showInstanceUI = instances.length >= 2`.
 
-### Renderização de colunas
-- Header: `aggregatesByStage[stage.id]` (fonte única — nunca usar `.length` do array carregado).
-- Corpo: `mode === 'search' ? searchByStage[stage.id] : oppsByStageState[stage.id]`.
-- Em modo busca, mostrar badge por coluna com a contagem de resultados daquela etapa (derivada de `searchByStage[stage.id].length`) além do total real da etapa no header — resolve a confusão de "coluna diz 1660, mostra 1 card".
-- Badge global "Busca — X resultados (limitado a 300, refine se necessário)".
+## 2. Filtro selecionado
 
-### Realtime / polling
-`scheduleRefresh` deixa de recarregar tudo. Passa a:
-- Sempre re-invocar `loadStageAggregates()` (linhas pequenas).
-- Modo navegação: para cada etapa com dados carregados, re-buscar página 0 e mergear por `id` preservando páginas extras já carregadas.
-- Modo busca: re-invocar `loadSearchResults()`.
+- State `selectedInstanceId: string | null` (null = todas).
+- Persistência em `localStorage['inbox:instanceFilter']`.
+- Ao hidratar: se o id salvo não estiver mais em `instances`, resetar para `null` e limpar chave.
 
-### Drag-and-drop
-`moveOpportunity` inalterado no essencial (update + `enqueue_job run_automations`). Otimização otimista:
-- Remover card do bucket de origem, prepender no destino.
-- Ajustar `aggregatesByStage` localmente: `origem.count--`, `origem.total -= value`; `destino.count++`, `destino.total += value`. `loadStageAggregates()` reconcilia após refresh.
-- Lookup passa a considerar `searchResults` também (`activeOpp = oppsByStageState[...].find(...) ?? searchResults.find(...)`).
+## 3. UI do filtro (pills)
 
-### Ordenação
-Todas as queries usam `.order('position', { ascending: true }).order('updated_at', { ascending: false })` — estável e coerente com hoje (position=0 em massa → efetivamente updated_at desc).
+- Renderizar segunda linha **abaixo** dos pills existentes (Todas / Não lidas / Sem resposta), somente se `showInstanceUI`.
+- Reutilizar exatamente as mesmas classes/tamanho dos pills atuais.
+- Pills:
+  - "Todos os canais" → `selectedInstanceId = null` (default).
+  - Um por instância com label:
+    ```
+    (provider === 'meta_cloud' ? 'API Oficial' : 'UAZAPI') + ' (' + last4(phone_number) + ')'
+    ```
+    Helper `last4`: strip não-dígitos e pega os últimos 4; se vazio, cai para `display_name` ou primeiros 4 do `id`.
+
+## 4. Filtragem de dados
+
+- Em `baseQuery()` e na query de busca por texto: se `selectedInstanceId` não for null, adicionar `.eq('whatsapp_instance_id', selectedInstanceId)`.
+- Incluir `selectedInstanceId` nas dependências dos effects/queries que já dependem de outros filtros para forçar refetch.
+- Confirmar que canais Realtime (se existirem) refazem fetch quando o filtro muda — reaproveitando as deps existentes.
+
+## 5. Badge na lista de conversas
+
+- Somente se `showInstanceUI`.
+- Ao lado do channel label existente, badge pequeno:
+  - `meta_cloud` → texto "Oficial", classes `bg-emerald-500/10 text-emerald-600 border-emerald-500/20`.
+  - `uazapi` → texto "UAZAPI", classes `bg-orange-500/10 text-orange-600 border-orange-500/20`.
+  - Sem `whatsapp_instance_id` ou instância não encontrada → "Sem canal", classes cinza (`bg-muted text-muted-foreground border-border`).
+- Estilo consistente com badges existentes (rounded, `text-[10px]`/`text-xs`, `px-1.5 py-0.5 border`).
+
+## 6. ChatHeader
+
+- Se `showInstanceUI`, acrescentar após `contact.phone · channel` um separador `·` e o mesmo label do pill ("API Oficial (9817)" / "UAZAPI (0724)"), com cor sutil (`text-muted-foreground`). Se conversa sem instância, mostrar "Sem canal".
 
 ## Fora de escopo
-Reescrever semântica de `position`; alterar drawer, criar oportunidade, exclusão em cascata, abrir chat, cálculo de engagement/badges/alertas.
+
+- `whatsappRouter.ts`, `ChatPanel`, envio de mensagens: não tocar.
+- Nenhum outro arquivo.
 
 ## Riscos
 
-1. **Vazamento entre tenants nas RPCs** — mitigado com checagem `is_saas_admin() OR is_member_of_tenant(pipeline.tenant_id)` embutida em ambas.
-2. **`.or()` do PostgREST com colunas de tabela base + embed é frágil** — eliminado ao mover a busca para a RPC `search_pipeline_opportunities`.
-3. **Reordenação dentro da coluna quando só parte foi paginada** — mover para "o fim do carregado" mantém comportamento atual; aceito.
-4. **Realtime + paginação duplicando/ocultando cards** — merge por `id` preserva páginas extras já carregadas.
-5. **Debounce da busca** — 250ms para evitar N queries por tecla.
-6. **Hidratação de contatos na busca** — segundo round-trip por `contacts.in('id', ...)` limitado a 300 ids (uma query só).
-7. **Custo do polling de 2s** — cai drasticamente: agregados são leves; página 0 tem 50 linhas por etapa.
-
-## Ordem de implementação
-
-1. Migration com as duas RPCs `SECURITY DEFINER` + checagem de tenant.
-2. Refactor de `PipelinePage.tsx` (estados, loaders, render, realtime, drag).
-3. Verificação manual no tenant de 1680 opps: header correto por etapa, "Carregar mais" funciona, busca acha itens fora da primeira página, drag entre etapas atualiza header sem esperar refetch.
+1. **Coluna `whatsapp_instance_id` no baseQuery**: se o `select` atual não a inclui, o badge fica sem dado. Ação: adicionar o campo ao `select` (já é da mesma tabela `conversations`, custo zero).
+2. **Persistência stale**: id em localStorage pertencente a instância desativada. Mitigado com o reset ao hidratar.
+3. **Realtime**: filtros são aplicados client-side no refetch; se houver subscription por `postgres_changes` filtrada por tenant, novos eventos de outra instância ainda chegam e são filtrados na próxima leitura — sem regressão, apenas refetch a mais.
+4. **Layout mobile**: segunda linha de pills pode quebrar em telas estreitas. Usar `flex flex-wrap gap-2` como a linha de cima já faz.
+5. **`phone_number` nulo** (ex: Meta Cloud sem número salvo): fallback para `display_name` evita label vazio tipo "API Oficial ()".
+6. **Contagem de instâncias muda em runtime** (admin ativa/desativa outra instância): só relemos ao montar. Aceitável — usuário recarrega. Documentar como limitação.
