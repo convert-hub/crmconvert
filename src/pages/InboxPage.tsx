@@ -197,8 +197,10 @@ export default function InboxPage() {
     }
     if (filterMode === 'unread') query = query.gt('unread_count', 0);
     if (filterMode === 'unanswered') query = query.eq('is_unanswered', true);
+    if (selectedInstanceId) query = query.eq('whatsapp_instance_id', selectedInstanceId);
     return query;
   };
+
 
   const loadConversations = async () => {
     if (!tenant) return;
