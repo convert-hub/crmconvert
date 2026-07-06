@@ -39,6 +39,25 @@ const handlers = {
     });
   },
 
+  // Notifica atendentes sobre novo lead (qualquer origem: mensagem, form, meta leads, etc).
+  // Disparado pelo gatilho do banco (trg_contacts_notify_new_lead) via enqueue_job.
+  // A idempotência real (não notificar duas vezes) fica na própria notify-new-lead
+  // (lock atômico em contacts.custom_fields.lead_notified_at).
+  async notify_new_lead(payload) {
+    const { tenant_id, contact_id, trigger } = payload;
+    if (!tenant_id || !contact_id) {
+      return { skipped: true, reason: 'missing tenant_id or contact_id' };
+    }
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/notify-new-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+      body: JSON.stringify({ tenant_id, contact_id, trigger: trigger || 'new_lead' }),
+    });
+    const body = await res.json().catch(() => ({}));
+    console.log(`[Worker] notify_new_lead contact=${contact_id} -> ${res.status} ${JSON.stringify(body)}`);
+    return { ok: res.ok, result: body };
+  },
+
 
   async process_uazapi_message(payload) {
     const { tenant_id, conversation_id, contact_id, message_text, message_id, already_saved, data } = payload;

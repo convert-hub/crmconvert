@@ -530,7 +530,8 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
               bucketToId.set(b, ex.id);
             } else {
               const payload: any = { ...b.contact, tags: b.contact.tags || [] };
-              if (b.hasCustom) payload.custom_fields = b.custom;
+              // notify_skip: importação em massa não deve disparar notificação de novo lead.
+              payload.custom_fields = { ...(b.hasCustom ? b.custom : {}), notify_skip: true };
               toInsert.push(payload);
               toInsertBuckets.push(b);
             }
@@ -592,7 +593,8 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
           }
           if (!id) {
             const payload: any = { ...b.contact, tags: b.contact.tags || [] };
-            if (b.hasCustom) payload.custom_fields = b.custom;
+            // notify_skip: importação em massa não deve disparar notificação de novo lead.
+            payload.custom_fields = { ...(b.hasCustom ? b.custom : {}), notify_skip: true };
             const { data: ins, error } = await supabase.from('contacts').insert(payload).select('id').single();
             if (error) throw error;
             id = ins!.id;

@@ -13,6 +13,7 @@ function json(data: unknown, status = 200) {
 const TRIGGER_LABEL: Record<string, string> = {
   inbound: 'Mensagem recebida',
   keyword: 'Palavra-chave',
+  new_lead: 'Novo lead',
 };
 
 Deno.serve(async (req) => {
@@ -26,7 +27,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => null);
     const tenant_id = body?.tenant_id as string | undefined;
     const contact_id = body?.contact_id as string | undefined;
-    const trigger = body?.trigger as 'inbound' | 'keyword' | undefined;
+    const trigger = body?.trigger as 'inbound' | 'keyword' | 'new_lead' | undefined;
     if (!tenant_id || !contact_id || !trigger || !TRIGGER_LABEL[trigger]) {
       return json({ error: 'Invalid input' }, 400);
     }
@@ -37,7 +38,12 @@ Deno.serve(async (req) => {
     const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenant_id).single();
     const cfg = (tenant?.settings as any)?.lead_notifications ?? {};
     if (cfg.enabled !== true) return json({ skipped: 'disabled' });
-    if (cfg.triggers?.[trigger] !== true) return json({ skipped: 'trigger_disabled' });
+    // 'new_lead' (novo lead de qualquer origem) vem LIGADO por padrão quando as
+    // notificações estão ativas; 'inbound'/'keyword' exigem opt-in explícito na config.
+    const triggerEnabled = trigger === 'new_lead'
+      ? cfg.triggers?.new_lead !== false
+      : cfg.triggers?.[trigger] === true;
+    if (!triggerEnabled) return json({ skipped: 'trigger_disabled' });
     const recipientIds: string[] = Array.isArray(cfg.recipient_membership_ids) ? cfg.recipient_membership_ids : [];
     if (recipientIds.length === 0) return json({ skipped: 'no_recipients' });
 
