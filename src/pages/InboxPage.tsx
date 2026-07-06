@@ -261,13 +261,15 @@ export default function InboxPage() {
       }
       if (filterMode === 'unread') q = q.gt('unread_count', 0);
       if (filterMode === 'unanswered') q = q.eq('is_unanswered', true);
+      if (selectedInstanceId) q = q.eq('whatsapp_instance_id', selectedInstanceId);
       const { data } = await q;
       const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
       setConversations(convs);
       setLoadedCount(convs.length);
     }, 300);
     return () => clearTimeout(handle);
-  }, [search, tenant?.id, role, membership?.id, filterMode]);
+  }, [search, tenant?.id, role, membership?.id, filterMode, selectedInstanceId]);
+
 
   // Reload base list when search is cleared
   useEffect(() => {
