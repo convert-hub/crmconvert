@@ -405,7 +405,27 @@ export default function InboxPage() {
               )}
             </button>
           </div>
+          {showInstanceUI && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <button
+                onClick={() => changeInstanceFilter(null)}
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
+                  selectedInstanceId === null ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                )}>Todos os canais</button>
+              {instances.map(inst => (
+                <button
+                  key={inst.id}
+                  onClick={() => changeInstanceFilter(inst.id)}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border",
+                    selectedInstanceId === inst.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                  )}>{instanceLabel(inst)}</button>
+              ))}
+            </div>
+          )}
         </div>
+
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.map(conv => (
             <div key={conv.id} onClick={() => setSelectedConv(conv.id)}
