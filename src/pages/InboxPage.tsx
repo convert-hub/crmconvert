@@ -230,7 +230,7 @@ export default function InboxPage() {
     setLoadingMore(false);
   };
 
-  useEffect(() => { if (!searching) loadConversations(); }, [tenant?.id, role, membership?.id, filterMode]);
+  useEffect(() => { if (!searching) loadConversations(); }, [tenant?.id, role, membership?.id, filterMode, selectedInstanceId]);
 
   // Server-side search: when user types, query DB directly so old conversations are findable.
   useEffect(() => {
