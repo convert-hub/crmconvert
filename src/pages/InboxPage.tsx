@@ -122,6 +122,52 @@ export default function InboxPage() {
       return (v === 'unread' || v === 'unanswered') ? v : 'all';
     } catch { return 'all'; }
   });
+  const [instances, setInstances] = useState<WhatsAppInstance[]>([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(() => {
+    try { return localStorage.getItem('inbox:instanceFilter') || null; } catch { return null; }
+  });
+
+  const instancesById = useMemo(() => {
+    const map: Record<string, WhatsAppInstance> = {};
+    for (const i of instances) map[i.id] = i;
+    return map;
+  }, [instances]);
+  const showInstanceUI = instances.length >= 2;
+
+  useEffect(() => {
+    if (!tenant) return;
+    supabase.from('whatsapp_instances')
+      .select('id, provider, phone_number, display_name, instance_name, is_active, tenant_id, api_url, created_at, updated_at')
+      .eq('tenant_id', tenant.id)
+      .eq('is_active', true)
+      .then(({ data }) => {
+        const list = (data as unknown as WhatsAppInstance[]) ?? [];
+        setInstances(list);
+        setSelectedInstanceId(prev => {
+          if (prev && !list.some(i => i.id === prev)) {
+            try { localStorage.removeItem('inbox:instanceFilter'); } catch {}
+            return null;
+          }
+          return prev;
+        });
+      });
+  }, [tenant?.id]);
+
+  useEffect(() => {
+    try {
+      if (selectedInstanceId) localStorage.setItem('inbox:instanceFilter', selectedInstanceId);
+      else localStorage.removeItem('inbox:instanceFilter');
+    } catch {}
+  }, [selectedInstanceId]);
+
+  const changeInstanceFilter = (id: string | null) => {
+    if (id === selectedInstanceId) return;
+    setConversations([]);
+    setLoadedCount(0);
+    setTotalCount(null);
+    setSelectedInstanceId(id);
+  };
+
 
   useEffect(() => {
     try { localStorage.setItem('inbox:filter', filterMode); } catch {}
