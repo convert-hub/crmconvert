@@ -87,7 +87,7 @@ function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiAct
             )}
           </div>
         )}
-        <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}</span>
+        <span className="text-xs text-muted-foreground">{contact?.phone} · {channel}{instanceText ? ` · ${instanceText}` : ''}</span>
       </div>
       <div className="ml-auto flex items-center gap-2">
         {aiActivated && (
