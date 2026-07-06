@@ -463,14 +463,24 @@ export default function InboxPage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 mt-1.5">
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <Badge variant="outline" className={`text-[10px] rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>
                     {(conv.metadata as any)?.ai_activated === true && (
                       <Badge variant="outline" className="text-[10px] rounded-full bg-violet-500/10 text-violet-600 border-violet-500/20 gap-0.5">
                         <Bot className="h-2.5 w-2.5" />IA
                       </Badge>
                     )}
+                    {showInstanceUI && (() => {
+                      const inst = conv.whatsapp_instance_id ? instancesById[conv.whatsapp_instance_id] : null;
+                      if (!inst) {
+                        return <Badge variant="outline" className="text-[10px] rounded-full bg-muted text-muted-foreground border-border">Sem canal</Badge>;
+                      }
+                      return inst.provider === 'meta_cloud'
+                        ? <Badge variant="outline" className="text-[10px] rounded-full bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Oficial</Badge>
+                        : <Badge variant="outline" className="text-[10px] rounded-full bg-orange-500/10 text-orange-600 border-orange-500/20">UAZAPI</Badge>;
+                    })()}
                   </div>
+
                 </div>
               </div>
             </div>
