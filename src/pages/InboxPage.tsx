@@ -33,14 +33,16 @@ const instanceLabel = (inst?: WhatsAppInstance | null) => {
 };
 
 
-function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated }: {
+function ChatHeader({ contact, channel, status, statusColors, onNameSaved, aiActivated, instanceText }: {
   contact?: Contact;
   channel?: string;
   status?: string;
   statusColors: Record<string, string>;
   onNameSaved: (name: string) => void;
   aiActivated?: boolean;
+  instanceText?: string | null;
 }) {
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(contact?.name ?? '');
   const inputRef = useRef<HTMLInputElement>(null);
