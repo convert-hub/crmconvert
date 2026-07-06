@@ -170,12 +170,18 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
   };
 
   useEffect(() => {
-    const channel = supabase.channel(`opp-messages-${opportunityId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+    if (!chatConvId) return;
+    const channel = supabase.channel(`conv-messages-${chatConvId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${chatConvId}`,
+      }, payload => {
         setMessages(prev => [...prev, payload.new as unknown as Message]);
       }).subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [opportunityId]);
+  }, [chatConvId]);
 
   // Build unified timeline
   const timeline: TimelineItem[] = (() => {
