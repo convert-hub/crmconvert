@@ -510,6 +510,8 @@ export default function InboxPage() {
                 status={selectedData?.status}
                 statusColors={statusColors}
                 aiActivated={(selectedData?.metadata as any)?.ai_activated === true}
+                instanceText={showInstanceUI ? instanceLabel(selectedData?.whatsapp_instance_id ? instancesById[selectedData.whatsapp_instance_id] : null) : null}
+
                 onNameSaved={(newName) => {
                   setConversations(prev => prev.map(c => c.id === selectedConv && c.contact ? { ...c, contact: { ...c.contact, name: newName } } : c));
                 }}
