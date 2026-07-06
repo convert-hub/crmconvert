@@ -618,29 +618,42 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         <TabsContent value="timeline" className="space-y-2">
           <div className="max-h-[400px] overflow-y-auto scrollbar-thin space-y-1 pr-1">
             {timeline.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Nenhum evento registrado</p>}
-            {timeline.map(item => (
-              <div key={item.id} className="flex gap-3 group">
-                {/* Timeline line */}
-                <div className="flex flex-col items-center">
-                  <div className={cn("h-2 w-2 rounded-full mt-2 shrink-0",
-                    item.type === 'message' ? 'bg-primary' :
-                    item.type === 'stage_move' ? 'bg-warning' :
-                    item.type === 'note' ? 'bg-accent-foreground/50' :
-                    'bg-info'
-                  )} />
-                  <div className="w-px flex-1 bg-border/50" />
-                </div>
-                {/* Content */}
-                <div className="pb-3 flex-1 min-w-0">
-                  {item.type === 'message' && (
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-medium text-primary">{item.data.direction === 'inbound' ? '← Recebida' : '→ Enviada'}</span>
-                        <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+            {timeline.map(item => {
+              const pmeta = item.type === 'message' ? (item.data.provider_metadata ?? {}) : {};
+              const msgStatus = pmeta.status ?? pmeta.last_status;
+              const isFailed = msgStatus === 'failed';
+              return (
+                <div key={item.id} className="flex gap-3 group">
+                  {/* Timeline line */}
+                  <div className="flex flex-col items-center">
+                    <div className={cn("h-2 w-2 rounded-full mt-2 shrink-0",
+                      item.type === 'message' ? (isFailed ? 'bg-destructive' : 'bg-primary') :
+                      item.type === 'stage_move' ? 'bg-warning' :
+                      item.type === 'note' ? 'bg-accent-foreground/50' :
+                      'bg-info'
+                    )} />
+                    <div className="w-px flex-1 bg-border/50" />
+                  </div>
+                  {/* Content */}
+                  <div className="pb-3 flex-1 min-w-0">
+                    {item.type === 'message' && (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={cn("text-[10px] font-medium",
+                            isFailed ? 'text-destructive' : 'text-primary'
+                          )}>
+                            {item.data.direction === 'inbound' ? '← Recebida' : isFailed ? '⚠ Falha no envio' : '→ Enviada'}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">{format(new Date(item.timestamp), "dd/MM HH:mm")}</span>
+                        </div>
+                        <p className="text-xs text-foreground mt-0.5 line-clamp-2">{item.data.content || '[Mídia]'}</p>
+                        {isFailed && (
+                          <p className="text-[10px] text-destructive mt-0.5">
+                            {pmeta.error_message || 'Falha no envio via WhatsApp'}
+                          </p>
+                        )}
                       </div>
-                      <p className="text-xs text-foreground mt-0.5 line-clamp-2">{item.data.content || '[Mídia]'}</p>
-                    </div>
-                  )}
+                    )}
                   {item.type === 'stage_move' && (() => {
                     const sm = item.data as StageMove;
                     const isLatestMove = stageMoves[stageMoves.length - 1]?.id === sm.id;
