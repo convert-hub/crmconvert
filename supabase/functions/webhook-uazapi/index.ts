@@ -200,12 +200,6 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     return;
   }
 
-  // Skip messages sent by API (we already saved those)
-  if (msg.wasSentByApi === true) {
-    console.log('webhook-uazapi: skipping wasSentByApi message');
-    return;
-  }
-
   // Skip messages without content (reactions, presence, etc.)
   if (!text && !mediaUrl && !['image', 'video', 'audio', 'document', 'sticker'].some(t => mediaType?.toLowerCase?.()?.includes(t))) {
     console.log(`webhook-uazapi: skipping message without text content, type=${mediaType}`);
@@ -324,15 +318,39 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     return;
   }
 
-  // Check for duplicate message
+  // Check for duplicate message (por tenant: cobre eco wasSentByApi de envios já gravados pelo CRM)
   if (messageId) {
     const { data: existing } = await supabase.from('messages')
       .select('id')
+      .eq('tenant_id', tenantId)
       .eq('provider_message_id', messageId)
-      .eq('conversation_id', conversation.id)
       .limit(1);
     if (existing && existing.length > 0) {
       console.log(`webhook-uazapi: duplicate message ${messageId}, skipping`);
+      return;
+    }
+  }
+
+  // Guard de corrida: a app grava o envio próprio com provider_message_id NULL e carimba o id
+  // um instante depois. Se o eco chegar antes do carimbo, o dedupe acima não acha — então,
+  // para fromMe, procura o outbound recente (60s) da mesma conversa com mesmo content e id NULL
+  // e carimba o provider_message_id nele em vez de inserir duplicata.
+  if (fromMe && messageId) {
+    const since = new Date(Date.now() - 60_000).toISOString();
+    const { data: pendingOwn } = await supabase.from('messages')
+      .select('id')
+      .eq('conversation_id', conversation.id)
+      .eq('direction', 'outbound')
+      .is('provider_message_id', null)
+      .eq('content', text || `[${mediaType || 'mídia'}]`)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (pendingOwn && pendingOwn.length > 0) {
+      await supabase.from('messages')
+        .update({ provider_message_id: messageId })
+        .eq('id', pendingOwn[0].id);
+      console.log(`webhook-uazapi: carimbou provider_message_id no envio próprio ${pendingOwn[0].id}, sem inserir duplicata`);
       return;
     }
   }
