@@ -104,6 +104,7 @@ export interface Opportunity {
   qualification_data: Record<string, unknown>;
   conversation_state: Record<string, unknown>;
   custom_fields: Record<string, unknown>;
+  tags?: string[];
   position: number;
   created_at: string;
   updated_at: string;

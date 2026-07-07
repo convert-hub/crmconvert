@@ -78,6 +78,25 @@ Deno.serve(async (req) => {
 
         if (conv.channel === 'whatsapp' && contact?.phone) {
           if (provider === 'meta_cloud') {
+            // Agendamento pode ser texto ou template (msg.template = { name, language, components })
+            const tpl = (msg as any).template
+            const sendBody = tpl?.name
+              ? {
+                  action: 'send',
+                  type: 'template',
+                  template: { name: tpl.name, language: tpl.language, components: tpl.components },
+                  conversation_id: msg.conversation_id,
+                  whatsapp_instance_id: tpl.whatsapp_instance_id || conv.whatsapp_instance_id,
+                  skip_persist: true,
+                }
+              : {
+                  action: 'send',
+                  type: 'text',
+                  text: msg.content,
+                  conversation_id: msg.conversation_id,
+                  whatsapp_instance_id: conv.whatsapp_instance_id,
+                  skip_persist: true,
+                }
             // Chama wa-meta-send direto com service role
             const r = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
               method: 'POST',
@@ -85,14 +104,7 @@ Deno.serve(async (req) => {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${SERVICE_ROLE}`,
               },
-              body: JSON.stringify({
-                action: 'send',
-                type: 'text',
-                text: msg.content,
-                conversation_id: msg.conversation_id,
-                whatsapp_instance_id: conv.whatsapp_instance_id,
-                skip_persist: true,
-              }),
+              body: JSON.stringify(sendBody),
             })
             const d = await r.json().catch(() => ({}))
             if (!r.ok || d?.ok === false || d?.error) {

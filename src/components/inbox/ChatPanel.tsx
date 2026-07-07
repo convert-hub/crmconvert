@@ -821,6 +821,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           conversationId={conversationId}
           tenantId={tenant.id}
           membershipId={membership.id}
+          provider={providerInfo?.provider ?? null}
+          whatsappInstanceId={providerInfo?.instance_id ?? null}
         />
       )}
       {tenant && providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (

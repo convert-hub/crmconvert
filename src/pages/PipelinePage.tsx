@@ -49,7 +49,7 @@ const emptyFilters: Filters = { assignee: 'all', priority: 'all', tag: '', value
 
 const PAGE_SIZE = 50;
 const SEARCH_LIMIT = 300;
-const SELECT_COLS = 'id,tenant_id,title,value,priority,status,stage_id,pipeline_id,assigned_to,contact_id,updated_at,created_at,position,custom_fields, contact:contacts(id,name,phone,tags,birth_date)';
+const SELECT_COLS = 'id,tenant_id,title,value,priority,status,stage_id,pipeline_id,assigned_to,contact_id,updated_at,created_at,position,custom_fields,tags, contact:contacts(id,name,phone,tags,birth_date)';
 
 // ─── Engagement Score ───
 function calcEngagementScore(opp: Opportunity & { contact?: Contact }, msgCounts: Record<string, number>): number {
@@ -219,9 +219,9 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
               : formatDistanceToNow(new Date(opp.updated_at), { locale: ptBR, addSuffix: true })}
           </div>
         </div>
-        {opp.contact?.tags && opp.contact.tags.length > 0 && (
+        {opp.tags && opp.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 pl-5">
-            {opp.contact.tags.slice(0, 3).map(tag => (
+            {opp.tags.slice(0, 3).map(tag => (
               <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0 rounded-full">{tag}</Badge>
             ))}
           </div>
@@ -398,7 +398,10 @@ export default function PipelinePage() {
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    for (const o of allLoadedOpps) if (o.contact?.tags) o.contact.tags.forEach(t => set.add(t));
+    for (const o of allLoadedOpps) {
+      if (o.contact?.tags) o.contact.tags.forEach(t => set.add(t));
+      if (o.tags) o.tags.forEach(t => set.add(t));
+    }
     return [...set].sort();
   }, [allLoadedOpps]);
 

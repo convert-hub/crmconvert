@@ -1500,6 +1500,7 @@ export type Database = {
           source: string | null
           stage_id: string
           status: Database["public"]["Enums"]["opportunity_status"]
+          tags: string[]
           tenant_id: string
           title: string
           updated_at: string
@@ -1528,6 +1529,7 @@ export type Database = {
           source?: string | null
           stage_id: string
           status?: Database["public"]["Enums"]["opportunity_status"]
+          tags?: string[]
           tenant_id: string
           title: string
           updated_at?: string
@@ -1556,6 +1558,7 @@ export type Database = {
           source?: string | null
           stage_id?: string
           status?: Database["public"]["Enums"]["opportunity_status"]
+          tags?: string[]
           tenant_id?: string
           title?: string
           updated_at?: string
@@ -1856,6 +1859,7 @@ export type Database = {
           scheduled_at: string
           sent_at: string | null
           status: string
+          template: Json | null
           tenant_id: string
           updated_at: string
         }
@@ -1870,6 +1874,7 @@ export type Database = {
           scheduled_at: string
           sent_at?: string | null
           status?: string
+          template?: Json | null
           tenant_id: string
           updated_at?: string
         }
@@ -1884,6 +1889,7 @@ export type Database = {
           scheduled_at?: string
           sent_at?: string | null
           status?: string
+          template?: Json | null
           tenant_id?: string
           updated_at?: string
         }

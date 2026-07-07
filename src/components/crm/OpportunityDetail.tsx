@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp, UserPlus, History } from 'lucide-react';
+import { Send, Phone, Mail, MessageSquare, Plus, CheckCircle2, XCircle, Save, CalendarClock, Check, Cake, Clock, ArrowRight, StickyNote, TrendingUp, UserPlus, History, Tag as TagIcon } from 'lucide-react';
+import TagInput from '@/components/contacts/TagInput';
 import { listUazapiInstances, syncWhatsappHistoryForPhones } from '@/lib/historySync';
 import ChatPanel from '@/components/inbox/ChatPanel';
 import { toast } from 'sonner';
@@ -200,6 +201,14 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
     items.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     return items;
   })();
+
+  const handleTagsChange = async (tags: string[]) => {
+    if (!opp) return;
+    const prev = opp.tags ?? [];
+    setOpp(p => p ? { ...p, tags } : p);
+    const { error } = await supabase.from('opportunities').update({ tags }).eq('id', opp.id);
+    if (error) { toast.error(error.message); setOpp(p => p ? { ...p, tags: prev } : p); }
+  };
 
   const handleSaveEdit = async () => {
     if (!opp) return;
@@ -475,6 +484,15 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         </Badge>
         <Badge variant="outline" className={`rounded-full ${priorityColors[opp.priority ?? 'medium']}`}>{priorityLabels[opp.priority ?? 'medium'] ?? opp.priority}</Badge>
         {(opp.value ?? 0) > 0 && <span className="text-sm font-semibold text-success">R$ {opp.value.toLocaleString('pt-BR')}</span>}
+      </div>
+
+      {/* Tags da oportunidade */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <TagIcon className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">Tags da oportunidade:</span>
+        </div>
+        <TagInput value={opp.tags ?? []} onChange={handleTagsChange} />
       </div>
 
       {/* Assign Member */}
