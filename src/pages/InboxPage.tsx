@@ -134,6 +134,36 @@ export default function InboxPage() {
   }, [instances]);
   const showInstanceUI = instances.length >= 2;
 
+  // Indicador de oportunidade por contato: 'open' (aberta) tem precedência sobre 'won' (ganha).
+  // Contatos só com oportunidades perdidas não exibem selo. Consulta em lote por página carregada.
+  const [oppByContact, setOppByContact] = useState<Record<string, 'open' | 'won'>>({});
+  const oppCheckedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!tenant) return;
+    const ids = Array.from(new Set(conversations.map(c => c.contact_id).filter(Boolean))) as string[];
+    const missing = ids.filter(id => !oppCheckedRef.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach(id => oppCheckedRef.current.add(id));
+    supabase.from('opportunities')
+      .select('contact_id, status')
+      .eq('tenant_id', tenant.id)
+      .in('contact_id', missing)
+      .in('status', ['open', 'won'])
+      .then(({ data }) => {
+        if (!data || data.length === 0) return;
+        setOppByContact(prev => {
+          const next = { ...prev };
+          for (const o of data) {
+            if (!o.contact_id) continue;
+            if (o.status === 'open') next[o.contact_id] = 'open';
+            else if (next[o.contact_id] !== 'open') next[o.contact_id] = 'won';
+          }
+          return next;
+        });
+      });
+  }, [conversations, tenant?.id]);
+
   useEffect(() => {
     if (!tenant) return;
     supabase.from('whatsapp_instances')
@@ -470,6 +500,18 @@ export default function InboxPage() {
                         <Bot className="h-2.5 w-2.5" />IA
                       </Badge>
                     )}
+                    {conv.contact_id && oppByContact[conv.contact_id] && (
+                      <Badge
+                        variant="outline"
+                        title={oppByContact[conv.contact_id] === 'open' ? 'Contato com oportunidade aberta no pipeline' : 'Contato com oportunidade ganha'}
+                        className={`text-[10px] rounded-full gap-0.5 ${oppByContact[conv.contact_id] === 'open'
+                          ? 'bg-blue-500/10 text-blue-600 border-blue-500/20'
+                          : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'}`}
+                      >
+                        <Target className="h-2.5 w-2.5" />
+                        {oppByContact[conv.contact_id] === 'open' ? 'Oportunidade' : 'Ganha'}
+                      </Badge>
+                    )}
                     {showInstanceUI && (() => {
                       const inst = conv.whatsapp_instance_id ? instancesById[conv.whatsapp_instance_id] : null;
                       if (!inst) {
@@ -552,6 +594,10 @@ export default function InboxPage() {
           open={!!oppContact}
           onOpenChange={(v) => { if (!v) setOppContact(null); }}
           contact={oppContact}
+          onCreated={() => {
+            const id = oppContact?.id;
+            if (id) setOppByContact(prev => ({ ...prev, [id]: 'open' }));
+          }}
         />
       )}
 
