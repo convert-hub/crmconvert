@@ -352,7 +352,31 @@ const handlers = {
   },
 
   async send_whatsapp(payload) {
-    const { tenant_id, phone, message, conversation_id, whatsapp_instance_id } = payload;
+    const { tenant_id, phone, message, conversation_id, whatsapp_instance_id, message_id, scheduled_message_id } = payload;
+
+    // Se o envio falhar de vez, reflete a falha na mensagem e no agendamento (se vieram no payload),
+    // em vez de deixar tudo aparecendo como enviado. Num retry bem-sucedido o status é corrigido.
+    const markFailed = async (errText) => {
+      try {
+        if (message_id) {
+          await supabase.from('messages').update({
+            provider_metadata: { status: 'failed', error_message: errText, failed_at: new Date().toISOString() },
+          }).eq('id', message_id);
+        }
+        if (scheduled_message_id) {
+          await supabase.from('scheduled_messages').update({ status: 'failed' }).eq('id', scheduled_message_id);
+        }
+      } catch (e) { console.error('[Worker] send_whatsapp markFailed err', e); }
+    };
+    const markSent = async (providerMessageId) => {
+      try {
+        if (message_id) {
+          const update = { provider_metadata: { status: 'sent' } };
+          if (providerMessageId) update.provider_message_id = providerMessageId;
+          await supabase.from('messages').update(update).eq('id', message_id);
+        }
+      } catch (e) { console.error('[Worker] send_whatsapp markSent err', e); }
+    };
 
     // Resolve instance: prefer explicit, fallback to conversation's instance, fallback to active uazapi
     let instance = null;
@@ -377,11 +401,13 @@ const handlers = {
     }
 
     if (!instance) {
+      await markFailed('Nenhuma instância WhatsApp ativa para o tenant');
       throw new Error('No active WhatsApp instance for tenant');
     }
 
     const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
     if (!cleanPhone) {
+      await markFailed('Contato sem número de telefone');
       throw new Error('No phone number provided');
     }
 
@@ -404,8 +430,11 @@ const handlers = {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.ok === false) {
-        throw new Error(`Meta send failed: ${data?.error || response.status}`);
+        const errText = typeof data?.error === 'string' ? data.error : `Falha no envio via WhatsApp Oficial (HTTP ${response.status})`;
+        await markFailed(errText);
+        throw new Error(`Meta send failed: ${errText}`);
       }
+      await markSent(data?.provider_message_id || null);
       return data;
     }
 
@@ -428,10 +457,13 @@ const handlers = {
 
     if (!response.ok) {
       const errText = await response.text();
+      await markFailed(`Falha no envio via UAZAPI (HTTP ${response.status})`);
       throw new Error(`UAZAPI send failed: ${response.status} ${errText}`);
     }
 
-    return await response.json();
+    const result = await response.json();
+    await markSent(result?.key?.id || result?.messageid || result?.id || null);
+    return result;
   },
 
   async send_whatsapp_media(payload) {

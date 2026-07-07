@@ -66,15 +66,15 @@ Deno.serve(async (req) => {
           if ((inst as any)?.provider === 'meta_cloud') provider = 'meta_cloud'
         }
 
-        // Insert the message into messages table
-        await supabase.from('messages').insert({
+        // Insert the message into messages table (capture id to reflect send failures)
+        const { data: savedMsg } = await supabase.from('messages').insert({
           tenant_id: msg.tenant_id,
           conversation_id: msg.conversation_id,
           direction: 'outbound',
           content: msg.content,
           sender_membership_id: msg.created_by,
           is_ai_generated: false,
-        })
+        }).select('id').single()
 
         if (conv.channel === 'whatsapp' && contact?.phone) {
           if (provider === 'meta_cloud') {
@@ -97,9 +97,20 @@ Deno.serve(async (req) => {
             const d = await r.json().catch(() => ({}))
             if (!r.ok || d?.ok === false || d?.error) {
               console.warn('Meta send failed for scheduled msg', msg.id, d)
+              const errText = typeof d?.error === 'string' ? d.error : `Falha no envio via WhatsApp Oficial (HTTP ${r.status})`
+              if (savedMsg?.id) {
+                await supabase.from('messages').update({
+                  provider_metadata: { status: 'failed', error_message: errText, failed_at: new Date().toISOString() },
+                }).eq('id', savedMsg.id)
+              }
+              await supabase.from('scheduled_messages').update({ status: 'failed' }).eq('id', msg.id)
+              continue
+            }
+            if (savedMsg?.id && d?.provider_message_id) {
+              await supabase.from('messages').update({ provider_message_id: d.provider_message_id }).eq('id', savedMsg.id)
             }
           } else {
-            // UAZAPI: enfileira para o worker
+            // UAZAPI: enfileira para o worker (que marca mensagem/agendamento como failed se o envio falhar)
             await supabase.rpc('enqueue_job', {
               _type: 'send_whatsapp',
               _payload: JSON.stringify({
@@ -107,6 +118,8 @@ Deno.serve(async (req) => {
                 phone: contact.phone,
                 message: msg.content,
                 conversation_id: msg.conversation_id,
+                message_id: savedMsg?.id ?? null,
+                scheduled_message_id: msg.id,
               }),
               _tenant_id: msg.tenant_id,
             })
