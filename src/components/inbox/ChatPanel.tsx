@@ -266,6 +266,34 @@ const hasMedia = (msg: Message) => {
   const mt = ((msg as any).media_type || '').toLowerCase();
   return mt.includes('audio') || mt.includes('image') || mt.includes('video') || mt.includes('document') || mt.includes('ptt');
 };
+
+// Imagem do cabeçalho de um template Meta (persistida em messages.storage_path
+// pelo wa-meta-send). Assina a URL do bucket sob demanda e cacheia.
+function TemplateHeaderImage({ storagePath }: { storagePath: string }) {
+  const cacheKey = `storage:${storagePath}`;
+  const [url, setUrl] = useState<string | null>(mediaCache.get(cacheKey) ?? null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  useEffect(() => {
+    if (url) return;
+    let cancelled = false;
+    supabase.storage.from('whatsapp-media').createSignedUrl(storagePath, 60 * 60 * 6)
+      .then(({ data }) => {
+        if (!cancelled && data?.signedUrl) {
+          mediaCache.set(cacheKey, data.signedUrl);
+          setUrl(data.signedUrl);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [storagePath]);
+  if (!url || url === 'expired') return null;
+  return (
+    <>
+      <img src={url} alt="Cabeçalho do template" onClick={() => setLightboxOpen(true)}
+        className="rounded-lg max-h-48 w-auto mb-1.5 cursor-pointer hover:opacity-90 transition-opacity" />
+      {lightboxOpen && <ImageLightbox src={url} onClose={() => setLightboxOpen(false)} />}
+    </>
+  );
+}
 interface ChatPanelProps {
   conversationId: string;
   contact?: Contact;
@@ -675,6 +703,9 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                     msg.direction === 'outbound' && !isFailed ? 'text-white/80' : 'text-muted-foreground')}>
                     Template
                   </div>
+                )}
+                {isTemplate && ((msg as any).storage_path || pmeta.header_media_storage_path) && (
+                  <TemplateHeaderImage storagePath={(msg as any).storage_path || pmeta.header_media_storage_path} />
                 )}
                 {isMedia && tenant && <MediaBubble msg={msg} tenantId={tenant.id} conversationId={conversationId} providerInfo={providerInfo} />}
                 {(!isMedia || (msg.content && !msg.content.startsWith('['))) && <span className="whitespace-pre-wrap">{msg.content}</span>}

@@ -39,6 +39,8 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   // Header de mídia: 'default' = veio do padrão salvo no template; 'custom' = upload/URL desta sessão
   const [mediaSource, setMediaSource] = useState<'default' | 'custom' | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
+  // Path no bucket whatsapp-media — enviado ao wa-meta-send p/ persistir na mensagem (imagem na bolha do chat)
+  const [mediaStoragePath, setMediaStoragePath] = useState<string | null>(null);
   const mediaFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -139,6 +141,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
         if (url && !cancelled) {
           setValues(prev => prev[mediaSlot.id] ? prev : { ...prev, [mediaSlot.id]: url! });
           setMediaSource('default');
+          if (def.storage_path) setMediaStoragePath(def.storage_path);
         }
       } catch (e) {
         console.warn('[SendTemplateDialog] falha ao resolver mídia padrão do template', e);
@@ -163,6 +166,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
       if (signErr || !signed?.signedUrl) { toast.error('Falha ao gerar URL do arquivo.'); return; }
       setValues(prev => ({ ...prev, [mediaSlot.id]: signed.signedUrl }));
       setMediaSource('custom');
+      setMediaStoragePath(storagePath);
       // Salva como padrão do template (best-effort — RLS permite admin/manager;
       // para atendentes o update falha silencioso e o envio segue normal).
       try {
@@ -257,6 +261,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
             language: selected.language,
             components,
           },
+          ...(mediaStoragePath ? { header_media_storage_path: mediaStoragePath } : {}),
         },
       });
       if (error) throw error;
@@ -269,6 +274,8 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
       onOpenChange(false);
       setSelectedId('');
       setValues({});
+      setMediaSource(null);
+      setMediaStoragePath(null);
     } catch (e: any) {
       toast.error(e.message ?? 'Erro');
     } finally {
@@ -296,7 +303,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
           <div className="space-y-3">
             <div className="space-y-1">
               <Label>Template</Label>
-              <Select value={selectedId} onValueChange={(v) => { setSelectedId(v); setValues({}); setMediaSource(null); }}>
+              <Select value={selectedId} onValueChange={(v) => { setSelectedId(v); setValues({}); setMediaSource(null); setMediaStoragePath(null); }}>
                 <SelectTrigger><SelectValue placeholder="Escolha um template" /></SelectTrigger>
                 <SelectContent>
                   {templates.map(t => (

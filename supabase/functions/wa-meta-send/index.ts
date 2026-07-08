@@ -90,6 +90,9 @@ interface SendBody {
     language: string; // 'pt_BR'
     components?: Array<Record<string, unknown>>;
   };
+  // Path no bucket whatsapp-media da mídia do header do template (quando houver).
+  // Persistido em messages.storage_path para o ChatPanel exibir a imagem na bolha.
+  header_media_storage_path?: string;
 }
 
 serve(async (req) => {
@@ -517,6 +520,7 @@ serve(async (req) => {
         persistMediaType = "TemplateMessage";
         persistMeta.template_name = body.template.name;
         persistMeta.template_language = body.template.language;
+        if (body.header_media_storage_path) persistMeta.header_media_storage_path = body.header_media_storage_path;
         try {
           const { data: tpl } = await supabaseAdmin
             .from("whatsapp_message_templates")
@@ -538,6 +542,8 @@ serve(async (req) => {
         content: persistContent,
         media_type: persistMediaType,
         media_url: body.media_url ?? null,
+        // Header de mídia do template → ChatPanel assina e exibe a imagem na bolha
+        storage_path: (t === "template" && body.header_media_storage_path) ? body.header_media_storage_path : null,
         provider_message_id: providerMessageId,
         sender_membership_id: membership!.id,
         provider_metadata: persistMeta,

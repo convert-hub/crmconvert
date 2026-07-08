@@ -255,10 +255,12 @@ serve(async (req) => {
       String(headerComp?.format || "").toUpperCase()
     ] ?? null;
     let headerMediaId: string | null = null;
+    let headerStoragePath: string | null = null;
 
     if (headerFmt && instance.provider === "meta_cloud") {
       const tplVars = (campaign.template_variables ?? {}) as Record<string, any>;
       headerMediaId = tplVars._header_media_id ?? null;
+      headerStoragePath = tplVars._header_media?.storage_path ?? (template as any).default_header_media?.storage_path ?? null;
 
       if (!headerMediaId) {
         // Fonte: anexo da campanha (_header_media) > mídia padrão do template
@@ -441,6 +443,7 @@ serve(async (req) => {
                 language: template.language,
                 components,
               },
+              ...(headerStoragePath ? { header_media_storage_path: headerStoragePath } : {}),
             },
           });
           if (sendErr || !sendRes?.ok) {
