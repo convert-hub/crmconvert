@@ -489,11 +489,18 @@ export default function InboxPage() {
                   )}
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-xs text-muted-foreground">{channelLabels[conv.channel] ?? conv.channel}</span>
-                    {(conv.last_customer_message_at || conv.last_message_at) && (
-                      <span className="text-[10px] text-muted-foreground" title={conv.last_customer_message_at ? 'Última msg do contato' : 'Última atividade'}>
-                        {conv.last_customer_message_at ? '↩ ' : ''}{formatDistanceToNow(new Date(conv.last_customer_message_at || conv.last_message_at!), { locale: ptBR, addSuffix: true })}
-                      </span>
-                    )}
+                    {(conv.last_message_at || conv.last_customer_message_at) && (() => {
+                      // Timer = última mensagem em QUALQUER direção (atualiza também quando a
+                      // empresa envia). O ↩ continua marcando quando o CONTATO foi o último a falar.
+                      const lastAt = conv.last_message_at || conv.last_customer_message_at!;
+                      const contactWasLast = !!conv.last_customer_message_at &&
+                        (!conv.last_agent_message_at || new Date(conv.last_customer_message_at) >= new Date(conv.last_agent_message_at));
+                      return (
+                        <span className="text-[10px] text-muted-foreground" title={contactWasLast ? 'Última msg do contato' : 'Última mensagem'}>
+                          {contactWasLast ? '↩ ' : ''}{formatDistanceToNow(new Date(lastAt), { locale: ptBR, addSuffix: true })}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <Badge variant="outline" className={`text-[10px] rounded-full ${statusColors[conv.status] ?? ''}`}>{conversationStatusLabels[conv.status] ?? conv.status}</Badge>

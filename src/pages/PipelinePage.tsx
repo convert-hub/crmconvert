@@ -212,7 +212,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
           )}
           <EngagementBadge score={engagementScore} />
           <div className={`flex items-center gap-1 text-[10px] ml-auto ${alertStatus === 'inactive' ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}
-            title={lastContactInteractionAt ? `Última msg do contato: ${format(new Date(lastContactInteractionAt), "dd/MM/yyyy HH:mm")}` : `Atualizado: ${format(new Date(opp.updated_at), "dd/MM/yyyy HH:mm")}`}>
+            title={lastContactInteractionAt ? `Última mensagem: ${format(new Date(lastContactInteractionAt), "dd/MM/yyyy HH:mm")}` : `Atualizado: ${format(new Date(opp.updated_at), "dd/MM/yyyy HH:mm")}`}>
             <Clock className="h-3 w-3" />
             {lastContactInteractionAt
               ? formatDistanceToNow(new Date(lastContactInteractionAt), { locale: ptBR, addSuffix: true })
@@ -498,22 +498,24 @@ export default function PipelinePage() {
       });
   }, [tenant]);
 
-  // Update last-customer-interaction map from loaded contacts (best-effort, scoped to visible cards)
+  // Update last-message map from loaded contacts (best-effort, scoped to visible cards).
+  // Usa last_message_at (qualquer direção) — o timer do card deve atualizar também
+  // quando a EMPRESA envia mensagem, não só quando o contato responde.
   const refreshLastInteraction = useCallback(async (opps: Opp[]) => {
     if (!tenant || opps.length === 0) return;
     const contactIds = [...new Set(opps.map(o => o.contact_id).filter(Boolean) as string[])];
     if (contactIds.length === 0) return;
     const { data: convs } = await supabase.from('conversations')
-      .select('contact_id, last_customer_message_at')
+      .select('contact_id, last_message_at')
       .eq('tenant_id', tenant.id)
       .in('contact_id', contactIds)
-      .not('last_customer_message_at', 'is', null);
+      .not('last_message_at', 'is', null);
     const map: Record<string, string> = {};
-    for (const c of (convs ?? []) as { contact_id: string; last_customer_message_at: string }[]) {
-      if (!c.contact_id || !c.last_customer_message_at) continue;
+    for (const c of (convs ?? []) as { contact_id: string; last_message_at: string }[]) {
+      if (!c.contact_id || !c.last_message_at) continue;
       const prev = map[c.contact_id];
-      if (!prev || new Date(c.last_customer_message_at) > new Date(prev)) {
-        map[c.contact_id] = c.last_customer_message_at;
+      if (!prev || new Date(c.last_message_at) > new Date(prev)) {
+        map[c.contact_id] = c.last_message_at;
       }
     }
     setLastContactInteractionByContact(prev => ({ ...prev, ...map }));
