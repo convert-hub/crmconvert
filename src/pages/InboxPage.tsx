@@ -580,6 +580,7 @@ export default function InboxPage() {
               status={selectedData?.status}
               showHeader={false}
               className="flex-1"
+              onConversationDeleted={() => { setSelectedConv(null); loadConversations(); }}
             />
           </>
         ) : (

@@ -31,6 +31,7 @@ import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
 import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
+import { useCascadeDelete } from '@/hooks/useCascadeDelete';
 import VariablePicker from '@/components/shared/VariablePicker';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
 import { CtwaBadge } from '@/components/shared/CtwaBadge';
@@ -301,10 +302,13 @@ interface ChatPanelProps {
   status?: string;
   showHeader?: boolean;
   className?: string;
+  /** Chamado após excluir conversa+contato (ex: erro "número não está no WhatsApp"). */
+  onConversationDeleted?: () => void;
 }
-export default function ChatPanel({ conversationId, contact, channel, status, showHeader = true, className }: ChatPanelProps) {
+export default function ChatPanel({ conversationId, contact, channel, status, showHeader = true, className, onConversationDeleted }: ChatPanelProps) {
   const { tenant, membership } = useAuth();
   const composerVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'inbox-composer' });
+  const { deleteConversationCascade, loading: cascadeDeleting } = useCascadeDelete();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
@@ -671,9 +675,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const failedCode = failedErr?.code;
           const isOutsideWindow = failedCode === 131047;
           const providerLabel = providerInfo?.provider === 'meta_cloud' ? 'WhatsApp Oficial' : 'WhatsApp';
-          const failedMsg = isOutsideWindow
+          const rawFailedMsg = isOutsideWindow
             ? 'Cliente fora da janela de 24h. Envie um template para reativar a conversa.'
             : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || pmeta.error_message || `Falha no envio via ${providerLabel}.`);
+          // Erro específico UAZAPI/Meta: número não tem WhatsApp → texto simples + opção de limpar
+          const notOnWhatsApp = isFailed && /is not on whatsapp|not a valid whatsapp/i.test(String(rawFailedMsg));
+          const failedMsg = notOnWhatsApp ? 'Esse número não está no WhatsApp.' : rawFailedMsg;
           const isMedia = hasMedia(msg);
           const msgIsInternal = (msg as any).is_internal === true;
           const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
@@ -723,11 +730,23 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                 </div>
               </div>
               {isFailed && msg.direction === 'outbound' && !msgIsInternal && (
-                <div className="mt-1 max-w-[75%] flex items-center gap-2 text-[11px] text-destructive">
+                <div className="mt-1 max-w-[75%] flex items-center gap-2 text-[11px] text-destructive flex-wrap">
                   <span>{failedMsg}</span>
                   {isOutsideWindow && providerInfo?.provider === 'meta_cloud' && (
                     <button onClick={() => setShowTemplate(true)} className="underline hover:no-underline font-medium">
                       Enviar template
+                    </button>
+                  )}
+                  {notOnWhatsApp && (
+                    <button
+                      disabled={cascadeDeleting}
+                      onClick={async () => {
+                        if (!confirm('Excluir esta conversa e o contato? Oportunidades e atividades deste contato também serão removidas. Esta ação não pode ser desfeita.')) return;
+                        const ok = await deleteConversationCascade(conversationId, effectiveContact?.id ?? null, ['contact']);
+                        if (ok) onConversationDeleted?.();
+                      }}
+                      className="underline hover:no-underline font-medium disabled:opacity-50">
+                      Excluir conversa e contato
                     </button>
                   )}
                 </div>
