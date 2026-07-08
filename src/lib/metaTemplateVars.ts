@@ -21,6 +21,36 @@ export interface TemplateSlot {
   id: string;
   /** Human-friendly label shown next to the input. */
   label: string;
+  /**
+   * 'text' (default) → valor é texto para um {{var}}.
+   * 'media' → HEADER de mídia (IMAGE/VIDEO/DOCUMENT); valor é uma URL pública/assinada.
+   * A Meta EXIGE o parâmetro de mídia em CADA envio — a imagem enviada na criação
+   * do template é só amostra de aprovação (example.header_handle) e expira.
+   */
+  kind?: 'text' | 'media';
+  /** Só quando kind === 'media'. */
+  mediaFormat?: 'image' | 'video' | 'document';
+}
+
+/** Formatos de HEADER de mídia aceitos pela Meta (campo "format" do template). */
+const MEDIA_FORMATS: Record<string, 'image' | 'video' | 'document'> = {
+  IMAGE: 'image',
+  VIDEO: 'video',
+  DOCUMENT: 'document',
+};
+
+const MEDIA_LABELS: Record<'image' | 'video' | 'document', string> = {
+  image: 'Cabeçalho · Imagem',
+  video: 'Cabeçalho · Vídeo',
+  document: 'Cabeçalho · Documento',
+};
+
+/** Retorna o formato de mídia do HEADER do template, ou null se não houver. */
+export function getHeaderMediaFormat(components: any[] | null | undefined): 'image' | 'video' | 'document' | null {
+  if (!Array.isArray(components)) return null;
+  const header = components.find((c: any) => String(c?.type || '').toUpperCase() === 'HEADER');
+  if (!header) return null;
+  return MEDIA_FORMATS[String(header.format || 'TEXT').toUpperCase()] ?? null;
 }
 
 const VAR_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
@@ -65,6 +95,18 @@ export function extractTemplateSlots(components: any[] | null | undefined): Temp
           label: `Cabeçalho · {{${k.key}}}`,
         });
       }
+    } else if (type === 'HEADER' && MEDIA_FORMATS[String(c?.format || '').toUpperCase()]) {
+      // HEADER de mídia: a Meta exige o parâmetro (link ou media_id) em todo envio.
+      const fmt = MEDIA_FORMATS[String(c.format).toUpperCase()];
+      slots.push({
+        component: 'header',
+        key: '_media',
+        named: false,
+        kind: 'media',
+        mediaFormat: fmt,
+        id: 'header:_media',
+        label: MEDIA_LABELS[fmt],
+      });
     } else if (type === 'BODY') {
       for (const k of extractKeys(c.text || '')) {
         slots.push({
@@ -115,10 +157,14 @@ export function buildMetaComponents(
   }
 
   const toParam = (s: TemplateSlot) => {
-    const text = (values[s.id] ?? '').toString();
+    const raw = (values[s.id] ?? '').toString();
+    if (s.kind === 'media' && s.mediaFormat) {
+      // URL pública/assinada da mídia → { type:'image', image:{ link } } (idem video/document)
+      return { type: s.mediaFormat, [s.mediaFormat]: { link: raw } };
+    }
     return s.named
-      ? { type: 'text', parameter_name: s.key, text }
-      : { type: 'text', text };
+      ? { type: 'text', parameter_name: s.key, text: raw }
+      : { type: 'text', text: raw };
   };
 
   if (headerSlots.length > 0) {

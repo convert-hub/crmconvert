@@ -14,8 +14,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Send, Play, Pause, Trash2, Users, FileCheck2, Loader2, Download } from 'lucide-react';
+import { Plus, Send, Play, Pause, Trash2, Users, FileCheck2, Loader2, Download, Upload, Image as ImageIcon } from 'lucide-react';
 import { exportCampaignCsv } from '@/lib/exportCampaign';
+import { getHeaderMediaFormat } from '@/lib/metaTemplateVars';
 
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -25,7 +26,13 @@ import { VariableInput } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
 
 interface MetaInstance { id: string; display_name: string | null; instance_name: string; }
-interface Template { id: string; name: string; language: string; whatsapp_instance_id: string; components: any; }
+interface Template { id: string; name: string; language: string; whatsapp_instance_id: string; components: any; default_header_media?: { storage_path?: string; url?: string; mime?: string; format?: string } | null; }
+
+const HEADER_MEDIA_ACCEPT: Record<string, string> = {
+  image: 'image/jpeg,image/png',
+  video: 'video/mp4',
+  document: 'application/pdf',
+};
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   draft: { label: 'Rascunho', color: 'bg-muted text-muted-foreground' },
@@ -56,6 +63,10 @@ export default function CampaignsPage() {
   const [filter, setFilter] = useState<CampaignAudienceFilter>({ exclude_do_not_contact: true, has_phone: true });
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [audienceCount, setAudienceCount] = useState<number | null>(null);
+  // Header de mídia (templates com HEADER IMAGE/VIDEO/DOCUMENT): a Meta exige a mídia em cada envio.
+  const [headerMedia, setHeaderMedia] = useState<{ storage_path: string; mime: string } | null>(null);
+  const [headerMediaBusy, setHeaderMediaBusy] = useState(false);
+  const headerFileRef = useRef<HTMLInputElement>(null);
   const loadingRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -80,7 +91,7 @@ export default function CampaignsPage() {
     (supabase.from as any)('whatsapp_instances_public').select('id, display_name, instance_name')
       .eq('tenant_id', tenant.id).eq('provider', 'meta_cloud').eq('is_active', true)
       .then(({ data }: any) => setInstances(data ?? []));
-    supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components')
+    supabase.from('whatsapp_message_templates').select('id, name, language, whatsapp_instance_id, components, default_header_media')
       .eq('tenant_id', tenant.id).eq('status', 'APPROVED').order('name')
       .then(({ data }) => setTemplates((data as any) ?? []));
     return () => { abortRef.current?.abort(); };
@@ -109,6 +120,25 @@ export default function CampaignsPage() {
   const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? '').match(/\{\{(\d+)\}\}/g) || []))
     .map((m: string) => m.replace(/[{}]/g, '')).sort((a, b) => Number(a) - Number(b)) : [];
   const tplsForInstance = templates.filter(t => !instanceId || t.whatsapp_instance_id === instanceId);
+  const headerMediaFormat = getHeaderMediaFormat(selectedTpl?.components ?? null);
+  const tplHasDefaultMedia = !!(selectedTpl?.default_header_media?.storage_path || selectedTpl?.default_header_media?.url);
+
+  const handleHeaderMediaUpload = async (file: File) => {
+    if (!tenant) return;
+    setHeaderMediaBusy(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || (file.type.split('/')[1] ?? 'bin');
+      const storagePath = `${tenant.id}/template-headers/campaigns/${crypto.randomUUID()}.${ext}`;
+      const { error } = await supabase.storage
+        .from('whatsapp-media')
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+      if (error) { toast.error('Falha ao subir arquivo: ' + error.message); return; }
+      setHeaderMedia({ storage_path: storagePath, mime: file.type });
+      toast.success('Arquivo anexado à campanha');
+    } finally {
+      setHeaderMediaBusy(false);
+    }
+  };
 
   const buildAudienceQuery = () => {
     if (!tenant) return null;
@@ -135,6 +165,7 @@ export default function CampaignsPage() {
     setThrottle(60); setScheduledAt(''); setVariables({});
     setFilter({ exclude_do_not_contact: true, has_phone: true });
     setAudienceCount(null);
+    setHeaderMedia(null);
   };
 
   const handleCreate = async () => {
@@ -143,8 +174,17 @@ export default function CampaignsPage() {
       toast.error('Preencha nome, instância e template');
       return;
     }
+    if (headerMediaFormat && !headerMedia && !tplHasDefaultMedia) {
+      toast.error('Este template tem mídia no cabeçalho. Anexe o arquivo antes de criar a campanha — a Meta exige a mídia em cada envio.');
+      return;
+    }
     setBusy('create');
     try {
+      // _header_media: anexo desta campanha; se ausente, o dispatch usa o default do template.
+      const tplVariables: Record<string, unknown> = { ...variables };
+      if (headerMediaFormat && headerMedia) {
+        tplVariables._header_media = { ...headerMedia, format: headerMediaFormat };
+      }
       // 1) Create campaign
       const { data: campaign, error } = await supabase.from('campaigns').insert({
         tenant_id: tenant.id,
@@ -152,7 +192,7 @@ export default function CampaignsPage() {
         description: description || null,
         whatsapp_instance_id: instanceId,
         template_id: templateId,
-        template_variables: variables,
+        template_variables: tplVariables as any,
         audience_filter: filter as any,
         throttle_per_minute: throttle,
         scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
@@ -257,7 +297,7 @@ export default function CampaignsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Template aprovado</Label>
-                  <Select value={templateId} onValueChange={setTemplateId} disabled={!instanceId}>
+                  <Select value={templateId} onValueChange={v => { setTemplateId(v); setHeaderMedia(null); }} disabled={!instanceId}>
                     <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Escolha" /></SelectTrigger>
                     <SelectContent>
                       {tplsForInstance.map(t => <SelectItem key={t.id} value={t.id}>{t.name} ({t.language})</SelectItem>)}
@@ -268,6 +308,36 @@ export default function CampaignsPage() {
 
               {selectedTpl && bodyComp?.text && (
                 <div className="rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">{bodyComp.text}</div>
+              )}
+
+              {headerMediaFormat && (
+                <div className="space-y-1.5 rounded-lg border border-border p-3 bg-accent/30">
+                  <Label className="text-xs font-medium flex items-center gap-1.5">
+                    <ImageIcon className="h-3.5 w-3.5" />
+                    {headerMediaFormat === 'image' ? 'Imagem do cabeçalho' : headerMediaFormat === 'video' ? 'Vídeo do cabeçalho' : 'Documento do cabeçalho'}
+                  </Label>
+                  <input
+                    type="file"
+                    ref={headerFileRef}
+                    className="hidden"
+                    accept={HEADER_MEDIA_ACCEPT[headerMediaFormat]}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleHeaderMediaUpload(f); e.target.value = ''; }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button type="button" size="sm" variant="outline" className="h-8 text-xs"
+                      disabled={headerMediaBusy} onClick={() => headerFileRef.current?.click()}>
+                      {headerMediaBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                      {headerMedia ? 'Trocar arquivo' : 'Anexar arquivo'}
+                    </Button>
+                    <span className="text-[11px] text-muted-foreground">
+                      {headerMedia
+                        ? 'Arquivo anexado a esta campanha'
+                        : tplHasDefaultMedia
+                          ? 'Sem anexo — será usada a mídia padrão do template'
+                          : 'Obrigatório: a Meta exige a mídia em cada envio'}
+                    </span>
+                  </div>
+                </div>
               )}
 
               {placeholders.length > 0 && (

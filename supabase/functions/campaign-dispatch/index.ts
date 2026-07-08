@@ -246,6 +246,62 @@ serve(async (req) => {
     const placeholders = bodyComp ? Array.from(new Set(((bodyComp.text as string) ?? "").match(/\{\{(\d+)\}\}/g) || []))
       .map((m: string) => m.replace(/[{}]/g, "")).sort((a, b) => Number(a) - Number(b)) : [];
 
+    // ── Header de mídia (Meta exige o parâmetro em todo envio de template
+    // com HEADER IMAGE/VIDEO/DOCUMENT; sem ele: erro #132012 em cada destinatário).
+    // Estratégia: upload ÚNICO para a Meta no primeiro tick → media_id (válido ~30
+    // dias) reutilizado em todos os envios e cacheado em template_variables.
+    const headerComp = (template.components as any[])?.find((c: any) => String(c?.type).toUpperCase() === "HEADER");
+    const headerFmt = ({ IMAGE: "image", VIDEO: "video", DOCUMENT: "document" } as Record<string, string>)[
+      String(headerComp?.format || "").toUpperCase()
+    ] ?? null;
+    let headerMediaId: string | null = null;
+
+    if (headerFmt && instance.provider === "meta_cloud") {
+      const tplVars = (campaign.template_variables ?? {}) as Record<string, any>;
+      headerMediaId = tplVars._header_media_id ?? null;
+
+      if (!headerMediaId) {
+        // Fonte: anexo da campanha (_header_media) > mídia padrão do template
+        const source = tplVars._header_media ?? (template as any).default_header_media ?? null;
+        if (!source || (!source.storage_path && !source.url)) {
+          await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
+          console.error('[campaign-dispatch] header_media_required', { campaignId, template: template.name });
+          return { ok: false, error: "header_media_required", processed: 0 };
+        }
+        let mediaUrl: string | null = source.url ?? null;
+        if (source.storage_path) {
+          const { data: signed } = await supabase.storage
+            .from("whatsapp-media")
+            .createSignedUrl(source.storage_path, 60 * 60);
+          mediaUrl = signed?.signedUrl ?? null;
+        }
+        if (!mediaUrl) {
+          await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
+          console.error('[campaign-dispatch] header_media_url_unresolvable', { campaignId });
+          return { ok: false, error: "header_media_url_unresolvable", processed: 0 };
+        }
+        const { data: upRes, error: upErr } = await supabase.functions.invoke("wa-meta-send", {
+          body: {
+            action: "upload_media",
+            whatsapp_instance_id: instance.id,
+            media_url: mediaUrl,
+            type: headerFmt,
+            media_mime: source.mime ?? undefined,
+          },
+        });
+        if (upErr || !upRes?.ok || !upRes?.media_id) {
+          await supabase.from("campaigns").update({ status: "failed" }).eq("id", campaignId);
+          console.error('[campaign-dispatch] header_media_upload_failed', { campaignId, err: upErr?.message ?? upRes?.error });
+          return { ok: false, error: `header_media_upload_failed:${upErr?.message ?? upRes?.error ?? "unknown"}`, processed: 0 };
+        }
+        headerMediaId = upRes.media_id as string;
+        await supabase.from("campaigns")
+          .update({ template_variables: { ...tplVars, _header_media_id: headerMediaId } })
+          .eq("id", campaignId);
+        console.log('[campaign-dispatch] header_media_uploaded', { campaignId, headerFmt, headerMediaId });
+      }
+    }
+
     let processed = 0;
     let sent = 0;
     let failed = 0;
@@ -362,6 +418,12 @@ serve(async (req) => {
 
         if (instance.provider === "meta_cloud") {
           const components: any[] = [];
+          if (headerFmt && headerMediaId) {
+            components.push({
+              type: "header",
+              parameters: [{ type: headerFmt, [headerFmt]: { id: headerMediaId } }],
+            });
+          }
           if (placeholders.length > 0) {
             components.push({
               type: "body",

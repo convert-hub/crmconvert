@@ -163,6 +163,12 @@ export interface WhatsAppMessageTemplate {
   status: string | null;
   components: Array<Record<string, unknown>>;
   meta_template_id: string | null;
+  /**
+   * Mídia padrão do cabeçalho (templates com HEADER IMAGE/VIDEO/DOCUMENT).
+   * A Meta exige a mídia em cada envio; este default evita re-upload toda vez.
+   * { storage_path?: string; url?: string; mime?: string; format: 'image'|'video'|'document' }
+   */
+  default_header_media?: { storage_path?: string; url?: string; mime?: string; format?: string } | null;
   created_at: string;
   updated_at: string;
 }

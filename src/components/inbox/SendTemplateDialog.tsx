@@ -1,16 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Send } from 'lucide-react';
+import { Loader2, Send, Image as ImageIcon, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WhatsAppMessageTemplate } from '@/types/crm';
 import { extractTemplateSlots, buildMetaComponents, renderPreview, type TemplateSlot } from '@/lib/metaTemplateVars';
 import { VariableInput } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+
+// Extensões/accept por formato de header de mídia (limites da Cloud API)
+const MEDIA_ACCEPT: Record<string, string> = {
+  image: 'image/jpeg,image/png',
+  video: 'video/mp4',
+  document: 'application/pdf',
+};
 
 interface Props {
   open: boolean;
@@ -29,6 +36,10 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   const [selectedId, setSelectedId] = useState<string>('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [realData, setRealData] = useState<{ contact: any | null; opportunity: any | null }>({ contact: null, opportunity: null });
+  // Header de mídia: 'default' = veio do padrão salvo no template; 'custom' = upload/URL desta sessão
+  const [mediaSource, setMediaSource] = useState<'default' | 'custom' | null>(null);
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const mediaFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -93,14 +104,79 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
     [selected],
   );
 
-  // Pre-fill the first slot with the contact name, if available — saves typing
+  // Pre-fill the first TEXT slot with the contact name, if available — saves typing.
+  // (media slots são preenchidos pelo default do template, não pelo nome do contato)
   useEffect(() => {
     if (!selected || slots.length === 0 || !contactName) return;
+    const firstText = slots.find(s => s.kind !== 'media');
+    if (!firstText) return;
     setValues(prev => {
-      if (prev[slots[0].id]) return prev;
-      return { ...prev, [slots[0].id]: contactName };
+      if (prev[firstText.id]) return prev;
+      return { ...prev, [firstText.id]: contactName };
     });
   }, [selected, slots, contactName]);
+
+  const mediaSlot = slots.find(s => s.kind === 'media');
+
+  // Header de mídia: pré-preenche com a mídia padrão salva no template (se houver).
+  // storage_path → signed URL de 24h; url → usa direto.
+  useEffect(() => {
+    if (!selected || !mediaSlot) { setMediaSource(null); return; }
+    const def = (selected as any).default_header_media as { storage_path?: string; url?: string } | null;
+    if (!def || values[mediaSlot.id]) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let url: string | null = null;
+        if (def.storage_path) {
+          const { data: signed } = await supabase.storage
+            .from('whatsapp-media')
+            .createSignedUrl(def.storage_path, 60 * 60 * 24);
+          url = signed?.signedUrl ?? null;
+        } else if (def.url) {
+          url = def.url;
+        }
+        if (url && !cancelled) {
+          setValues(prev => prev[mediaSlot.id] ? prev : { ...prev, [mediaSlot.id]: url! });
+          setMediaSource('default');
+        }
+      } catch (e) {
+        console.warn('[SendTemplateDialog] falha ao resolver mídia padrão do template', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selected, mediaSlot?.id]);
+
+  const handleMediaUpload = async (file: File) => {
+    if (!selected || !mediaSlot) return;
+    setMediaBusy(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || (file.type.split('/')[1] ?? 'bin');
+      const storagePath = `${tenantId}/template-headers/${selected.id}/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('whatsapp-media')
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+      if (upErr) { toast.error('Falha ao subir arquivo: ' + upErr.message); return; }
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('whatsapp-media')
+        .createSignedUrl(storagePath, 60 * 60 * 24);
+      if (signErr || !signed?.signedUrl) { toast.error('Falha ao gerar URL do arquivo.'); return; }
+      setValues(prev => ({ ...prev, [mediaSlot.id]: signed.signedUrl }));
+      setMediaSource('custom');
+      // Salva como padrão do template (best-effort — RLS permite admin/manager;
+      // para atendentes o update falha silencioso e o envio segue normal).
+      try {
+        await (supabase.from('whatsapp_message_templates') as any)
+          .update({ default_header_media: { storage_path: storagePath, mime: file.type, format: mediaSlot.mediaFormat } })
+          .eq('id', selected.id);
+        setTemplates(prev => prev.map(t => t.id === selected.id
+          ? { ...t, default_header_media: { storage_path: storagePath, mime: file.type, format: mediaSlot.mediaFormat } } as any
+          : t));
+      } catch { /* noop */ }
+    } finally {
+      setMediaBusy(false);
+    }
+  };
 
   const headerComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'HEADER');
   const bodyComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'BODY');
@@ -129,6 +205,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
   const emptyTokenSlots = useMemo(() => {
     const out: Record<string, string> = {};
     for (const s of slots) {
+      if (s.kind === 'media') continue; // valor é URL, não token
       const raw = values[s.id];
       if (!raw) continue;
       const m = raw.match(tokenOnlyRe);
@@ -162,7 +239,8 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
       const resolvedValues: Record<string, string> = {};
       for (const s of slots) {
         const raw = values[s.id] ?? '';
-        resolvedValues[s.id] = raw.replace(VAR_TOKEN_RE, (match, path) => {
+        // Media slots carregam URL — nunca aplicar substituição de tokens nelas
+        resolvedValues[s.id] = s.kind === 'media' ? raw : raw.replace(VAR_TOKEN_RE, (match, path) => {
           const r = resolveToken(path);
           return r ?? match;
         });
@@ -218,7 +296,7 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
           <div className="space-y-3">
             <div className="space-y-1">
               <Label>Template</Label>
-              <Select value={selectedId} onValueChange={(v) => { setSelectedId(v); setValues({}); }}>
+              <Select value={selectedId} onValueChange={(v) => { setSelectedId(v); setValues({}); setMediaSource(null); }}>
                 <SelectTrigger><SelectValue placeholder="Escolha um template" /></SelectTrigger>
                 <SelectContent>
                   {templates.map(t => (
@@ -230,8 +308,19 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
               </Select>
             </div>
 
-            {selected && (headerComp?.text || bodyComp?.text) && (
+            {selected && (headerComp?.text || bodyComp?.text || mediaSlot) && (
               <div className="rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap space-y-2">
+                {mediaSlot && (
+                  values[mediaSlot.id] && mediaSlot.mediaFormat === 'image' ? (
+                    <img src={values[mediaSlot.id]} alt="Cabeçalho" className="rounded-md max-h-28 w-auto" />
+                  ) : (
+                    <p className="flex items-center gap-1.5 text-muted-foreground">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      {mediaSlot.mediaFormat === 'image' ? 'Imagem no cabeçalho' : mediaSlot.mediaFormat === 'video' ? 'Vídeo no cabeçalho' : 'Documento no cabeçalho'}
+                      {!values[mediaSlot.id] && ' — pendente'}
+                    </p>
+                  )
+                )}
                 {headerComp?.text && (
                   <p className="font-semibold">{renderPreview(headerComp.text, valuesByKey)}</p>
                 )}
@@ -245,7 +334,36 @@ export default function SendTemplateDialog({ open, onOpenChange, tenantId, whats
             )}
 
 
-            {slots.map(s => (
+            {slots.map(s => s.kind === 'media' ? (
+              <div key={s.id} className="space-y-1">
+                <Label className="text-xs">{s.label}</Label>
+                <input
+                  type="file"
+                  ref={mediaFileRef}
+                  className="hidden"
+                  accept={MEDIA_ACCEPT[s.mediaFormat ?? 'image']}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleMediaUpload(f); e.target.value = ''; }}
+                />
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" variant="outline" className="rounded-xl h-8 text-xs"
+                    disabled={mediaBusy} onClick={() => mediaFileRef.current?.click()}>
+                    {mediaBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                    {values[s.id] ? 'Trocar arquivo' : 'Enviar arquivo'}
+                  </Button>
+                  {values[s.id] && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {mediaSource === 'default' ? 'Usando mídia padrão do template' : 'Arquivo anexado (salvo como padrão)'}
+                    </span>
+                  )}
+                </div>
+                {!values[s.id] && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Este template tem {s.mediaFormat === 'image' ? 'imagem' : s.mediaFormat === 'video' ? 'vídeo' : 'documento'} no cabeçalho.
+                    A Meta exige o arquivo em todo envio — a imagem cadastrada na aprovação é só amostra.
+                  </p>
+                )}
+              </div>
+            ) : (
               <div key={s.id} className="space-y-1">
                 <Label htmlFor={`var-${s.id}`} className="text-xs">{s.label}</Label>
                 <VariableInput
