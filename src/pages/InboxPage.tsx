@@ -219,7 +219,9 @@ export default function InboxPage() {
     if (filterMode === 'unanswered') {
       query = query.order('last_customer_message_at', { ascending: true, nullsFirst: false });
     } else {
-      query = query.order('last_message_at', { ascending: false });
+      // nullsFirst:false — sem isso, DESC põe NULL primeiro e conversas vazias
+      // (criadas sem last_message_at) ficam fixas no topo da lista.
+      query = query.order('last_message_at', { ascending: false, nullsFirst: false });
     }
     const canViewAll = (membership as any)?.can_view_all === true;
     if (role === 'attendant' && membership && !canViewAll) {
@@ -283,7 +285,7 @@ export default function InboxPage() {
       if (filterMode === 'unanswered') {
         q = q.order('last_customer_message_at', { ascending: true, nullsFirst: false });
       } else {
-        q = q.order('last_message_at', { ascending: false });
+        q = q.order('last_message_at', { ascending: false, nullsFirst: false });
       }
       const canViewAll = (membership as any)?.can_view_all === true;
       if (role === 'attendant' && membership && !canViewAll) {

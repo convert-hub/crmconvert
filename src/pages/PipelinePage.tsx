@@ -448,7 +448,8 @@ export default function PipelinePage() {
       .eq('tenant_id', tenant.id)
       .eq('contact_id', opp.contact_id)
       .in('status', ['open', 'waiting_customer', 'waiting_agent'])
-      .order('last_message_at', { ascending: false })
+      // nullsFirst:false — senão uma conversa vazia (NULL) ganha da conversa ativa
+      .order('last_message_at', { ascending: false, nullsFirst: false })
       .limit(1);
 
     if (convs && convs.length > 0) {
