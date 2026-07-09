@@ -183,10 +183,19 @@ serve(async (req) => {
           console.error('connect_number: /instance/all error:', e);
         }
 
-        const match = serverInstances.find((inst) => {
+        // Pode haver VÁRIAS instâncias com o mesmo owner (instâncias mortas antigas
+        // mantêm o número no campo owner). Adotar a errada faz o QR migrar a sessão
+        // para a instância morta e derrubar o sistema que estava conectado. Regra:
+        // preferir a CONECTADA; entre desconectadas, a atualizada mais recentemente.
+        const matches = serverInstances.filter((inst) => {
           const owner = String(inst?.owner || '').replace(/\D/g, '');
           return owner && candidates.includes(owner);
         });
+        const match = matches.find((inst) => String(inst?.status || '').toLowerCase() === 'connected')
+          || matches.sort((a, b) => new Date(b?.updated || 0).getTime() - new Date(a?.updated || 0).getTime())[0];
+        if (matches.length > 1) {
+          console.log(`connect_number: ${matches.length} instâncias com esse número — escolhida "${match?.name}" (status=${match?.status})`);
+        }
 
         const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
 
