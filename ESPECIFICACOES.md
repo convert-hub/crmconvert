@@ -47,6 +47,7 @@ CRM SaaS multi-tenant focado em atendimento via WhatsApp, com pipeline de vendas
 - Filtros com `conversation_id=eq.X` obrigatórios em subscriptions (previne vazamento cross-tenant).
 - Áudio: gravação, player, transcrição Whisper no worker (idempotência por `message_id`).
 - Templates Meta com mídia default de header, agendamento de mensagens.
+- **Nova conversa:** dialog permite escolher o canal/instância (Oficial ou UAZAPI); se a instância escolhida for Meta Cloud, após criar a conversa abre a seleção de template aprovado (API oficial só inicia conversa via template).
 
 ### 3.4 Automações
 - **Keywords:** captura de lead + ativação/desativação de IA (normalização estrita).
@@ -104,7 +105,4 @@ CRM SaaS multi-tenant focado em atendimento via WhatsApp, com pipeline de vendas
 ## 7. Rotas Principais
 
 - `/` `/login` `/onboarding` `/waiting-approval` `/update-password`
-- `/inbox` `/pipeline` `/contacts` `/activities` `/campaigns` `/campaigns/:id`
-- `/automations` `/flow-builder` `/flow/install/:token`
-- `/reports` `/dashboard` `/settings` `/prompt-studio` `/ai-suggestions` `/jobs`
-- `/admin` `/admin/tenants` `/admin/users` `/admin/apis`
+- `/inbox` `/pipeline` `/contacts` `/act

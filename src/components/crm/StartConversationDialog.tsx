@@ -7,9 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Search, MessageSquare, Loader2 } from 'lucide-react';
+import { Search, MessageSquare, Loader2, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 
 interface Props {
   open: boolean;
@@ -34,6 +35,8 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceId, setInstanceId] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  // Passo 2 do fluxo Meta: conversa criada aguardando escolha de template
+  const [templateStep, setTemplateStep] = useState<{ convId: string; instanceId: string; contactName: string | null } | null>(null);
 
   useEffect(() => {
     if (!open || !tenant || preselectedContact) return;
@@ -108,6 +111,18 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
         .select('id').single();
 
       if (error) { toast.error(error.message); return; }
+
+      // API oficial (Meta): a conversa só pode ser iniciada com um template aprovado.
+      // Abre o passo de seleção de template antes de ir para a inbox.
+      const selectedInst = instances.find(i => i.id === instanceId);
+      if (channel === 'whatsapp' && selectedInst?.provider === 'meta_cloud') {
+        const contactName = (preselectedContact ?? contacts.find(c => c.id === selectedContactId))?.name ?? null;
+        toast.success('Conversa criada. Escolha o template para enviar a primeira mensagem.');
+        onOpenChange(false);
+        setTemplateStep({ convId: (conv as any).id, instanceId, contactName });
+        return;
+      }
+
       toast.success('Conversa iniciada!');
       onOpenChange(false);
       navigate(`/inbox?conv=${(conv as any).id}`);
@@ -121,8 +136,17 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
   const contactList = preselectedContact ? [preselectedContact] : contacts;
   const showInstanceSelector = channel === 'whatsapp' && instances.length > 1;
   const providerLabel = (p: string | null) => p === 'meta_cloud' ? 'Oficial' : 'UAZAPI';
+  const isMetaSelected = channel === 'whatsapp'
+    && instances.find(i => i.id === instanceId)?.provider === 'meta_cloud';
+
+  // Encerra o passo de template e leva para a conversa na inbox
+  const finishTemplateStep = (convId: string) => {
+    setTemplateStep(null);
+    navigate(`/inbox?conv=${convId}`);
+  };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="rounded-2xl max-w-md">
         <DialogHeader>
@@ -186,12 +210,31 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
           {channel === 'whatsapp' && instances.length === 0 && (
             <p className="text-xs text-warning">Nenhuma instância de WhatsApp ativa. A conversa será criada, mas sem provider vinculado.</p>
           )}
+          {isMetaSelected && (
+            <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+              <FileText className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              A API oficial só permite iniciar conversas com um template aprovado. Após criar a conversa, você escolherá o template a enviar.
+            </p>
+          )}
           <Button onClick={handleStart} disabled={!selectedContactId || loading} className="w-full rounded-xl">
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <MessageSquare className="h-4 w-4 mr-2" />}
-            Iniciar Conversa
+            {isMetaSelected ? 'Continuar e escolher template' : 'Iniciar Conversa'}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
+
+    {templateStep && tenant && (
+      <SendTemplateDialog
+        open={!!templateStep}
+        onOpenChange={(v) => { if (!v && templateStep) finishTemplateStep(templateStep.convId); }}
+        tenantId={tenant.id}
+        whatsappInstanceId={templateStep.instanceId}
+        conversationId={templateStep.convId}
+        contactName={templateStep.contactName}
+        onSent={() => finishTemplateStep(templateStep.convId)}
+      />
+    )}
+    </>
   );
 }
