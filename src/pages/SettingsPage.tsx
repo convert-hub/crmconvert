@@ -91,8 +91,9 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   const [instanceName, setInstanceName] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
 
-  const callProxy = useCallback(async (action: string) => {
+  const callProxy = useCallback(async (action: string, extra?: Record<string, unknown>) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) throw new Error('Not authenticated');
     const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/uazapi-proxy`, {
@@ -102,7 +103,7 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
         'Authorization': `Bearer ${session.access_token}`,
         'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
       },
-      body: JSON.stringify({ action, tenant_id: tenantId }),
+      body: JSON.stringify({ action, tenant_id: tenantId, ...extra }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
@@ -136,21 +137,34 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
     return () => clearInterval(interval);
   }, [polling, checkStatus]);
 
-  const handleCreateInstance = async () => {
+  const handleConnectNumber = async () => {
+    const digits = phoneInput.replace(/\D/g, '');
+    if (digits.length < 10) {
+      toast.error('Digite o número com DDD, ex: 31 99999-8888');
+      return;
+    }
     setCreating(true);
     try {
-      const data = await callProxy('create_instance');
-      if (data.qrcode) {
+      // O backend consulta o servidor UAZAPI: se o número já tem instância
+      // (ex: conectada pelo Orbra), ela é adotada — sem criar duplicada.
+      const data = await callProxy('connect_number', { phone: digits });
+      if (data.status === 'connected') {
+        toast.success(data.adopted ? 'Número já conectado! Instância existente adotada.' : 'WhatsApp conectado!');
+        setWaStatus('connected');
+        setPhone(data.phone || null);
+        setInstanceName(data.instance_name || null);
+        setQrCode(null);
+      } else if (data.qrcode) {
         setQrCode(data.qrcode);
         setWaStatus('connecting');
         setPolling(true);
-        toast.success('Instância criada! Escaneie o QR code.');
+        toast.success(data.adopted ? 'Instância existente encontrada. Escaneie o QR para reconectar.' : 'Instância criada! Escaneie o QR code.');
       } else {
-        toast.success('Instância criada! Clique em "Obter QR Code" para conectar.');
+        toast.success('Instância pronta! Clique em "Obter QR Code" para conectar.');
         setWaStatus('connecting');
         setPolling(true);
       }
-      setInstanceName(data.instance_name || null);
+      if (data.instance_name) setInstanceName(data.instance_name);
     } catch (e: any) { toast.error(e.message); }
     setCreating(false);
   };
@@ -165,7 +179,7 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
   };
 
   const handleDisconnect = async () => {
-    if (!confirm('Desconectar WhatsApp?')) return;
+    if (!confirm('Desconectar WhatsApp?\n\nAtenção: se este número também é usado em outro sistema (ex: Orbra), ele será desconectado lá também — a conexão é única por número.')) return;
     try {
       await callProxy('disconnect');
       toast.success('WhatsApp desconectado');
@@ -192,11 +206,27 @@ function WhatsAppIntegrationCard({ tenantId }: { tenantId?: string }) {
         {waStatus === 'loading' && <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
 
         {waStatus === 'no_instance' && (
-          <div className="text-center py-6 space-y-3">
-            <p className="text-sm text-muted-foreground">Nenhuma instância WhatsApp configurada.</p>
-            <Button onClick={handleCreateInstance} disabled={creating} className="rounded-xl">
+          <div className="py-6 space-y-4 max-w-sm mx-auto">
+            <div className="space-y-2">
+              <Label htmlFor="wa-phone">Número do WhatsApp</Label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground font-mono shrink-0">+55</span>
+                <Input
+                  id="wa-phone"
+                  type="tel"
+                  placeholder="(31) 99999-8888"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  className="rounded-xl"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Digite com DDD, apenas números. Se o número já estiver conectado em outro sistema (ex: Orbra), a conexão existente será aproveitada — sem QR code.
+              </p>
+            </div>
+            <Button onClick={handleConnectNumber} disabled={creating} className="rounded-xl w-full">
               {creating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-              Criar Instância e Conectar
+              Conectar WhatsApp
             </Button>
           </div>
         )}

@@ -10,6 +10,67 @@ function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
+// Registra/atualiza o webhook do CRM de forma ADITIVA.
+// A UAZAPI v2 suporta múltiplos webhooks por instância (GET /webhook retorna array).
+// Um POST simples SOBRESCREVE o primeiro webhook da lista — o que apagaria o webhook
+// de outro sistema (ex: Orbra) compartilhando a mesma instância. Por isso:
+//   - se o webhook do CRM já existe → action:'update' com o id dele
+//   - se a lista está vazia → POST simples (primeiro webhook)
+//   - se há webhooks de outros sistemas → action:'add' (nunca sobrescrever)
+// Obs: NÃO excluímos 'wasSentByApi' — mensagens enviadas por outro sistema na mesma
+// instância chegam como eco e aparecem na timeline; o handler já deduplica por
+// provider_message_id os envios do próprio CRM.
+async function ensureWebhook(apiBase: string, instToken: string, webhookUrl: string) {
+  const events = ['messages', 'messages_update', 'connection'];
+  const excludeMessages = ['isGroupYes'];
+
+  let existing: any[] = [];
+  try {
+    const listRes = await fetch(`${apiBase}/webhook`, { headers: { 'token': instToken } });
+    if (listRes.ok) {
+      const parsed = await listRes.json();
+      existing = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+    }
+  } catch (e) {
+    console.error('ensureWebhook: failed to list webhooks:', e);
+  }
+
+  const isMine = (w: any) => typeof w?.url === 'string' && w.url.includes('/functions/v1/webhook-uazapi');
+  const mine = existing.find(isMine);
+
+  let whBodyPayload: Record<string, unknown>;
+  if (mine?.id) {
+    whBodyPayload = { action: 'update', id: mine.id, enabled: true, url: webhookUrl, events, excludeMessages };
+  } else if (existing.length === 0) {
+    whBodyPayload = { enabled: true, url: webhookUrl, events, excludeMessages };
+  } else {
+    whBodyPayload = { action: 'add', enabled: true, url: webhookUrl, events, excludeMessages };
+  }
+
+  const whRes = await fetch(`${apiBase}/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'token': instToken },
+    body: JSON.stringify(whBodyPayload),
+  });
+  const whBody = await whRes.text();
+  console.log(`ensureWebhook: mode=${whBodyPayload.action || 'create'}, existing=${existing.length}, status=${whRes.status}`, whBody);
+  return { status: whRes.status, response: whBody };
+}
+
+// Gera variantes do número BR para matching contra o campo "owner" das instâncias
+// UAZAPI (que pode vir com ou sem o 9º dígito). Retorna dígitos com DDI 55.
+function phoneCandidates(input: string): string[] {
+  let d = (input || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (!d) return [];
+  if (!d.startsWith('55')) d = `55${d}`;
+  const candidates = new Set<string>([d]);
+  const ddd = d.slice(2, 4);
+  const rest = d.slice(4);
+  if (rest.length === 9 && rest.startsWith('9')) candidates.add(`55${ddd}${rest.slice(1)}`);
+  if (rest.length === 8) candidates.add(`55${ddd}9${rest}`);
+  return [...candidates];
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -97,6 +158,161 @@ serve(async (req) => {
     const apiBase = baseUrl.replace(/\/+$/, '');
 
     switch (action) {
+      // ── CONNECT NUMBER (adota instância existente no servidor ou cria nova) ──
+      // O usuário digita o número; o servidor UAZAPI é o registro central: se já
+      // existe instância com esse número (ex: criada pelo Orbra), adotamos ela em
+      // vez de criar outra — o WhatsApp só permite 1 conexão por número.
+      case 'connect_number': {
+        const { phone: requestedPhone } = body;
+        const candidates = phoneCandidates(requestedPhone || '');
+        if (candidates.length === 0) {
+          return jsonResponse({ error: 'Número inválido. Digite com DDD, apenas números.' }, 400);
+        }
+
+        // Busca o número entre as instâncias do servidor (admintoken)
+        let serverInstances: any[] = [];
+        try {
+          const listRes = await fetch(`${apiBase}/instance/all`, { headers: { 'admintoken': adminToken } });
+          if (listRes.ok) {
+            const parsed = await listRes.json();
+            serverInstances = Array.isArray(parsed) ? parsed : [];
+          } else {
+            console.error('connect_number: /instance/all failed:', listRes.status, await listRes.text());
+          }
+        } catch (e) {
+          console.error('connect_number: /instance/all error:', e);
+        }
+
+        const match = serverInstances.find((inst) => {
+          const owner = String(inst?.owner || '').replace(/\D/g, '');
+          return owner && candidates.includes(owner);
+        });
+
+        const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
+
+        if (match?.token) {
+          // ── ADOTAR instância existente ──
+          const adoptedToken = match.token as string;
+          const adoptedName = match.name || `adotada_${effectiveTenantId.slice(0, 8)}`;
+          const adoptedPhone = String(match.owner || '').replace(/\D/g, '');
+          const isConnected = String(match.status || '').toLowerCase() === 'connected';
+
+          // Desativa instâncias UAZAPI ativas anteriores do tenant (nunca toca Meta)
+          await supabaseAdmin.from('whatsapp_instances')
+            .update({ is_active: false })
+            .eq('tenant_id', effectiveTenantId)
+            .eq('provider', 'uazapi')
+            .eq('is_active', true);
+
+          await supabaseAdmin.from('whatsapp_instances').insert({
+            tenant_id: effectiveTenantId,
+            provider: 'uazapi',
+            instance_name: adoptedName,
+            api_url: apiBase,
+            api_token_encrypted: adoptedToken,
+            is_active: true,
+            phone_number: adoptedPhone ? `+${adoptedPhone}` : null,
+          });
+
+          // Adiciona o webhook do CRM SEM tocar no webhook do outro sistema
+          const wh = await ensureWebhook(apiBase, adoptedToken, webhookUrl);
+
+          if (isConnected) {
+            return jsonResponse({
+              ok: true,
+              adopted: true,
+              status: 'connected',
+              phone: adoptedPhone ? `+${adoptedPhone}` : null,
+              instance_name: adoptedName,
+              webhook_status: wh.status,
+            });
+          }
+
+          // Existe mas está desconectada: reconecta a MESMA instância (QR)
+          let qrcode = null;
+          try {
+            const connectRes = await fetch(`${apiBase}/instance/connect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'token': adoptedToken },
+              body: JSON.stringify({}),
+            });
+            if (connectRes.ok) {
+              const connectData = await connectRes.json();
+              qrcode = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
+              if (qrcode === '') qrcode = null;
+            }
+          } catch (e) {
+            console.error('connect_number: reconnect failed:', e);
+          }
+
+          return jsonResponse({
+            ok: true,
+            adopted: true,
+            status: 'connecting',
+            phone: adoptedPhone ? `+${adoptedPhone}` : null,
+            instance_name: adoptedName,
+            qrcode,
+            webhook_status: wh.status,
+          });
+        }
+
+        // ── NÃO EXISTE: cria instância nova (fluxo tradicional com QR) ──
+        const instName = `tenant_${effectiveTenantId.slice(0, 8)}`;
+        const createRes = await fetch(`${apiBase}/instance/init`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'admintoken': adminToken },
+          body: JSON.stringify({ name: instName }),
+        });
+
+        if (!createRes.ok) {
+          const errText = await createRes.text();
+          console.error('connect_number: create error:', createRes.status, errText);
+          return jsonResponse({ error: `Falha ao criar instância: ${createRes.status} ${errText}` }, 500);
+        }
+
+        const createData = await createRes.json();
+        const newToken = createData.token || createData.apikey || createData.instance?.token || '';
+
+        try {
+          await ensureWebhook(apiBase, newToken, webhookUrl);
+        } catch (whErr) {
+          console.error('connect_number: webhook setup failed (non-critical):', whErr);
+        }
+
+        await supabaseAdmin.from('whatsapp_instances')
+          .update({ is_active: false })
+          .eq('tenant_id', effectiveTenantId)
+          .eq('provider', 'uazapi')
+          .eq('is_active', true);
+
+        await supabaseAdmin.from('whatsapp_instances').insert({
+          tenant_id: effectiveTenantId,
+          provider: 'uazapi',
+          instance_name: instName,
+          api_url: apiBase,
+          api_token_encrypted: newToken,
+          is_active: true,
+        });
+
+        let qrcode = null;
+        try {
+          const connectRes = await fetch(`${apiBase}/instance/connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'token': newToken },
+            body: JSON.stringify({}),
+          });
+          if (connectRes.ok) {
+            const connectData = await connectRes.json();
+            qrcode = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
+            if (qrcode === '') qrcode = null;
+          }
+        } catch (e) {
+          console.error('connect_number: connect failed:', e);
+        }
+
+        return jsonResponse({ ok: true, adopted: false, status: 'connecting', instance_name: instName, qrcode });
+      }
+
       // ── CREATE INSTANCE ──
       case 'create_instance': {
         const instName = instance_name || `tenant_${effectiveTenantId.slice(0, 8)}`;
@@ -121,18 +337,7 @@ serve(async (req) => {
         // 2. Set webhook with tenant_id in URL (uses instance token header)
         const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
         try {
-          const whRes = await fetch(`${apiBase}/webhook`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'token': instanceToken },
-          body: JSON.stringify({
-            enabled: true,
-            url: webhookUrl,
-            events: ['messages', 'messages_update', 'connection'],
-            excludeMessages: ['wasSentByApi', 'isGroupYes'],
-          }),
-          });
-          const whBody = await whRes.text();
-          console.log('Webhook setup status:', whRes.status, whBody);
+          await ensureWebhook(apiBase, instanceToken, webhookUrl);
         } catch (whErr) {
           console.error('Webhook setup failed (non-critical):', whErr);
         }
@@ -377,22 +582,10 @@ serve(async (req) => {
 
         const instToken = instance.api_token_encrypted || '';
         const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
-        
-        const whRes = await fetch(`${apiBase}/webhook`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'token': instToken },
-          body: JSON.stringify({
-            enabled: true,
-            url: webhookUrl,
-            events: ['messages', 'messages_update', 'connection'],
-            excludeMessages: ['wasSentByApi', 'isGroupYes'],
-          }),
-        });
-        
-        const whBody = await whRes.text();
-        console.log('Webhook setup:', whRes.status, whBody);
 
-        return jsonResponse({ ok: true, status: whRes.status, response: whBody });
+        const wh = await ensureWebhook(apiBase, instToken, webhookUrl);
+
+        return jsonResponse({ ok: true, status: wh.status, response: wh.response });
       }
 
       // ── SET PRESENCE ──
