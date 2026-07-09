@@ -2380,6 +2380,7 @@ export type Database = {
           category: string | null
           components: Json
           created_at: string
+          default_header_media: Json | null
           id: string
           language: string
           meta_template_id: string | null
@@ -2393,6 +2394,7 @@ export type Database = {
           category?: string | null
           components?: Json
           created_at?: string
+          default_header_media?: Json | null
           id?: string
           language?: string
           meta_template_id?: string | null
@@ -2406,6 +2408,7 @@ export type Database = {
           category?: string | null
           components?: Json
           created_at?: string
+          default_header_media?: Json | null
           id?: string
           language?: string
           meta_template_id?: string | null
@@ -2730,6 +2733,7 @@ export type Database = {
               source: string | null
               stage_id: string
               status: Database["public"]["Enums"]["opportunity_status"]
+              tags: string[]
               tenant_id: string
               title: string
               updated_at: string
@@ -2779,6 +2783,7 @@ export type Database = {
               source: string | null
               stage_id: string
               status: Database["public"]["Enums"]["opportunity_status"]
+              tags: string[]
               tenant_id: string
               title: string
               updated_at: string
