@@ -225,8 +225,13 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
   if (!contact) {
     // For outbound (fromMe) messages, senderName is the agent's name, not the contact's.
     const name = fromMe ? normPhone : (senderName || normPhone);
+    // fromMe + wasSentByApi em contato NOVO = envio de OUTRO sistema pela mesma
+    // instância (ex: cobrança do Orbra). O CRM nunca cria contato ao enviar (o
+    // contato existe antes de qualquer envio próprio), então esse contato é um
+    // cliente sendo cobrado — não um lead a classificar.
+    const sentByOtherSystem = fromMe && msg.wasSentByApi === true;
     const { data: newContact, error: insErr } = await supabase.from('contacts').insert({
-      tenant_id: tenantId, name, phone: normPhone, source: 'whatsapp', status: 'lead',
+      tenant_id: tenantId, name, phone: normPhone, source: 'whatsapp', status: sentByOtherSystem ? 'customer' : 'lead',
     }).select().single();
     if (insErr && (insErr as any).code === '23505') {
       const { data: race } = await supabase.from('contacts').select('*')
