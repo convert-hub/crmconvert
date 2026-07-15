@@ -43,6 +43,7 @@ interface QuickReply {
   variables: string[];
 }
 const mediaCache = new Map<string, string>();
+const MESSAGES_PAGE_SIZE = 50;
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -70,6 +71,21 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   const [mediaData, setMediaData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Lazy-load: a mídia só é baixada quando a bolha entra (ou se aproxima) da
+  // viewport — antes, abrir uma conversa disparava o download de TODAS as
+  // imagens/áudios de uma vez.
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = bubbleRef.current;
+    if (!el || inView) return;
+    if (typeof IntersectionObserver === 'undefined') { setInView(true); return; }
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) { setInView(true); obs.disconnect(); }
+    }, { rootMargin: '300px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [inView]);
   const mediaType = ((msg as any).media_type || '').toLowerCase();
   const isAudio = mediaType.includes('audio') || mediaType.includes('ptt');
   const isImage = mediaType.includes('image');
@@ -174,10 +190,10 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
       setLoading(false);
     }
   };
-  useEffect(() => { if (isImage || isAudio) loadMedia(); }, [providerMsgId, (msg as any).storage_path]);
+  useEffect(() => { if (inView && (isImage || isAudio)) loadMedia(); }, [inView, providerMsgId, (msg as any).storage_path]);
   if (isAudio) {
     return (
-      <div className="min-w-[220px]">
+      <div ref={bubbleRef} className="min-w-[220px]">
         {loading ? (
           <div className="flex items-center gap-2 py-1">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -206,7 +222,7 @@ function MediaBubble({ msg, tenantId, conversationId, providerInfo }: { msg: Mes
   }
   if (isImage) {
     return (
-      <div className="max-w-[280px]">
+      <div ref={bubbleRef} className="max-w-[280px]">
         {loading ? (
           <div className="h-40 w-full flex items-center justify-center bg-muted/20 rounded-lg"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : mediaData === 'expired' ? (
@@ -310,6 +326,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const composerVars = useSystemVariables({ tenantId: tenant?.id ?? null, scope: 'inbox-composer' });
   const { deleteConversationCascade, loading: cascadeDeleting } = useCascadeDelete();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [isInternal, setIsInternal] = useState(false);
@@ -329,6 +347,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const effectiveChannel = channel ?? resolvedChannel ?? undefined;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentConvIdRef = useRef<string>(conversationId);
@@ -400,9 +419,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       .then(setProviderInfo)
       .catch((e) => { console.warn('[ChatPanel] getConversationProvider falhou', e); setProviderInfo(null); })
       .finally(() => setProviderLoading(false));
-    supabase.from('messages').select('*').eq('conversation_id', conversationId).order('created_at')
+    // Paginação: carrega só as últimas 50 (antes baixava a conversa INTEIRA —
+    // conversas longas travavam a tela). Mensagens antigas via "carregar anteriores".
+    setHasOlderMessages(false);
+    supabase.from('messages').select('*').eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false }).limit(MESSAGES_PAGE_SIZE)
       .then(({ data }) => {
-        setMessages((data as unknown as Message[]) ?? []);
+        const page = (((data as unknown as Message[]) ?? [])).slice().reverse();
+        setMessages(page);
+        setHasOlderMessages(page.length === MESSAGES_PAGE_SIZE);
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }), 50);
       });
     supabase.from('conversations').update({ unread_count: 0 }).eq('id', conversationId);
@@ -437,6 +462,32 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [conversationId]);
+  const loadOlderMessages = async () => {
+    if (!conversationId || loadingOlder || messages.length === 0) return;
+    setLoadingOlder(true);
+    try {
+      const oldest = messages[0];
+      const { data } = await supabase.from('messages').select('*')
+        .eq('conversation_id', conversationId)
+        .lt('created_at', oldest.created_at)
+        .order('created_at', { ascending: false })
+        .limit(MESSAGES_PAGE_SIZE);
+      const older = (((data as unknown as Message[]) ?? [])).slice().reverse();
+      // Preserva a posição do scroll ao prepender (senão a tela salta para o topo)
+      const container = messagesScrollRef.current;
+      const prevScrollHeight = container?.scrollHeight ?? 0;
+      setMessages(prev => {
+        const seen = new Set(prev.map(m => m.id));
+        return [...older.filter(m => !seen.has(m.id)), ...prev];
+      });
+      setHasOlderMessages(older.length === MESSAGES_PAGE_SIZE);
+      setTimeout(() => {
+        if (container) container.scrollTop += container.scrollHeight - prevScrollHeight;
+      }, 0);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !conversationId) return;
     const isWhatsApp = effectiveChannel === 'whatsapp';
@@ -661,7 +712,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
         </div>
       )}
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">
+      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">
+        {hasOlderMessages && (
+          <div className="flex justify-center py-1">
+            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={loadOlderMessages} disabled={loadingOlder}>
+              {loadingOlder ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+              Carregar mensagens anteriores
+            </Button>
+          </div>
+        )}
         {messages.map((msg, idx) => {
           const msgDate = new Date(msg.created_at);
           const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at) : null;

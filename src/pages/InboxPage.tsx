@@ -211,10 +211,12 @@ export default function InboxPage() {
     setFilterMode(next);
   };
 
-  const baseQuery = () => {
+  // withCount: COUNT exato só na carga inicial/troca de filtro — nos reloads de
+  // realtime (caminho quente) ele forçava um COUNT da tabela inteira por evento.
+  const baseQuery = (withCount = false) => {
     let query = supabase
       .from('conversations')
-      .select('*, contact:contacts(*)', { count: 'exact' })
+      .select('*, contact:contacts(*)', withCount ? { count: 'exact' } : undefined)
       .eq('tenant_id', tenant!.id);
     if (filterMode === 'unanswered') {
       query = query.order('last_customer_message_at', { ascending: true, nullsFirst: false });
@@ -234,13 +236,13 @@ export default function InboxPage() {
   };
 
 
-  const loadConversations = async () => {
+  const loadConversations = async (withCount = true) => {
     if (!tenant) return;
-    const { data, count } = await baseQuery().range(0, PAGE_SIZE - 1);
+    const { data, count } = await baseQuery(withCount).range(0, PAGE_SIZE - 1);
     const convs = (data as unknown as (Conversation & { contact?: Contact })[]) ?? [];
     setConversations(convs);
     setLoadedCount(convs.length);
-    setTotalCount(count ?? null);
+    if (withCount) setTotalCount(count ?? null);
     const urlConv = searchParams.get('conv');
     if (urlConv && convs.some(c => c.id === urlConv) && selectedConv !== urlConv) {
       setSelectedConv(urlConv);
@@ -322,12 +324,23 @@ export default function InboxPage() {
   }, [selectedConv]);
 
 
-  // Realtime: listen for new/updated conversations
+  // Realtime: listen for new/updated conversations.
+  // Debounce: em dia de pico, cada mensagem gerava um refetch COMPLETO da lista
+  // (300 linhas + join de contatos) por evento — agora no máx. 1 refetch a cada
+  // 2,5s, sem COUNT exato no caminho quente.
   useEffect(() => {
     if (!tenant) return;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) return; // já agendado — junta a rajada num refetch só
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
+        if (!searching) loadConversations(false);
+      }, 2500);
+    };
     const channel = supabase.channel(`inbox-convs-${tenant.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => {
-        if (!searching) loadConversations();
+        if (!searching) scheduleReload();
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, payload => {
         const newMsg = payload.new as any;
@@ -335,13 +348,16 @@ export default function InboxPage() {
         if (!convId) return;
         setConversations(prev => {
           if (!prev.some(c => c.id === convId) && !searching) {
-            loadConversations();
+            scheduleReload();
           }
           return prev;
         });
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      supabase.removeChannel(channel);
+    };
   }, [tenant?.id, role, membership?.id, searching]);
 
   useEffect(() => {

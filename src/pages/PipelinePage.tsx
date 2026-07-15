@@ -632,25 +632,15 @@ export default function PipelinePage() {
   useEffect(() => { loadStageAggregates(); }, [loadStageAggregates]);
 
   // Load message counts (best-effort — engagement score)
+  // Agregado no servidor (RPC): antes baixava TODAS as conversas + TODAS as
+  // mensagens de 30 dias do tenant para contar no navegador.
   const loadMsgCounts = useCallback(() => {
     if (!tenant) return;
-    supabase.from('conversations')
-      .select('id, contact_id')
-      .eq('tenant_id', tenant.id)
-      .not('contact_id', 'is', null)
-      .then(async ({ data: convData }) => {
-        if (!convData || convData.length === 0) { setMsgCountsByContact({}); return; }
-        const convMap: Record<string, string> = {};
-        for (const c of convData) { if (c.contact_id) convMap[c.id] = c.contact_id; }
-        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: msgs } = await supabase.from('messages')
-          .select('conversation_id')
-          .eq('tenant_id', tenant.id)
-          .gte('created_at', thirtyDaysAgo);
+    supabase.rpc('get_msg_counts_by_contact_30d' as any, { _tenant_id: tenant.id })
+      .then(({ data }) => {
         const counts: Record<string, number> = {};
-        for (const m of (msgs ?? [])) {
-          const cid = convMap[m.conversation_id];
-          if (cid) counts[cid] = (counts[cid] || 0) + 1;
+        for (const r of ((data ?? []) as unknown as { contact_id: string; msg_count: number }[])) {
+          counts[r.contact_id] = Number(r.msg_count);
         }
         setMsgCountsByContact(counts);
       });
@@ -695,43 +685,15 @@ export default function PipelinePage() {
     loadAllStagesFirstPage();
   }, [stages, isSearchMode, loadAllStagesFirstPage]);
 
+  // Agregado no servidor (RPC get_unread_by_contact, mesma semântica do cálculo
+  // antigo): antes baixava todas as conversas abertas + TODAS as suas mensagens
+  // para o navegador só para descobrir a última direção de cada conversa.
   const loadUnreads = useCallback(async () => {
     if (!tenant) return;
-    const { data: conversations } = await supabase.from('conversations')
-      .select('id, contact_id, unread_count, status')
-      .eq('tenant_id', tenant.id)
-      .in('status', ['open', 'waiting_customer', 'waiting_agent']);
-
-    const convs = (conversations ?? []) as {
-      id: string; contact_id: string | null; unread_count: number | null; status: string;
-    }[];
-
-    if (convs.length === 0) { setUnreadByContact({}); return; }
-
-    const convIds = convs.map(c => c.id);
-    const { data: messages } = await supabase.from('messages')
-      .select('conversation_id, direction, created_at')
-      .eq('tenant_id', tenant.id)
-      .in('conversation_id', convIds)
-      .order('created_at', { ascending: false });
-
-    const lastDirectionByConversation: Record<string, 'inbound' | 'outbound'> = {};
-    for (const m of (messages ?? []) as { conversation_id: string; direction: 'inbound' | 'outbound'; created_at: string }[]) {
-      if (!lastDirectionByConversation[m.conversation_id]) {
-        lastDirectionByConversation[m.conversation_id] = m.direction;
-      }
-    }
-
+    const { data } = await supabase.rpc('get_unread_by_contact' as any, { _tenant_id: tenant.id });
     const map: Record<string, number> = {};
-    for (const c of convs) {
-      if (!c.contact_id) continue;
-      const lastDirection = lastDirectionByConversation[c.id];
-      const isLastInbound = lastDirection === 'inbound';
-      if (!isLastInbound) continue;
-      const unread = c.unread_count || 0;
-      const pendingByStatus = c.status === 'waiting_agent';
-      const signal = pendingByStatus ? Math.max(unread, 1) : unread;
-      if (signal > 0) map[c.contact_id] = (map[c.contact_id] || 0) + signal;
+    for (const r of ((data ?? []) as unknown as { contact_id: string; unread_signal: number }[])) {
+      map[r.contact_id] = Number(r.unread_signal);
     }
     setUnreadByContact(map);
   }, [tenant]);
@@ -760,19 +722,22 @@ export default function PipelinePage() {
       realtimeRefreshTimer = setTimeout(() => { refreshAll(); }, delay);
     };
 
+    // Polling de segurança (fallback do realtime). Era 2s baixando todas as
+    // mensagens do tenant — o grosso da atualização agora vem do realtime com
+    // debounce, e as queries são RPCs agregadas leves.
     pollingTimer = setInterval(() => {
       if (document.visibilityState === 'visible') refreshAll();
-    }, 2000);
+    }, 30000);
 
     const handleForegroundRefresh = () => {
-      if (document.visibilityState === 'visible') scheduleRefresh(120);
+      if (document.visibilityState === 'visible') scheduleRefresh(300);
     };
 
     const channel = supabase
       .channel(`pipeline-updates-${tenant.id}-${selectedPipeline}-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => scheduleRefresh(120))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(120))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(120))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities', filter: `pipeline_id=eq.${selectedPipeline}` }, () => scheduleRefresh(300))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(1500))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `tenant_id=eq.${tenant.id}` }, () => scheduleRefresh(1500))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `tenant_id=eq.${tenant.id}` }, () => loadActivities())
       .subscribe((status) => { if (status === 'SUBSCRIBED') scheduleRefresh(80); });
 

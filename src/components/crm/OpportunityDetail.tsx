@@ -148,8 +148,10 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
         }
         if (convId) {
           setChatConvId(convId);
-          supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at')
-            .then(({ data }) => setMessages((data as unknown as Message[]) ?? []));
+          // Últimas 50 mensagens (antes baixava a conversa inteira)
+          supabase.from('messages').select('*').eq('conversation_id', convId)
+            .order('created_at', { ascending: false }).limit(50)
+            .then(({ data }) => setMessages((((data as unknown as Message[]) ?? [])).slice().reverse()));
         }
       });
 
