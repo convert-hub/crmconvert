@@ -21,6 +21,7 @@ import ReportsPage from "@/pages/ReportsPage";
 import FlowBuilderPage from "@/pages/FlowBuilderPage";
 import CampaignsPage from "@/pages/CampaignsPage";
 import CampaignDetailPage from "@/pages/CampaignDetailPage";
+import ScheduledMessagesPage from "@/pages/ScheduledMessagesPage";
 
 import ActivitiesPage from "@/pages/ActivitiesPage";
 import AiSuggestionsPage from "@/pages/AiSuggestionsPage";
@@ -76,6 +77,7 @@ function AppRoutes() {
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
         <Route path="campaigns/:id" element={<CampaignDetailPage />} />
+        <Route path="scheduled-messages" element={<ScheduledMessagesPage />} />
         <Route path="flow-builder" element={<FlowBuilderPage />} />
         <Route path="prompt-studio" element={<PromptStudioPage />} />
         <Route path="settings" element={<SettingsPage />} />

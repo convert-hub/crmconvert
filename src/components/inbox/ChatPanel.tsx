@@ -29,6 +29,7 @@ import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
+import ConversationScheduledDialog from '@/components/scheduled/ConversationScheduledDialog';
 import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
 import { useCascadeDelete } from '@/hooks/useCascadeDelete';
@@ -336,6 +337,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [qrFilter, setQrFilter] = useState('');
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showScheduledList, setShowScheduledList] = useState(false);
+  const [scheduledPending, setScheduledPending] = useState<{ id: string; scheduled_at: string }[]>([]);
   const [showTemplate, setShowTemplate] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const [providerLoading, setProviderLoading] = useState(true);
@@ -367,6 +370,18 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       });
     return () => { cancelled = true; };
   }, [conversationId]);
+  // Chip "mensagens agendadas": 1 query leve por troca de conversa, refetch só após ações (sem polling)
+  const refreshScheduled = useCallback(async () => {
+    if (!conversationId) return;
+    const convId = conversationId;
+    const { data } = await supabase.from('scheduled_messages')
+      .select('id, scheduled_at')
+      .eq('conversation_id', convId)
+      .eq('status', 'pending')
+      .order('scheduled_at', { ascending: true });
+    if (currentConvIdRef.current === convId) setScheduledPending(data ?? []);
+  }, [conversationId]);
+  useEffect(() => { setScheduledPending([]); refreshScheduled(); }, [refreshScheduled]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const insertEmoji = (emoji: string) => {
     const ta = textareaRef.current;
@@ -817,6 +832,17 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         <div ref={messagesEndRef} />
       </div>
       <div className="border-t border-border/50 bg-card/50">
+        {scheduledPending.length > 0 && (
+          <button onClick={() => setShowScheduledList(true)}
+            className="mx-3 mt-2 flex items-center gap-1.5 rounded-lg border border-border/60 bg-accent/50 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            title="Ver mensagens agendadas desta conversa">
+            <Clock className="h-3 w-3" />
+            <span>
+              {scheduledPending.length === 1 ? '1 mensagem agendada' : `${scheduledPending.length} mensagens agendadas`}
+              {' · próxima '}{format(new Date(scheduledPending[0].scheduled_at), 'dd/MM HH:mm')}
+            </span>
+          </button>
+        )}
         {isInternal && (
           <div className="px-3 pt-2 flex items-center gap-1.5 text-xs text-warning font-medium">
             <Lock className="h-3 w-3" /> Modo nota interna — não será enviada ao cliente
@@ -926,7 +952,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       {tenant && membership && (
         <ScheduleMessageDialog
           open={showSchedule}
-          onOpenChange={setShowSchedule}
+          onOpenChange={(o) => { setShowSchedule(o); if (!o) refreshScheduled(); }}
           conversationId={conversationId}
           tenantId={tenant.id}
           membershipId={membership.id}
@@ -934,6 +960,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           whatsappInstanceId={providerInfo?.instance_id ?? null}
         />
       )}
+      <ConversationScheduledDialog
+        open={showScheduledList}
+        onOpenChange={setShowScheduledList}
+        conversationId={conversationId}
+        onChanged={refreshScheduled}
+      />
       {tenant && providerInfo?.provider === 'meta_cloud' && providerInfo.instance_id && (
         <SendTemplateDialog
           open={showTemplate}

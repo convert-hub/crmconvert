@@ -364,7 +364,10 @@ const handlers = {
           }).eq('id', message_id);
         }
         if (scheduled_message_id) {
-          await supabase.from('scheduled_messages').update({ status: 'failed' }).eq('id', scheduled_message_id);
+          await supabase.from('scheduled_messages').update({
+            status: 'failed',
+            error_message: String(errText ?? 'Falha no envio').slice(0, 500),
+          }).eq('id', scheduled_message_id);
         }
       } catch (e) { console.error('[Worker] send_whatsapp markFailed err', e); }
     };
@@ -374,6 +377,12 @@ const handlers = {
           const update = { provider_metadata: { status: 'sent' } };
           if (providerMessageId) update.provider_message_id = providerMessageId;
           await supabase.from('messages').update(update).eq('id', message_id);
+        }
+        if (scheduled_message_id) {
+          // Retry bem-sucedido após falha transitória: sem isso o agendamento ficava 'failed' pra sempre
+          await supabase.from('scheduled_messages').update({
+            status: 'sent', sent_at: new Date().toISOString(), error_message: null,
+          }).eq('id', scheduled_message_id);
         }
       } catch (e) { console.error('[Worker] send_whatsapp markSent err', e); }
     };

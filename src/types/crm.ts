@@ -266,3 +266,24 @@ export interface CampaignRecipient {
   created_at: string;
   updated_at: string;
 }
+
+// ----- Scheduled messages (1:1, agendadas pelo chat) -----
+export type ScheduledMessageStatus = 'pending' | 'sent' | 'cancelled' | 'failed';
+
+export interface ScheduledMessage {
+  id: string;
+  tenant_id: string;
+  conversation_id: string;
+  content: string | null;
+  media_url: string | null;
+  media_type: string | null;
+  scheduled_at: string;
+  status: ScheduledMessageStatus;
+  sent_at: string | null;
+  error_message: string | null;
+  /** Template Meta pré-resolvido ({ name, language, components, whatsapp_instance_id }) — null em mensagem de texto */
+  template: Record<string, unknown> | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}

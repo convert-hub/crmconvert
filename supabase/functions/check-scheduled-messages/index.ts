@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
                   provider_metadata: { status: 'failed', error_message: errText, failed_at: new Date().toISOString() },
                 }).eq('id', savedMsg.id)
               }
-              await supabase.from('scheduled_messages').update({ status: 'failed' }).eq('id', msg.id)
+              await supabase.from('scheduled_messages').update({ status: 'failed', error_message: errText.slice(0, 500) }).eq('id', msg.id)
               continue
             }
             if (savedMsg?.id && d?.provider_message_id) {
@@ -145,10 +145,11 @@ Deno.serve(async (req) => {
           status: 'waiting_customer',
         }).eq('id', msg.conversation_id)
 
-        // Mark as sent
+        // Mark as sent (limpa erro de tentativa anterior em caso de reagendamento)
         await supabase.from('scheduled_messages').update({
           status: 'sent',
           sent_at: new Date().toISOString(),
+          error_message: null,
         }).eq('id', msg.id)
 
         processed++
@@ -156,6 +157,7 @@ Deno.serve(async (req) => {
         console.error(`Error processing scheduled message ${msg.id}:`, err)
         await supabase.from('scheduled_messages').update({
           status: 'failed',
+          error_message: String(err).slice(0, 500),
         }).eq('id', msg.id)
       }
     }
