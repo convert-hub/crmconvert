@@ -2575,6 +2575,15 @@ export type Database = {
           provider: string
         }[]
       }
+      get_tenant_whatsapp_instances: {
+        Args: { p_tenant_id: string }
+        Returns: {
+          id: string
+          display_name: string
+          instance_name: string
+          provider: string
+        }[]
+      }
       get_member_workload: {
         Args: { p_tenant_id: string }
         Returns: {

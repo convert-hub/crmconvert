@@ -34,6 +34,7 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
   const [channel, setChannel] = useState<string>('whatsapp');
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceId, setInstanceId] = useState<string>('');
+  const [instancesError, setInstancesError] = useState(false);
   const [loading, setLoading] = useState(false);
   // Passo 2 do fluxo Meta: conversa criada aguardando escolha de template
   const [templateStep, setTemplateStep] = useState<{ convId: string; instanceId: string; contactName: string | null } | null>(null);
@@ -49,14 +50,22 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
     if (preselectedContact) setSelectedContactId(preselectedContact.id);
   }, [preselectedContact]);
 
-  // Carrega instâncias WhatsApp ativas do tenant
+  // Carrega instâncias WhatsApp ativas do tenant via RPC SECURITY DEFINER:
+  // a RLS de whatsapp_instances só permite admin/manager ler a tabela — a query
+  // direta voltava vazia pra atendente e a conversa nascia sem instância
+  // (sem botão de template e com envio roteado errado em tenant Meta).
   useEffect(() => {
     if (!open || !tenant) return;
-    supabase.from('whatsapp_instances')
-      .select('id, display_name, instance_name, provider')
-      .eq('tenant_id', tenant.id)
-      .eq('is_active', true)
-      .then(({ data }) => {
+    setInstancesError(false);
+    supabase.rpc('get_tenant_whatsapp_instances', { p_tenant_id: tenant.id })
+      .then(({ data, error }) => {
+        if (error) {
+          console.warn('[StartConversationDialog] get_tenant_whatsapp_instances falhou', error.message);
+          setInstancesError(true);
+          setInstances([]);
+          setInstanceId('');
+          return;
+        }
         const list = (data as Instance[] | null) ?? [];
         setInstances(list);
         if (list.length === 1) setInstanceId(list[0].id);
@@ -66,6 +75,11 @@ export default function StartConversationDialog({ open, onOpenChange, preselecte
 
   const handleStart = async () => {
     if (!tenant || !membership || !selectedContactId) return;
+    if (channel === 'whatsapp' && instancesError) {
+      // Sem saber as instâncias, a conversa nasceria sem provider (quebrada em tenant Meta)
+      toast.error('Não foi possível carregar os números de WhatsApp. Recarregue a página e tente novamente.');
+      return;
+    }
     if (channel === 'whatsapp' && instances.length > 1 && !instanceId) {
       toast.error('Selecione o número de envio.');
       return;
