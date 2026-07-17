@@ -66,7 +66,40 @@ Deno.serve(async (req) => {
           if ((inst as any)?.provider === 'meta_cloud') provider = 'meta_cloud'
         }
 
-        // Insert the message into messages table (capture id to reflect send failures)
+        // Agendamento pode ser texto ou template (msg.template = { name, language, components })
+        const tpl = (msg as any).template
+
+        // Header de mídia do template: a URL assinada gravada no agendamento expira
+        // em 24h — gera uma FRESCA a partir do storage_path na hora do disparo.
+        let tplComponents = tpl?.components
+        if (tpl?.header_media_storage_path) {
+          try {
+            const { data: signed } = await supabase.storage
+              .from('whatsapp-media')
+              .createSignedUrl(tpl.header_media_storage_path, 60 * 60)
+            if (signed?.signedUrl) {
+              tplComponents = (tplComponents ?? []).map((c: any) => {
+                if (String(c?.type ?? '').toLowerCase() !== 'header') return c
+                return {
+                  ...c,
+                  parameters: (c.parameters ?? []).map((p: any) => {
+                    const pt = String(p?.type ?? '').toLowerCase()
+                    if (pt === 'image' || pt === 'video' || pt === 'document') {
+                      return { ...p, [pt]: { ...(p[pt] ?? {}), link: signed.signedUrl } }
+                    }
+                    return p
+                  }),
+                }
+              })
+            }
+          } catch (e) {
+            console.warn('Failed to refresh header media URL for scheduled msg', msg.id, e)
+          }
+        }
+
+        // Insert the message into messages table (capture id to reflect send failures).
+        // Para templates, persiste media_type/storage_path para a bolha do chat
+        // renderizar igual ao envio manual (rótulo Template + imagem do header).
         const { data: savedMsg } = await supabase.from('messages').insert({
           tenant_id: msg.tenant_id,
           conversation_id: msg.conversation_id,
@@ -74,20 +107,28 @@ Deno.serve(async (req) => {
           content: msg.content,
           sender_membership_id: msg.created_by,
           is_ai_generated: false,
+          ...(tpl?.name ? {
+            media_type: 'TemplateMessage',
+            storage_path: tpl.header_media_storage_path ?? null,
+            provider_metadata: {
+              template_name: tpl.name,
+              template_language: tpl.language,
+              ...(tpl.header_media_storage_path ? { header_media_storage_path: tpl.header_media_storage_path } : {}),
+            },
+          } : {}),
         }).select('id').single()
 
         if (conv.channel === 'whatsapp' && contact?.phone) {
           if (provider === 'meta_cloud') {
-            // Agendamento pode ser texto ou template (msg.template = { name, language, components })
-            const tpl = (msg as any).template
             const sendBody = tpl?.name
               ? {
                   action: 'send',
                   type: 'template',
-                  template: { name: tpl.name, language: tpl.language, components: tpl.components },
+                  template: { name: tpl.name, language: tpl.language, components: tplComponents },
                   conversation_id: msg.conversation_id,
                   whatsapp_instance_id: tpl.whatsapp_instance_id || conv.whatsapp_instance_id,
                   skip_persist: true,
+                  ...(tpl.header_media_storage_path ? { header_media_storage_path: tpl.header_media_storage_path } : {}),
                 }
               : {
                   action: 'send',

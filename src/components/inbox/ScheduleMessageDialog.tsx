@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CalendarIcon, Clock, Info, Loader2 } from 'lucide-react';
+import { CalendarIcon, Clock, Image as ImageIcon, Info, Loader2, Upload } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
@@ -15,6 +15,13 @@ import type { WhatsAppMessageTemplate } from '@/types/crm';
 import { extractTemplateSlots, buildMetaComponents, renderPreview, type TemplateSlot } from '@/lib/metaTemplateVars';
 import { VariableInput } from '@/components/shared/VariableField';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
+
+// Extensões/accept por formato de header de mídia (limites da Cloud API)
+const MEDIA_ACCEPT: Record<string, string> = {
+  image: 'image/jpeg,image/png',
+  video: 'video/mp4',
+  document: 'application/pdf',
+};
 
 interface ScheduleMessageDialogProps {
   open: boolean;
@@ -43,6 +50,12 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
   const [selectedId, setSelectedId] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [realData, setRealData] = useState<{ contact: any | null; opportunity: any | null }>({ contact: null, opportunity: null });
+  // Header de mídia: path no bucket whatsapp-media — fica salvo no agendamento
+  // para a check-scheduled-messages gerar URL fresca NA HORA do disparo
+  // (a URL assinada expira em 24h; o agendamento pode ser para depois disso).
+  const [mediaStoragePath, setMediaStoragePath] = useState<string | null>(null);
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const mediaFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open || !isMeta) return;
@@ -106,9 +119,67 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
     () => extractTemplateSlots((selected?.components as any) ?? []),
     [selected],
   );
+  const mediaSlot = slots.find(s => s.kind === 'media');
+  const textSlots = slots.filter(s => s.kind !== 'media');
 
   const headerComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'HEADER');
   const bodyComp = (selected?.components as any[] | undefined)?.find((c: any) => String(c.type).toUpperCase() === 'BODY');
+
+  // Pré-preenche o header de mídia com o padrão salvo no template (se houver),
+  // igual ao envio manual: storage_path → URL assinada p/ preview; url → direto.
+  useEffect(() => {
+    setMediaStoragePath(null);
+    if (!selected || !mediaSlot) return;
+    const def = (selected as any).default_header_media as { storage_path?: string; url?: string } | null;
+    if (!def) return;
+    (async () => {
+      try {
+        if (def.storage_path) {
+          const { data: signed } = await supabase.storage
+            .from('whatsapp-media')
+            .createSignedUrl(def.storage_path, 60 * 60 * 24);
+          if (signed?.signedUrl) {
+            setValues(prev => ({ ...prev, [mediaSlot.id]: signed.signedUrl }));
+            setMediaStoragePath(def.storage_path);
+          }
+        } else if (def.url) {
+          setValues(prev => ({ ...prev, [mediaSlot.id]: def.url! }));
+        }
+      } catch { /* sem mídia padrão utilizável — usuário faz upload */ }
+    })();
+  }, [selectedId, templates]);
+
+  const handleMediaUpload = async (file: File) => {
+    if (!selected || !mediaSlot) return;
+    setMediaBusy(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || (file.type.split('/')[1] ?? 'bin');
+      const storagePath = `${tenantId}/template-headers/${selected.id}/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('whatsapp-media')
+        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+      if (upErr) throw upErr;
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('whatsapp-media')
+        .createSignedUrl(storagePath, 60 * 60 * 24);
+      if (signErr || !signed?.signedUrl) throw signErr ?? new Error('Falha ao gerar URL da mídia');
+      setValues(prev => ({ ...prev, [mediaSlot.id]: signed.signedUrl }));
+      setMediaStoragePath(storagePath);
+      // Salva como mídia padrão do template — pré-preenche próximos envios/agendamentos
+      supabase.from('whatsapp_message_templates')
+        .update({ default_header_media: { storage_path: storagePath, mime: file.type, format: mediaSlot.mediaFormat } } as any)
+        .eq('id', selected.id)
+        .then(() => {
+          setTemplates(prev => prev.map(t => t.id === selected.id
+            ? { ...t, default_header_media: { storage_path: storagePath, mime: file.type, format: mediaSlot.mediaFormat } } as any
+            : t));
+        });
+    } catch (e: any) {
+      toast.error('Falha no upload: ' + (e?.message ?? e));
+    } finally {
+      setMediaBusy(false);
+    }
+  };
 
   const tokenOnlyRe = /^\s*\{\{\s*([A-Za-z0-9_.]+)\s*\}\}\s*$/;
   const valuesByKey = useMemo(() => {
@@ -183,6 +254,9 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
           language: selected.language,
           components,
           whatsapp_instance_id: whatsappInstanceId,
+          // Caminho permanente da mídia do header: a check-scheduled-messages gera
+          // uma URL assinada FRESCA na hora do disparo (a daqui expira em 24h)
+          ...(mediaStoragePath ? { header_media_storage_path: mediaStoragePath } : {}),
         };
         // Conteúdo textual salvo na conversa = pré-visualização renderizada do template
         const parts: string[] = [];
@@ -206,6 +280,7 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
       setDate(undefined);
       setSelectedId('');
       setValues({});
+      setMediaStoragePath(null);
       setMode('text');
       onOpenChange(false);
     } catch (err: any) {
@@ -268,7 +343,7 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
               <div className="space-y-3">
                 <div className="space-y-1">
                   <Label className="text-[13px]">Template *</Label>
-                  <Select value={selectedId} onValueChange={v => { setSelectedId(v); setValues({}); }}>
+                  <Select value={selectedId} onValueChange={v => { setSelectedId(v); setValues({}); setMediaStoragePath(null); }}>
                     <SelectTrigger><SelectValue placeholder="Escolha um template" /></SelectTrigger>
                     <SelectContent>
                       {templates.map(t => (
@@ -292,7 +367,38 @@ export default function ScheduleMessageDialog({ open, onOpenChange, conversation
                   </div>
                 )}
 
-                {slots.map(s => (
+                {mediaSlot && (
+                  <div className="space-y-2 rounded-lg border border-border/60 p-3">
+                    <div className="flex items-center gap-2 text-xs font-medium">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      {mediaSlot.mediaFormat === 'image' ? 'Imagem no cabeçalho' : mediaSlot.mediaFormat === 'video' ? 'Vídeo no cabeçalho' : 'Documento no cabeçalho'}
+                    </div>
+                    {values[mediaSlot.id] && mediaSlot.mediaFormat === 'image' && (
+                      <img src={values[mediaSlot.id]} alt="Cabeçalho do template" className="max-h-32 rounded-md border border-border/50" />
+                    )}
+                    <input
+                      type="file"
+                      ref={mediaFileRef}
+                      className="hidden"
+                      accept={MEDIA_ACCEPT[mediaSlot.mediaFormat ?? 'image']}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) handleMediaUpload(f); e.target.value = ''; }}
+                    />
+                    <Button type="button" size="sm" variant="outline" className="w-full" disabled={mediaBusy} onClick={() => mediaFileRef.current?.click()}>
+                      {mediaBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                      {values[mediaSlot.id]
+                        ? 'Trocar arquivo'
+                        : mediaSlot.mediaFormat === 'image' ? 'Enviar imagem' : mediaSlot.mediaFormat === 'video' ? 'Enviar vídeo' : 'Enviar documento'}
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      Este template tem {mediaSlot.mediaFormat === 'image' ? 'imagem' : mediaSlot.mediaFormat === 'video' ? 'vídeo' : 'documento'} no cabeçalho — a Meta exige o arquivo em todo envio.{' '}
+                      {values[mediaSlot.id]
+                        ? 'Arquivo pronto: será usado no disparo agendado.'
+                        : 'Envie o arquivo acima para liberar o agendamento.'}
+                    </p>
+                  </div>
+                )}
+
+                {textSlots.map(s => (
                   <div key={s.id} className="space-y-1">
                     <Label htmlFor={`sched-var-${s.id}`} className="text-xs">{s.label}</Label>
                     <VariableInput
