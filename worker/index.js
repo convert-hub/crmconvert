@@ -554,17 +554,49 @@ const handlers = {
     const metaType = media_kind === 'file' ? 'document' : media_kind;
 
     if (instance.provider === 'meta_cloud') {
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'send', type: metaType, media_url: media_url_final, caption: caption || undefined,
-          filename: filename || undefined, phone: cleanPhone,
+      // Envio do chat (message_id presente): usa o MESMO caminho comprovado em
+      // produção pelo envio manual do navegador — upload_media → send com
+      // media_id. O envio por link (Meta baixando a URL) fica só para os
+      // chamadores legados (fluxos/automações), como sempre foi.
+      let sendBody;
+      let uploadedMediaId = null;
+      if (message_id) {
+        const upResp = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'upload_media', type: metaType, media_url: media_url_final,
+            media_mime: payload.media_mime || undefined,
+            filename: filename || undefined, whatsapp_instance_id: instance.id,
+          }),
+        });
+        const upData = await upResp.json().catch(() => ({}));
+        if (!upResp.ok || upData?.ok === false || !upData?.media_id) {
+          const errText = typeof upData?.error === 'string' ? upData.error : `upload_media HTTP ${upResp.status}`;
+          await markFailed(errText);
+          throw new Error(`Meta upload_media failed: ${errText}`);
+        }
+        uploadedMediaId = upData.media_id;
+        sendBody = {
+          action: 'send', type: metaType, media_id: uploadedMediaId,
+          caption: caption || undefined, filename: filename || undefined, phone: cleanPhone,
           conversation_id: conversation_id || null, whatsapp_instance_id: instance.id,
           // A bolha já existe quando o envio vem do chat — sem isso o wa-meta-send
           // criaria uma segunda linha em messages (bolha duplicada).
-          skip_persist: message_id ? true : undefined,
-        }),
+          skip_persist: true,
+        };
+      } else {
+        sendBody = {
+          action: 'send', type: metaType, media_url: media_url_final, caption: caption || undefined,
+          filename: filename || undefined, phone: cleanPhone,
+          conversation_id: conversation_id || null, whatsapp_instance_id: instance.id,
+        };
+      }
+
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/wa-meta-send`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(sendBody),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.ok === false) {
@@ -572,7 +604,8 @@ const handlers = {
         await markFailed(errText);
         throw new Error(`Meta media send failed: ${errText}`);
       }
-      await markSent(data?.provider_message_id || null, data?.meta_media_id ? { provider: 'meta_cloud', meta_media_id: data.meta_media_id } : {});
+      const metaMediaId = data?.meta_media_id || uploadedMediaId;
+      await markSent(data?.provider_message_id || null, metaMediaId ? { provider: 'meta_cloud', meta_media_id: metaMediaId } : {});
       return data;
     }
 

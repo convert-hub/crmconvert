@@ -732,6 +732,7 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           phone: contactPhone,
           media_kind: mediaType,
           media_url: signed.signedUrl,
+          media_mime: file.type || undefined,
           caption: '',
           filename: file.name,
           conversation_id: capturedConvId,
