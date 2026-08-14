@@ -476,8 +476,53 @@ const handlers = {
   },
 
   async send_whatsapp_media(payload) {
-    const { tenant_id, phone, media_kind, media_url, caption, filename, conversation_id, whatsapp_instance_id } = payload;
-    if (!media_url || !media_kind) throw new Error('send_whatsapp_media requires media_url and media_kind');
+    // message_id/storage_path: presentes quando o envio vem do chat (a bolha já
+    // existe na conversa). Ausentes nos chamadores antigos (fluxos/automações),
+    // que continuam funcionando exatamente como antes.
+    const { tenant_id, phone, media_kind, media_url, caption, filename, conversation_id, whatsapp_instance_id, message_id, storage_path } = payload;
+
+    // Idempotência: se a mensagem já tem provider_message_id, um envio anterior
+    // funcionou (ex: retry após crash pós-envio) — reenviar duplicaria pro cliente.
+    if (message_id) {
+      const { data: existing } = await supabase.from('messages')
+        .select('provider_message_id').eq('id', message_id).maybeSingle();
+      if (existing?.provider_message_id) {
+        console.log(`[Worker] send_whatsapp_media: msg ${message_id} já enviada (${existing.provider_message_id}), pulando`);
+        return { skipped: true, reason: 'already_sent' };
+      }
+    }
+
+    const markFailed = async (errText) => {
+      if (!message_id) return;
+      try {
+        await supabase.from('messages').update({
+          provider_metadata: { status: 'failed', error_message: String(errText ?? 'Falha no envio').slice(0, 300), failed_at: new Date().toISOString() },
+        }).eq('id', message_id);
+      } catch (e) { console.error('[Worker] send_whatsapp_media markFailed err', e); }
+    };
+    const markSent = async (providerMessageId, extraMeta = {}) => {
+      if (!message_id) return;
+      try {
+        const update = { provider_metadata: { status: 'sent', ...extraMeta } };
+        if (providerMessageId) update.provider_message_id = providerMessageId;
+        await supabase.from('messages').update(update).eq('id', message_id);
+      } catch (e) { console.error('[Worker] send_whatsapp_media markSent err', e); }
+    };
+
+    // URL fresca a partir do storage: a signed URL gerada no enqueue pode ter
+    // expirado até um retry com backoff chegar aqui.
+    let effectiveMediaUrl = media_url;
+    if (storage_path) {
+      try {
+        const { data: signed } = await supabase.storage.from('whatsapp-media').createSignedUrl(storage_path, 60 * 60);
+        if (signed?.signedUrl) effectiveMediaUrl = signed.signedUrl;
+      } catch (e) { console.warn('[Worker] send_whatsapp_media: signed url refresh falhou, usando a do payload', e?.message); }
+    }
+    if (!effectiveMediaUrl || !media_kind) {
+      await markFailed('Payload sem mídia (media_url/media_kind)');
+      throw new Error('send_whatsapp_media requires media_url and media_kind');
+    }
+    const media_url_final = effectiveMediaUrl;
 
     let instance = null;
     if (whatsapp_instance_id) {
@@ -495,10 +540,16 @@ const handlers = {
       const { data } = await supabase.from('whatsapp_instances').select('*').eq('tenant_id', tenant_id).eq('is_active', true).limit(1).maybeSingle();
       instance = data;
     }
-    if (!instance) throw new Error('No active WhatsApp instance for tenant');
+    if (!instance) {
+      await markFailed('Nenhuma instância WhatsApp ativa para o tenant');
+      throw new Error('No active WhatsApp instance for tenant');
+    }
 
     const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
-    if (!cleanPhone) throw new Error('No phone number provided');
+    if (!cleanPhone) {
+      await markFailed('Contato sem número de telefone');
+      throw new Error('No phone number provided');
+    }
 
     const metaType = media_kind === 'file' ? 'document' : media_kind;
 
@@ -507,13 +558,21 @@ const handlers = {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'send', type: metaType, media_url, caption: caption || undefined,
+          action: 'send', type: metaType, media_url: media_url_final, caption: caption || undefined,
           filename: filename || undefined, phone: cleanPhone,
           conversation_id: conversation_id || null, whatsapp_instance_id: instance.id,
+          // A bolha já existe quando o envio vem do chat — sem isso o wa-meta-send
+          // criaria uma segunda linha em messages (bolha duplicada).
+          skip_persist: message_id ? true : undefined,
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.ok === false) throw new Error(`Meta media send failed: ${data?.error || response.status}`);
+      if (!response.ok || data?.ok === false) {
+        const errText = typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`;
+        await markFailed(errText);
+        throw new Error(`Meta media send failed: ${errText}`);
+      }
+      await markSent(data?.provider_message_id || null, data?.meta_media_id ? { provider: 'meta_cloud', meta_media_id: data.meta_media_id } : {});
       return data;
     }
 
@@ -523,15 +582,18 @@ const handlers = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'token': instance.api_token_encrypted || '' },
       body: JSON.stringify({
-        number: cleanPhone, type: uazType, file: media_url,
+        number: cleanPhone, type: uazType, file: media_url_final,
         text: caption || '', docName: filename || undefined, readchat: true,
       }),
     });
     if (!response.ok) {
       const errText = await response.text();
+      await markFailed(`Falha no envio via UAZAPI (HTTP ${response.status})`);
       throw new Error(`UAZAPI media send failed: ${response.status} ${errText}`);
     }
-    return await response.json();
+    const result = await response.json();
+    await markSent(result?.key?.id || result?.messageid || result?.id || null);
+    return result;
   },
 
 

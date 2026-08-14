@@ -329,6 +329,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [isInternal, setIsInternal] = useState(false);
@@ -503,6 +505,56 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
       setLoadingOlder(false);
     }
   };
+
+  // Re-render periódico só enquanto houver mídia aguardando confirmação de envio
+  // (faz o aviso "não confirmado" aparecer após 2 min sem depender de interação)
+  useEffect(() => {
+    const hasSending = messages.some(m => (m as any).provider_metadata?.status === 'sending' && !(m as any).provider_message_id);
+    if (!hasSending) return;
+    const t = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, [messages]);
+
+  // Reenvio manual de mídia que ficou sem confirmação. Antes de reenviar,
+  // reconfere no banco: se já tem provider_message_id, o envio funcionou e só a
+  // tela estava desatualizada — reenviar duplicaria a mensagem pro cliente.
+  const handleResendMedia = async (msg: Message) => {
+    if (resendingId || !tenant || !conversationId) return;
+    setResendingId(msg.id);
+    try {
+      const { data: fresh } = await supabase.from('messages')
+        .select('provider_message_id, provider_metadata, storage_path, media_type')
+        .eq('id', msg.id).maybeSingle();
+      if (fresh?.provider_message_id) {
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, ...(fresh as any) } : m));
+        toast.success('Esta mensagem já tinha sido enviada — status atualizado.');
+        return;
+      }
+      if (!confirm('Reenviar esta mídia para o cliente?')) return;
+      const storagePath = (fresh as any)?.storage_path || (msg as any).storage_path;
+      const contactPhone = effectiveContact?.phone;
+      if (!storagePath || !contactPhone) { toast.error('Arquivo original ou telefone não encontrado para reenvio.'); return; }
+      const mt = String((fresh as any)?.media_type || (msg as any).media_type || '').toLowerCase();
+      const mediaKind = mt.includes('audio') ? 'audio' : mt.includes('image') ? 'image' : mt.includes('video') ? 'video' : 'document';
+      const { data: signed } = await supabase.storage.from('whatsapp-media').createSignedUrl(storagePath, 60 * 60);
+      if (!signed?.signedUrl) { toast.error('Falha ao gerar URL do arquivo.'); return; }
+      const { error: qErr } = await supabase.rpc('enqueue_job', {
+        _type: 'send_whatsapp_media',
+        _payload: {
+          tenant_id: tenant.id, phone: contactPhone, media_kind: mediaKind,
+          media_url: signed.signedUrl, caption: '', conversation_id: conversationId,
+          whatsapp_instance_id: providerInfo?.instance_id ?? null,
+          message_id: msg.id, storage_path: storagePath,
+        },
+        _tenant_id: tenant.id,
+        _idempotency_key: `chat-media-${msg.id}-r${Date.now()}`,
+      } as any);
+      if (qErr) { toast.error('Falha ao reenfileirar: ' + qErr.message); return; }
+      toast.success('Reenvio em andamento — o check aparece na bolha ao confirmar.');
+    } finally {
+      setResendingId(null);
+    }
+  };
   const handleSend = async () => {
     if (!newMsg.trim() || !tenant || !membership || !conversationId) return;
     const isWhatsApp = effectiveChannel === 'whatsapp';
@@ -622,6 +674,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         content: contentLabel,
         sender_membership_id: membership.id,
         media_type: mediaTypeLabel,
+        // Nasce como "enviando": a bolha só ganha check quando o envio for
+        // CONFIRMADO (provider_message_id) — antes, a bolha aparecia como
+        // enviada mesmo se o envio morresse no meio (aba fechada, rede).
+        provider_metadata: { status: 'sending' },
       } as any).select('id').single();
       if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
       const ext = file.name.split('.').pop()?.toLowerCase()
@@ -652,9 +708,35 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           sender_membership_id: membership.id, created_at: new Date().toISOString(), is_ai_generated: false,
           media_type: mediaTypeLabel, media_url: null,
           storage_path: storagePath,
+          provider_metadata: { status: 'sending' },
         } as any;
         setMessages(prev => [...prev, optimisticMsg]);
       }
+
+      // Fila do worker: o envio sobrevive a fechamento/refresh da aba (causa real
+      // de áudios perdidos silenciosamente). O worker confirma (provider_message_id
+      // + status) e a bolha atualiza via realtime. Fallback: se o enqueue falhar,
+      // envia direto pelo navegador como antes.
+      const { error: enqueueErr } = await supabase.rpc('enqueue_job', {
+        _type: 'send_whatsapp_media',
+        _payload: {
+          tenant_id: tenant.id,
+          phone: contactPhone,
+          media_kind: mediaType,
+          media_url: signed.signedUrl,
+          caption: '',
+          filename: file.name,
+          conversation_id: capturedConvId,
+          whatsapp_instance_id: providerInfo?.instance_id ?? null,
+          message_id: savedMsg.id,
+          storage_path: storagePath,
+        },
+        _tenant_id: tenant.id,
+        _idempotency_key: `chat-media-${savedMsg.id}`,
+      } as any);
+      if (!enqueueErr) return; // worker assume o envio + confirmação
+
+      console.warn('[ChatPanel] enqueue_job falhou, enviando direto (fallback):', enqueueErr.message);
       const res = await sendMedia({
         conversationId: capturedConvId,
         tenantId: tenant.id,
@@ -689,10 +771,12 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           toast.error(res.error ?? 'Falha ao enviar mídia');
         }
       } else {
-        const update: { provider_message_id?: string; provider_metadata?: any } = {};
+        // Sucesso no envio direto (fallback): limpa o status "enviando"
+        const update: { provider_message_id?: string; provider_metadata?: any } = {
+          provider_metadata: { status: 'sent', ...(res.meta_media_id ? { provider: 'meta_cloud', meta_media_id: res.meta_media_id } : {}) },
+        };
         if (res.provider_message_id) update.provider_message_id = res.provider_message_id;
-        if (res.meta_media_id) update.provider_metadata = { provider: 'meta_cloud', meta_media_id: res.meta_media_id };
-        if (Object.keys(update).length) {
+        {
           await supabase.from('messages').update(update).eq('id', savedMsg.id);
         }
       }
@@ -758,6 +842,8 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const isMedia = hasMedia(msg);
           const msgIsInternal = (msg as any).is_internal === true;
           const isTemplate = ((msg as any).media_type || '').toLowerCase() === 'templatemessage';
+          const isSendingStatus = msgStatus === 'sending' && !(msg as any).provider_message_id;
+          const isSendingStale = isSendingStatus && isMedia && (nowTick - new Date(msg.created_at).getTime() > 120000);
           return (
             <div key={msg.id} className="contents">
             {showDateSeparator && (
@@ -797,12 +883,24 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                   {format(new Date(msg.created_at), "HH:mm")}
                   {msg.direction === 'outbound' && !msgIsInternal && (
                     isFailed ? <span title={failedMsg} className="font-semibold">!</span> :
+                    isSendingStatus ? <Clock className="h-3 w-3" aria-label="Enviando" /> :
                     msgStatus === 'read' ? <CheckCheck className="h-3 w-3 text-blue-300" /> :
                     msgStatus === 'delivered' ? <CheckCheck className="h-3 w-3" /> :
                     <Check className="h-3 w-3" />
                   )}
                 </div>
               </div>
+              {isSendingStale && msg.direction === 'outbound' && !msgIsInternal && (
+                <div className="mt-1 max-w-[75%] flex items-center gap-2 text-[11px] text-warning flex-wrap">
+                  <span>Envio ainda não confirmado.</span>
+                  <button
+                    disabled={resendingId === msg.id}
+                    onClick={() => handleResendMedia(msg)}
+                    className="underline hover:no-underline font-medium disabled:opacity-50">
+                    {resendingId === msg.id ? 'Verificando…' : 'Verificar e reenviar'}
+                  </button>
+                </div>
+              )}
               {isFailed && msg.direction === 'outbound' && !msgIsInternal && (
                 <div className="mt-1 max-w-[75%] flex items-center gap-2 text-[11px] text-destructive flex-wrap">
                   <span>{failedMsg}</span>
