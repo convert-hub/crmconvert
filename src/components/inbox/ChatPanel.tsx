@@ -710,7 +710,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           storage_path: storagePath,
           provider_metadata: { status: 'sending' },
         } as any;
-        setMessages(prev => [...prev, optimisticMsg]);
+        // O INSERT no banco acontece ANTES do upload, então o realtime costuma
+        // colocar a bolha na tela antes deste ponto — adicionar sem conferir
+        // duplicava a bolha (a "duplicidade de áudio" que o F5 corrigia).
+        // Se já está na tela, só complementa com o storage_path/status locais.
+        setMessages(prev => prev.some(m => m.id === savedMsg.id)
+          ? prev.map(m => m.id === savedMsg.id
+              ? { ...m, storage_path: storagePath, provider_metadata: (m as any).provider_metadata ?? { status: 'sending' } } as any
+              : m)
+          : [...prev, optimisticMsg]);
       }
 
       // Fila do worker: o envio sobrevive a fechamento/refresh da aba (causa real
