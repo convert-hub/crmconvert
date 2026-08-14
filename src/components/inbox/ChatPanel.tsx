@@ -45,6 +45,8 @@ interface QuickReply {
 }
 const mediaCache = new Map<string, string>();
 const MESSAGES_PAGE_SIZE = 50;
+// Ordem de progressão dos status de envio (failed é tratado à parte)
+const STATUS_RANK: Record<string, number> = { sending: 0, sent: 1, delivered: 2, read: 3 };
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -515,6 +517,36 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     return () => clearInterval(t);
   }, [messages]);
 
+  // Auto-cura dos checks: o evento realtime de UPDATE nem sempre chega à tela
+  // (queixa antiga do "fica com 1 check" com o delivered já gravado no banco).
+  // Enquanto a conversa aberta tiver mensagens nossas sem status final, reconsulta
+  // SÓ essas linhas (por id, ≤30) a cada 12s e mescla — barato e se desliga sozinho.
+  useEffect(() => {
+    const pendingIds = messages
+      .filter(m => m.direction === 'outbound')
+      .filter(m => {
+        const pm: any = (m as any).provider_metadata ?? {};
+        const s = pm.status ?? pm.last_status;
+        if (s === 'failed') return false;
+        return (STATUS_RANK[s] ?? 1) < 3; // ainda não chegou a 'read'
+      })
+      .filter(m => Date.now() - new Date(m.created_at).getTime() < 48 * 3600 * 1000)
+      .slice(-30)
+      .map(m => m.id);
+    if (pendingIds.length === 0) return;
+    const t = setInterval(async () => {
+      const { data } = await supabase.from('messages')
+        .select('id, provider_message_id, provider_metadata')
+        .in('id', pendingIds);
+      if (!data || data.length === 0) return;
+      setMessages(prev => prev.map(m => {
+        const fresh = data.find(f => f.id === m.id);
+        return fresh ? { ...m, ...(fresh as any) } : m;
+      }));
+    }, 12000);
+    return () => clearInterval(t);
+  }, [messages, conversationId]);
+
   // Reenvio manual de mídia que ficou sem confirmação. Antes de reenviar,
   // reconfere no banco: se já tem provider_message_id, o envio funcionou e só a
   // tela estava desatualizada — reenviar duplicaria a mensagem pro cliente.
@@ -834,7 +866,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at) : null;
           const showDateSeparator = !prevDate || !isSameDay(msgDate, prevDate);
           const pmeta = (msg as any).provider_metadata ?? {};
-          const msgStatus = pmeta.status ?? pmeta.last_status;
+          // Mostra sempre o status MAIS AVANÇADO: o envio grava em `status`
+          // ('sending'/'sent') e os webhooks de confirmação gravam em
+          // `last_status` ('delivered'/'read') — sem isso, um `sent` antigo
+          // escondia o `delivered` e a bolha ficava com 1 check para sempre.
+          const rawStatus = pmeta.status ?? pmeta.last_status;
+          const lastStatus = pmeta.last_status;
+          const msgStatus = (rawStatus !== 'failed' && lastStatus
+            && (STATUS_RANK[lastStatus] ?? -1) > (STATUS_RANK[rawStatus] ?? -1))
+            ? lastStatus : rawStatus;
           const isFailed = msgStatus === 'failed';
           const failedErr = isFailed && Array.isArray(pmeta.statuses)
             ? pmeta.statuses.slice().reverse().find((s: any) => s?.status === 'failed')?.raw?.errors?.[0]
