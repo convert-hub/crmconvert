@@ -52,7 +52,13 @@ export default function ContactsPage() {
 
   const syncOneContactHistory = async (c: Contact) => {
     if (!tenant || !c.phone) { toast.error('Contato sem telefone'); return; }
-    const instances = await listUazapiInstances(tenant.id);
+    let instances: Awaited<ReturnType<typeof listUazapiInstances>>;
+    try {
+      instances = await listUazapiInstances(tenant.id);
+    } catch {
+      toast.error('Não foi possível consultar as instâncias WhatsApp. Tente novamente.');
+      return;
+    }
     if (instances.length === 0) { toast.error('Nenhuma instância UAZAPI ativa'); return; }
     const inst = instances.length === 1 ? instances[0] : instances[0]; // TODO: prompt se múltiplas
     const tid = toast.loading('Buscando histórico no WhatsApp…');
@@ -143,8 +149,15 @@ export default function ContactsPage() {
 
   const handleDelete = async (id: string) => {
     setDeleteContactId(id);
-    const linked = await getContactLinked(id);
-    setContactCascadeData(linked);
+    try {
+      const linked = await getContactLinked(id);
+      setContactCascadeData(linked);
+    } catch {
+      // Sem os vínculos reais o diálogo mostraria "0 vinculados" e o usuário
+      // subestimaria o impacto — melhor abortar a exclusão.
+      setDeleteContactId(null);
+      toast.error('Não foi possível verificar os vínculos deste contato. Tente novamente.');
+    }
   };
 
   const exportCSV = () => {

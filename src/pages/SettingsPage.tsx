@@ -419,7 +419,10 @@ export default function SettingsPage() {
   const addKeyword = async () => {
     if (!tenant || !newKeyword.trim()) return;
     const updated = [...leadKeywords, newKeyword.trim().toLowerCase()];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, lead_keywords: updated } }).eq('id', tenant.id);
     if (error) { toast.error(error.message); return; }
@@ -431,7 +434,10 @@ export default function SettingsPage() {
   const removeKeyword = async (keyword: string) => {
     if (!tenant) return;
     const updated = leadKeywords.filter(k => k !== keyword);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, lead_keywords: updated } }).eq('id', tenant.id);
     if (error) { toast.error(error.message); return; }
@@ -442,7 +448,10 @@ export default function SettingsPage() {
   const addTakeoverKeyword = async () => {
     if (!tenant || !newTakeoverKeyword.trim()) return;
     const updated = [...takeoverKeywords, newTakeoverKeyword.trim()];
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, agent_takeover_keywords: updated } }).eq('id', tenant.id);
     if (error) { toast.error(error.message); return; }
@@ -454,7 +463,10 @@ export default function SettingsPage() {
   const removeTakeoverKeyword = async (keyword: string) => {
     if (!tenant) return;
     const updated = takeoverKeywords.filter(k => k !== keyword);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({ settings: { ...currentSettings, agent_takeover_keywords: updated } }).eq('id', tenant.id);
     if (error) { toast.error(error.message); return; }
@@ -555,7 +567,10 @@ export default function SettingsPage() {
     nextOpportunity: CustomFieldDef[],
   ) => {
     if (!tenant) return false;
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { toast.error('Não foi possível ler as configurações. Tente novamente.'); return false; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings)) ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({
       settings: {

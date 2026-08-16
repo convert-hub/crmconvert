@@ -70,12 +70,15 @@ export async function syncWhatsappHistoryForPhones(
 }
 
 export async function listUazapiInstances(tenantId: string) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('whatsapp_instances')
     .select('id, display_name, instance_name')
     .eq('tenant_id', tenantId)
     .eq('provider', 'uazapi')
     .eq('is_active', true)
     .order('display_name');
+  // Propaga a falha: retornar [] fazia os callers dizerem "Nenhuma instância
+  // UAZAPI ativa" — mensagem enganosa quando o que houve foi erro de leitura.
+  if (error) throw new Error(`Falha ao listar instâncias UAZAPI: ${error.message}`);
   return (data ?? []) as Array<{ id: string; display_name: string | null; instance_name: string | null }>;
 }

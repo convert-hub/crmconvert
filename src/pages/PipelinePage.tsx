@@ -793,7 +793,17 @@ export default function PipelinePage() {
       };
     });
 
-    await supabase.from('opportunities').update({ stage_id: newStageId, status: newStatus, position: 0, updated_at: nowIso }).eq('id', oppId);
+    // A UI já moveu o card de forma otimista. Sem checar o erro, uma falha
+    // (rede/RLS) passava silenciosa: o usuário via o card na etapa nova e só
+    // descobria no próximo refresh que a mudança não tinha sido salva.
+    const { error: moveErr } = await supabase.from('opportunities')
+      .update({ stage_id: newStageId, status: newStatus, position: 0, updated_at: nowIso })
+      .eq('id', oppId);
+    if (moveErr) {
+      toast.error('Não foi possível mover a oportunidade. Desfazendo…');
+      await Promise.all([loadStageAggregates(), refreshLoadedStages()]);
+      return;
+    }
 
     await supabase.rpc('enqueue_job', {
       _type: 'run_automations',
@@ -881,8 +891,15 @@ export default function PipelinePage() {
       return;
     }
     setDeleteOppId(oppId);
-    const linked = await getOpportunityLinked(oppId);
-    setCascadeData(linked);
+    try {
+      const linked = await getOpportunityLinked(oppId);
+      setCascadeData(linked);
+    } catch {
+      // Sem os vínculos reais o diálogo mostraria "0 vinculados" (subestimando
+      // o impacto de uma ação irreversível) — aborta a exclusão.
+      setDeleteOppId(null);
+      toast.error('Não foi possível verificar os vínculos desta oportunidade. Tente novamente.');
+    }
   };
 
   const getOppAlertStatus = (opp: Opportunity): CardAlertStatus => {

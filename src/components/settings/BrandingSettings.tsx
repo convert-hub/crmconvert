@@ -25,7 +25,10 @@ export default function BrandingSettings() {
   const saveBranding = async (updated: BrandingConfig) => {
     if (!tenant) return;
     setSaving(true);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: falha na LEITURA + fallback {} apagaria as demais
+    // chaves de settings do tenant no update abaixo.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { setSaving(false); toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings))
       ? tenantData.settings as Record<string, any> : {};
     const { error } = await supabase.from('tenants').update({

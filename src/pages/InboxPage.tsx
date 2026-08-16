@@ -374,8 +374,15 @@ export default function InboxPage() {
   const handleDeleteConversation = async (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDeleteConvId(convId);
-    const linked = await getConversationLinked(convId);
-    setCascadeData(linked);
+    try {
+      const linked = await getConversationLinked(convId);
+      setCascadeData(linked);
+    } catch {
+      // Sem os vínculos reais o diálogo mostraria "0 vinculados" (subestimando
+      // o impacto de uma ação irreversível) — aborta a exclusão.
+      setDeleteConvId(null);
+      toast.error('Não foi possível verificar os vínculos desta conversa. Tente novamente.');
+    }
   };
 
   const unreadLoaded = conversations.reduce((n, c) => n + (c.unread_count > 0 ? 1 : 0), 0);

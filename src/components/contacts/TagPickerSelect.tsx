@@ -48,7 +48,10 @@ export default function TagPickerSelect({ value, onChange, placeholder = 'Seleci
       return;
     }
     setSaving(true);
-    const { data: tenantData } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    // Read-modify-write: se a LEITURA falhar e cairmos no fallback {}, o update
+    // grava só { tags } e apaga as demais chaves de settings do tenant.
+    const { data: tenantData, error: readErr } = await supabase.from('tenants').select('settings').eq('id', tenant.id).single();
+    if (readErr) { setSaving(false); toast.error('Não foi possível ler as configurações. Tente novamente.'); return; }
     const currentSettings = (tenantData?.settings && typeof tenantData.settings === 'object' && !Array.isArray(tenantData.settings))
       ? tenantData.settings as Record<string, any> : {};
     const updated = [...(currentSettings.tags || []), { name, color: newColor }];

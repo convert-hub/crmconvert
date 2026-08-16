@@ -27,12 +27,21 @@ export interface OpportunityLinked {
 export function useCascadeDelete() {
   const [loading, setLoading] = useState(false);
 
+  // Estes previews alimentam diálogos de EXCLUSÃO. Se uma contagem falhar e
+  // virar 0, o usuário subestima o impacto de uma ação irreversível — por isso
+  // as falhas são propagadas (o caller aborta a exclusão) em vez de viradas em 0.
+  const failIf = (...errs: Array<{ message: string } | null>) => {
+    const e = errs.find(Boolean);
+    if (e) throw new Error(`Falha ao calcular vínculos: ${e.message}`);
+  };
+
   const getConversationLinked = async (conversationId: string): Promise<ConversationLinked> => {
-    const { data: conv } = await supabase
+    const { data: conv, error: convErr } = await supabase
       .from("conversations")
       .select("contact_id, opportunity_id")
       .eq("id", conversationId)
       .single();
+    failIf(convErr);
 
     if (!conv) return { conversations: 0, opportunities: 0, activities: 0, contactName: null, contactId: null, opportunityId: null };
 
@@ -47,13 +56,15 @@ export function useCascadeDelete() {
         supabase.from("opportunities").select("id", { count: "exact", head: true }).eq("contact_id", conv.contact_id),
         supabase.from("contacts").select("name").eq("id", conv.contact_id).single(),
       ]);
+      failIf(convCount.error, oppCount.error, contactData.error);
       result.conversations = convCount.count || 0;
       result.opportunities = oppCount.count || 0;
       result.contactName = contactData.data?.name || null;
     }
 
-    const { count: actCount } = await supabase
+    const { count: actCount, error: actErr } = await supabase
       .from("activities").select("id", { count: "exact", head: true }).eq("conversation_id", conversationId);
+    failIf(actErr);
     result.activities = actCount || 0;
 
     return result;
@@ -65,6 +76,7 @@ export function useCascadeDelete() {
       supabase.from("opportunities").select("id", { count: "exact", head: true }).eq("contact_id", contactId),
       supabase.from("activities").select("id", { count: "exact", head: true }).eq("contact_id", contactId),
     ]);
+    failIf(convs.error, opps.error, acts.error);
     return {
       conversations: convs.count || 0,
       opportunities: opps.count || 0,
@@ -73,8 +85,9 @@ export function useCascadeDelete() {
   };
 
   const getOpportunityLinked = async (opportunityId: string): Promise<OpportunityLinked> => {
-    const { data: opp } = await supabase
+    const { data: opp, error: oppErr } = await supabase
       .from("opportunities").select("contact_id").eq("id", opportunityId).single();
+    failIf(oppErr);
 
     const result: OpportunityLinked = { conversations: 0, activities: 0, contactName: null, contactId: opp?.contact_id || null };
 
@@ -83,12 +96,14 @@ export function useCascadeDelete() {
         supabase.from("conversations").select("id", { count: "exact", head: true }).eq("contact_id", opp.contact_id),
         supabase.from("contacts").select("name").eq("id", opp.contact_id).single(),
       ]);
+      failIf(convCount.error, contactData.error);
       result.conversations = convCount.count || 0;
       result.contactName = contactData.data?.name || null;
     }
 
-    const { count: actCount } = await supabase
+    const { count: actCount, error: actErr } = await supabase
       .from("activities").select("id", { count: "exact", head: true }).eq("opportunity_id", opportunityId);
+    failIf(actErr);
     result.activities = actCount || 0;
 
     return result;

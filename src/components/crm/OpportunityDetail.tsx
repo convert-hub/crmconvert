@@ -250,17 +250,21 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
 
       // 3. Last resort: create new conversation
       if (!convId) {
-        const { data: newConv } = await supabase.from('conversations').insert({
+        const { data: newConv, error: convErr } = await supabase.from('conversations').insert({
           tenant_id: tenant.id, contact_id: opp?.contact_id, opportunity_id: opportunityId,
           channel: 'whatsapp', status: 'open', assigned_to: membership.id,
         }).select().single();
-        convId = newConv!.id;
+        if (convErr || !newConv?.id) { toast.error('Falha ao criar a conversa. Tente novamente.'); return; }
+        convId = newConv.id;
       }
 
-      const { data: savedMsg } = await supabase.from('messages').insert({
+      // Erro descartado aqui fazia o fluxo seguir e exibir "Mensagem enviada"
+      // mesmo sem a mensagem ter sido gravada no CRM.
+      const { data: savedMsg, error: msgErr } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: convId, direction: 'outbound',
         content: newMessage, sender_membership_id: membership.id,
       }).select('id').single();
+      if (msgErr || !savedMsg?.id) { toast.error('Falha ao registrar a mensagem. Tente novamente.'); return; }
 
       if (opp?.contact?.phone) {
         const result = await sendText({
@@ -594,7 +598,13 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
                 size="sm"
                 className="rounded-xl"
                 onClick={async () => {
-                  const instances = await listUazapiInstances(opp.tenant_id);
+                  let instances: Awaited<ReturnType<typeof listUazapiInstances>>;
+                  try {
+                    instances = await listUazapiInstances(opp.tenant_id);
+                  } catch {
+                    toast.error('Não foi possível consultar as instâncias WhatsApp. Tente novamente.');
+                    return;
+                  }
                   if (instances.length === 0) { toast.error('Nenhuma instância UAZAPI ativa'); return; }
                   const tid = toast.loading('Buscando histórico…');
                   try {

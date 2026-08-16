@@ -554,9 +554,15 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     if (resendingId || !tenant || !conversationId) return;
     setResendingId(msg.id);
     try {
-      const { data: fresh } = await supabase.from('messages')
+      const { data: fresh, error: freshErr } = await supabase.from('messages')
         .select('provider_message_id, provider_metadata, storage_path, media_type')
         .eq('id', msg.id).maybeSingle();
+      // Se o pré-check falhar, NÃO seguir para o reenvio: sem ele não dá para
+      // saber se a mensagem já foi enviada, e o reenvio duplicaria para o cliente.
+      if (freshErr) {
+        toast.error('Não foi possível verificar o status desta mensagem. Tente novamente.');
+        return;
+      }
       if (fresh?.provider_message_id) {
         setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, ...(fresh as any) } : m));
         toast.success('Esta mensagem já tinha sido enviada — status atualizado.');
@@ -607,11 +613,21 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
     }
     setSending(true);
     try {
-      const { data: savedMsg } = await supabase.from('messages').insert({
+      const { data: savedMsg, error: insertErr } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
         content: msgContent, sender_membership_id: membership.id, is_internal: sendAsInternal,
       } as any).select('id').single();
-      if (savedMsg?.id && currentConvIdRef.current === capturedConvId) {
+      // Sem checar o erro, a bolha otimista ficava na tela como se tivesse sido
+      // salva e sumia no refresh (pior na nota interna, que não envia nada).
+      if (insertErr || !savedMsg?.id) {
+        if (currentConvIdRef.current === capturedConvId) {
+          setMessages(prev => prev.filter(m => m.id !== optimisticId));
+        }
+        setNewMsg(msgContent); // devolve o texto para não perder o que foi digitado
+        toast.error('Falha ao registrar a mensagem. Tente novamente.');
+        return;
+      }
+      if (currentConvIdRef.current === capturedConvId) {
         setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: savedMsg.id } : m));
       }
       if (!sendAsInternal) {

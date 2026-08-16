@@ -26,20 +26,33 @@ export default function FlowInstallPage() {
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  // Falha de sistema (rede/timeout/permissão) é diferente de "não existe":
+  // sem separar, um erro transitório virava "link expirou ou foi desativado"
+  // (mensagem enganosa) e o visitante não tinha como tentar de novo.
+  const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
+  const loadShare = async () => {
     if (!token) return;
-    (async () => {
-      // Via RPC (não leitura direta da tabela): flow_shares deixou de ser
-      // legível por anon, senão qualquer visitante listava os templates —
-      // e os tenant_id — de todos os clientes. A RPC exige o token exato.
-      const { data } = await (supabase as any).rpc('get_flow_share', { _token: token });
-      const record = Array.isArray(data) ? data[0] : data;
-      if (!record) setNotFound(true);
-      else setShare(record as ShareRecord);
+    setLoading(true);
+    setNotFound(false);
+    setLoadError(false);
+    // Via RPC (não leitura direta da tabela): flow_shares deixou de ser
+    // legível por anon, senão qualquer visitante listava os templates —
+    // e os tenant_id — de todos os clientes. A RPC exige o token exato.
+    const { data, error } = await (supabase as any).rpc('get_flow_share', { _token: token });
+    if (error) {
+      console.error('[FlowInstallPage] get_flow_share falhou:', error.message);
+      setLoadError(true);
       setLoading(false);
-    })();
-  }, [token]);
+      return;
+    }
+    const record = Array.isArray(data) ? data[0] : data;
+    if (!record) setNotFound(true);
+    else setShare(record as ShareRecord);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadShare(); }, [token]);
 
   const install = async () => {
     if (!session) { navigate(`/login?next=${encodeURIComponent(`/flow/install/${token}`)}`); return; }
@@ -59,6 +72,21 @@ export default function FlowInstallPage() {
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div>;
+  }
+
+  // Falha ao carregar (≠ não encontrado): não afirmar que o link expirou —
+  // pode ser problema momentâneo. Oferece retry.
+  if (loadError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <Card className="p-8 max-w-md text-center">
+          <GitBranch className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+          <h1 className="text-base font-semibold">Não foi possível carregar o template</h1>
+          <p className="text-xs text-muted-foreground mt-1">Ocorreu um problema ao buscar este link. Tente novamente.</p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={loadShare}>Tentar novamente</Button>
+        </Card>
+      </div>
+    );
   }
 
   if (notFound || !share) {

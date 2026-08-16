@@ -53,8 +53,10 @@ export default function AiSuggestionsPage() {
     if (!canAct || !membership?.id) return;
     setBusy(s.id);
     try {
-      // Revalidate current stage
-      const { data: opp } = await supabase.from('opportunities').select('stage_id').eq('id', s.opportunity_id).maybeSingle();
+      // Revalidate current stage. Falha de leitura != oportunidade inexistente:
+      // sem separar, um erro de rede/RLS virava "Oportunidade não encontrada".
+      const { data: opp, error: oppErr } = await supabase.from('opportunities').select('stage_id').eq('id', s.opportunity_id).maybeSingle();
+      if (oppErr) { toast.error('Não foi possível verificar a oportunidade. Tente novamente.'); return; }
       if (!opp) { toast.error('Oportunidade não encontrada'); return; }
 
       if (opp.stage_id !== s.from_stage_id) {

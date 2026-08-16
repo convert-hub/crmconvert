@@ -255,6 +255,11 @@ export default function ImportContactsDialog({ open, onOpenChange, tenantId, onI
       setUazInstances(list);
       if (list.length === 1) setHistoryInstanceId(list[0].id);
       else if (list.length === 0) setSyncHistory(false);
+    }).catch(() => {
+      // Falha de leitura != sem instância: desliga a opção e avisa, em vez de
+      // deixar o usuário achar que o tenant não tem WhatsApp conectado.
+      setSyncHistory(false);
+      toast.error('Não foi possível carregar as instâncias WhatsApp; a importação de histórico ficará desativada.');
     });
   }, [open, tenantId]);
 

@@ -28,11 +28,19 @@ export default function ProfileDialog({ open, onOpenChange, onSaved }: Props) {
     if (!open || !user) return;
     setLoading(true);
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('full_name, phone')
         .eq('user_id', user.id)
         .maybeSingle();
+      // Erro descartado mostrava os campos VAZIOS como se fosse o perfil atual;
+      // salvar em seguida apagava nome/telefone reais.
+      if (error) {
+        toast.error('Não foi possível carregar seu perfil. Feche e abra novamente.');
+        setLoading(false);
+        onOpenChange(false);
+        return;
+      }
       setFullName(data?.full_name ?? '');
       setPhone(data?.phone ?? '');
       setLoading(false);

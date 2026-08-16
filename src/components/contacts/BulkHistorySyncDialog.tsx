@@ -36,6 +36,9 @@ export default function BulkHistorySyncDialog({ open, onOpenChange, tenantId, fi
     listUazapiInstances(tenantId).then(list => {
       setInstances(list);
       if (list.length === 1) setInstanceId(list[0].id);
+    }).catch(() => {
+      // Sem isto, falha de leitura viraria "Nenhuma instância UAZAPI ativa"
+      toast.error('Não foi possível carregar as instâncias WhatsApp. Feche e abra novamente.');
     });
   }, [open, tenantId]);
 
