@@ -163,8 +163,23 @@ const handlers = {
       const { data: freshConv } = await supabase.from('conversations').select('*').eq('id', conversation_id).single();
       const { data: freshContact } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
 
+      // 2.5: Dispara os fluxos ANTES de decidir sobre a IA — se um fluxo que
+      // fala com o cliente iniciou, a resposta automática da IA é suprimida
+      // (exclusão mútua: sem isso o contato recebia duas respostas).
+      let talkingFlowStarted = false;
+      if (effectiveText && !data?.fromMe) {
+        try {
+          talkingFlowStarted = await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, effectiveText, message_id || null);
+        } catch (err) {
+          console.error('[Worker] Flow trigger error:', err.message);
+        }
+      }
+
       // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
-      if (freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
+      if (talkingFlowStarted) {
+        console.log(`[Worker] Fluxo conversacional ativo na conversa ${conversation_id} — IA suprimida para esta mensagem`);
+      }
+      if (!talkingFlowStarted && freshConv && !freshConv.assigned_to && freshConv.metadata?.ai_activated === true) {
         try {
           // For audio: mark BEFORE enqueuing to guarantee atomicity via optimistic lock
           if (targetMsg && isAudio && message_id) {
@@ -201,14 +216,7 @@ const handlers = {
         }
       }
 
-      // Trigger active chatbot flows with trigger_type='message_received' (using effectiveText)
-      if (effectiveText && !data?.fromMe) {
-        try {
-          await triggerMessageReceivedFlows(tenant_id, contact_id, conversation_id, effectiveText);
-        } catch (err) {
-          console.error('[Worker] Flow trigger error:', err.message);
-        }
-      }
+      // (fluxos já disparados no passo 2.5, antes da decisão da IA)
 
       return { conversation_id, contact_id, ai_processed: true };
     }
@@ -316,8 +324,18 @@ const handlers = {
     if (freshConv2) conversation = freshConv2;
     if (freshContact2) contact = freshContact2;
 
+    // 2.5: fluxos antes da IA (exclusão mútua — ver caminho already_saved)
+    let talkingFlowStartedLegacy = false;
+    if (!fromMe && effectiveText) {
+      try {
+        talkingFlowStartedLegacy = await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, effectiveText, savedMsg?.id || null);
+      } catch (err) {
+        console.error('[Worker] Flow trigger error:', err.message);
+      }
+    }
+
     // 3. THIRD: Auto-reply only if AI activated AND no human agent assigned (DEBOUNCED)
-    if (!fromMe && effectiveText && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
+    if (!talkingFlowStartedLegacy && !fromMe && effectiveText && !conversation.assigned_to && conversation.metadata?.ai_activated === true) {
       try {
         // Record last inbound timestamp (merge metadata)
         const nowIso = new Date().toISOString();
@@ -339,14 +357,7 @@ const handlers = {
       }
     }
 
-    // Trigger chatbot flows for inbound messages (using effectiveText)
-    if (!fromMe && effectiveText) {
-      try {
-        await triggerMessageReceivedFlows(tenant_id, contact.id, conversation.id, effectiveText);
-      } catch (err) {
-        console.error('[Worker] Flow trigger error:', err.message);
-      }
-    }
+    // (fluxos já disparados no passo 2.5, antes da decisão da IA)
 
     return { contact_id: contact.id, conversation_id: conversation.id };
   },
@@ -779,7 +790,11 @@ const handlers = {
     const { flow_id, tenant_id, contact_id, conversation_id, trigger_data, _resume } = payload;
     if (!flow_id || !tenant_id) throw new Error('Missing flow_id or tenant_id');
 
-    const { data: flow } = await supabase.from('chatbot_flows').select('*').eq('id', flow_id).eq('is_active', true).single();
+    // tenant_id no filtro: o worker roda com service_role (sem RLS) e o flow_id
+    // chega de campos sem FK (webhook_endpoints, keyword_automations, subflow).
+    // Sem este filtro, um id de fluxo de OUTRO tenant seria executado.
+    const { data: flow } = await supabase.from('chatbot_flows').select('*')
+      .eq('id', flow_id).eq('tenant_id', tenant_id).eq('is_active', true).single();
     if (!flow) return { skipped: true, reason: 'flow not found or inactive' };
 
     // Resume vs fresh execution
@@ -789,16 +804,22 @@ const handlers = {
     let visited;
 
     if (_resume?.execution_id) {
-      const { data: existing } = await supabase.from('flow_executions').select('*').eq('id', _resume.execution_id).single();
+      const { data: existing } = await supabase.from('flow_executions').select('*')
+        .eq('id', _resume.execution_id).eq('tenant_id', tenant_id).single();
       if (!existing) return { skipped: true, reason: 'execution not found' };
       execution = existing;
       ctx = { ...(existing.context || {}), contact_id: existing.contact_id, conversation_id: existing.conversation_id, tenant_id };
       ctx.variables = { ...(ctx.variables || {}), ...(_resume.extra_vars || {}) };
       initialQueue = Array.isArray(_resume.queue) ? [..._resume.queue] : (Array.isArray(existing.pending_queue) ? [...existing.pending_queue] : []);
       visited = new Set();
-      await supabase.from('flow_executions').update({
+      // Retomada atômica: só UMA retomada vence. Duas respostas rápidas do
+      // contato geravam dois resumes simultâneos que avançavam o fluxo em dobro.
+      const { data: claimed } = await supabase.from('flow_executions').update({
         status: 'running', pending_queue: null, pending_save_field: null, pending_custom_field_key: null,
-      }).eq('id', execution.id);
+      }).eq('id', execution.id).eq('status', 'awaiting_input').select('id');
+      if (!claimed || claimed.length === 0) {
+        return { skipped: true, reason: 'execution not awaiting input (resumida por outro job)' };
+      }
     } else {
       const { data: created } = await supabase.from('flow_executions').insert({
         flow_id, tenant_id, contact_id: contact_id || null, conversation_id: conversation_id || null,
@@ -2258,7 +2279,58 @@ function normalizeForPhraseMatch(str) {
     .trim();
 }
 
-async function enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData }) {
+// Um fluxo "conversa" quando fala com o cliente (mensagem, pergunta, menu ou
+// ação de envio). Só nesses casos a resposta automática da IA precisa ser
+// suprimida — fluxo que apenas etiqueta/cria oportunidade convive bem com ela
+// (é o caso de todos os fluxos em produção hoje).
+function flowTalksToContact(flow) {
+  const nodes = Array.isArray(flow?.nodes) ? flow.nodes : [];
+  return nodes.some((n) => {
+    const t = String(n?.type || '').toLowerCase();
+    if (t === 'message' || t === 'question' || t === 'menu' || t === 'aiassistant') return true;
+    if (t === 'action') {
+      const list = Array.isArray(n?.data?.actions)
+        ? n.data.actions
+        : (n?.data?.actionType ? [{ type: n.data.actionType }] : []);
+      return list.some((a) => ['send_whatsapp', 'send_whatsapp_template', 'ai_assistant'].includes(String(a?.type)));
+    }
+    return false;
+  });
+}
+
+// Já existe execução viva deste fluxo para este contato/conversa?
+// Fail-open: em erro de leitura, deixa seguir (não bloquear disparo legítimo).
+async function hasActiveExecution(flowId, conversationId, contactId) {
+  if (!conversationId && !contactId) return false;
+  let q = supabase.from('flow_executions')
+    .select('id')
+    .eq('flow_id', flowId)
+    .in('status', ['running', 'awaiting_input'])
+    .limit(1);
+  q = conversationId ? q.eq('conversation_id', conversationId) : q.eq('contact_id', contactId);
+  const { data, error } = await q;
+  if (error) {
+    console.error('[Worker] hasActiveExecution error:', error.message);
+    return false;
+  }
+  return (data || []).length > 0;
+}
+
+async function enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData, dedupKey }) {
+  // Não iniciar uma segunda cópia enquanto a anterior ainda está viva (ex: fluxo
+  // parado esperando resposta): antes, cada nova mensagem criava uma execução
+  // paralela que ficava órfã e competia pela mesma conversa.
+  if (await hasActiveExecution(flow.id, conversationId, contactId)) {
+    console.log(`[Worker] flow ${flow.id} já tem execução ativa nesta conversa — disparo ignorado`);
+    return false;
+  }
+  // Chave estável por evento: o MESMO evento (mensagem) nunca dispara o fluxo
+  // duas vezes. Antes usava Date.now(), que nunca colide — ou seja, a
+  // idempotência do enqueue_job não fazia efeito nenhum e reprocessar a mesma
+  // mensagem (retry do job, reentrega do webhook) reexecutava o fluxo inteiro.
+  const key = dedupKey
+    ? `flow-${flow.id}-${dedupKey}`
+    : `flow-${flow.id}-${conversationId || contactId}-${Date.now()}`;
   await supabase.rpc('enqueue_job', {
     _type: 'execute_flow',
     _payload: JSON.stringify({
@@ -2269,8 +2341,9 @@ async function enqueueFlowExecution(flow, { tenantId, contactId, conversationId,
       trigger_data: triggerData,
     }),
     _tenant_id: tenantId,
-    _idempotency_key: `flow-${flow.id}-${conversationId || contactId}-${Date.now()}`,
+    _idempotency_key: key,
   });
+  return true;
 }
 
 function keywordMatches(text, cfg) {
@@ -2289,29 +2362,38 @@ function keywordMatches(text, cfg) {
   });
 }
 
-async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText) {
+// Retorna true se algum fluxo QUE FALA COM O CLIENTE foi disparado — o caller
+// usa isso para não enfileirar também a resposta automática da IA (senão o
+// contato receberia duas respostas independentes).
+// `messageId` é a chave de idempotência: o mesmo evento não dispara duas vezes.
+async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, messageText, messageId) {
   const triggerData = { message: messageText, message_text: messageText, last_answer: messageText };
+  let talkingFlowStarted = false;
 
   // 1) message_received flows (any inbound message)
   const { data: msgFlows } = await supabase.from('chatbot_flows')
-    .select('id, trigger_type, trigger_config')
+    .select('id, trigger_type, trigger_config, nodes')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
     .eq('trigger_type', 'message_received');
   for (const flow of msgFlows || []) {
-    await enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData });
+    const started = await enqueueFlowExecution(flow, {
+      tenantId, contactId, conversationId, triggerData,
+      dedupKey: messageId ? `msg-${messageId}` : null,
+    });
+    if (started && flowTalksToContact(flow)) talkingFlowStarted = true;
   }
 
   // 2) keyword_automations (new unified table)
   const { data: kwRules } = await supabase.from('keyword_automations')
-    .select('id, flow_id, keywords, match, case_sensitive')
+    .select('id, flow_id, keywords, match, case_sensitive, executions_count')
     .eq('tenant_id', tenantId)
     .eq('is_active', true);
-  if (!kwRules || kwRules.length === 0) return;
+  if (!kwRules || kwRules.length === 0) return talkingFlowStarted;
 
   const flowIds = [...new Set(kwRules.map(r => r.flow_id))];
   const { data: kwFlows } = await supabase.from('chatbot_flows')
-    .select('id, trigger_type, trigger_config')
+    .select('id, trigger_type, trigger_config, nodes')
     .in('id', flowIds)
     .eq('is_active', true);
   const flowMap = new Map((kwFlows || []).map(f => [f.id, f]));
@@ -2320,9 +2402,14 @@ async function triggerMessageReceivedFlows(tenantId, contactId, conversationId, 
     const flow = flowMap.get(rule.flow_id);
     if (!flow) continue;
     if (!keywordMatches(messageText || '', { keywords: rule.keywords, match: rule.match, case_sensitive: rule.case_sensitive })) continue;
-    await enqueueFlowExecution(flow, { tenantId, contactId, conversationId, triggerData });
+    const started = await enqueueFlowExecution(flow, {
+      tenantId, contactId, conversationId, triggerData,
+      dedupKey: messageId ? `msg-${messageId}-kw-${rule.id}` : null,
+    });
+    if (started && flowTalksToContact(flow)) talkingFlowStarted = true;
     await supabase.from('keyword_automations').update({ executions_count: (rule.executions_count || 0) + 1 }).eq('id', rule.id);
   }
+  return talkingFlowStarted;
 }
 
 async function triggerLeadCreatedFlows(tenantId, contact) {
