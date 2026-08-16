@@ -20,8 +20,8 @@ import { formatDistanceToNow, format, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import {
-  DndContext, closestCorners, PointerSensor, useSensor, useSensors,
-  DragEndEvent, DragStartEvent, DragOverlay,
+  DndContext, pointerWithin, rectIntersection, PointerSensor, useSensor, useSensors,
+  DragEndEvent, DragStartEvent, DragOverlay, type CollisionDetection,
 } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -48,6 +48,17 @@ interface Filters {
 const emptyFilters: Filters = { assignee: 'all', priority: 'all', tag: '', valueMin: '', valueMax: '' };
 
 const PAGE_SIZE = 50;
+
+// Detecção de alvo do arraste. closestCorners media distância entre CANTOS —
+// em colunas altas os cantos ficam longe do ponteiro e o alvo saltava para a
+// coluna vizinha (ou para um card da própria coluna de origem, o que fazia o
+// movimento ser lido como reordenação e o card "não ir" para a etapa anterior).
+// pointerWithin usa a posição real do ponteiro; rectIntersection é o fallback
+// para quando o ponteiro sai da área (ex: arrastar até a borda da tela).
+const kanbanCollisionDetection: CollisionDetection = (args) => {
+  const pointerCollisions = pointerWithin(args);
+  return pointerCollisions.length > 0 ? pointerCollisions : rectIntersection(args);
+};
 const SEARCH_LIMIT = 300;
 const SELECT_COLS = 'id,tenant_id,title,value,priority,status,stage_id,pipeline_id,assigned_to,contact_id,updated_at,created_at,position,custom_fields,tags, contact:contacts(id,name,phone,tags,birth_date)';
 
@@ -138,6 +149,19 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
     transition,
     opacity: isDragging ? 0.4 : 1,
   };
+  // Com o arraste no card inteiro, soltar o card dispararia o onClick e abriria
+  // o painel de detalhes sem querer. Guarda: só conta como clique se o ponteiro
+  // praticamente não andou (mesmo limiar de 8px do sensor).
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const handlePointerDown = (e: React.PointerEvent) => {
+    pointerStart.current = { x: e.clientX, y: e.clientY };
+    (listeners as any)?.onPointerDown?.(e);
+  };
+  const handleClick = (e: React.MouseEvent) => {
+    const start = pointerStart.current;
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 8) return; // foi arraste
+    onClick();
+  };
 
   const borderClass =
     alertStatus === 'overdue' ? 'border-destructive/60 ring-1 ring-destructive/30' :
@@ -146,12 +170,17 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
     'border-border/50';
 
   return (
-    <Card ref={setNodeRef} style={style}
-      className={`cursor-pointer p-3.5 hover-lift border bg-card rounded-xl group ${borderClass}`}
-      onClick={onClick}>
+    // Arraste no card INTEIRO (antes só na alça de três pontinhos, difícil de
+    // pegar). O sensor exige 8px de movimento, então clique simples continua
+    // abrindo a oportunidade; os botões de ação param a propagação do
+    // pointerdown para não iniciarem arraste.
+    <Card ref={setNodeRef} style={style} {...attributes} {...listeners}
+      className={`cursor-grab active:cursor-grabbing p-3.5 hover-lift border bg-card rounded-xl group ${borderClass}`}
+      onPointerDown={handlePointerDown}
+      onClick={handleClick}>
       <div className="space-y-2.5">
         <div className="flex items-start gap-2">
-          <div {...attributes} {...listeners} className="mt-0.5 opacity-0 group-hover:opacity-60 transition-opacity cursor-grab">
+          <div className="mt-0.5 opacity-0 group-hover:opacity-60 transition-opacity" aria-hidden>
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="text-sm font-medium leading-tight flex-1 text-foreground">{opp.title}</p>
@@ -174,6 +203,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
             <div className="relative shrink-0">
               <Button variant="ghost" size="icon"
                 className={`h-6 w-6 rounded-lg transition-opacity ${unreadCount > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={onWhatsApp} title="Conversar no WhatsApp">
                 <MessageCircle className={`h-3.5 w-3.5 ${unreadCount > 0 ? 'text-destructive' : 'text-primary'}`} />
               </Button>
@@ -186,6 +216,7 @@ function SortableOppCard({ opp, onClick, onWhatsApp, onDelete, alertStatus, unre
           )}
           {canDelete && (
             <Button variant="ghost" size="icon" className="h-6 w-6 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={onDelete} title="Excluir oportunidade">
               <Trash2 className="h-3.5 w-3.5 text-destructive" />
             </Button>
@@ -371,11 +402,33 @@ export default function PipelinePage() {
   const hasActiveFilters = filters.assignee !== 'all' || filters.priority !== 'all' || filters.tag !== '' || filters.valueMin !== '' || filters.valueMax !== '';
   const isSearchMode = search.trim().length > 0 || hasActiveFilters;
 
+  // Estado canônico: cada oportunidade aparece UMA vez, na coluna do próprio
+  // stage_id. Sem isto, um refresh que leia o banco antes do UPDATE de etapa
+  // commitar reinsere o card na etapa antiga (mergeStageRows nunca removia) e
+  // ele ficava duplicado até o F5 — e o lookup do drag pegava a cópia velha,
+  // com stage_id desatualizado, fazendo o movimento ser lido como reordenação
+  // ("trava" ao voltar de etapa). Empate resolve pela versão mais recente, que
+  // é sempre a otimista (updated_at = agora).
+  const canonicalByStage = useMemo<Record<string, Opp[]>>(() => {
+    const byId: Record<string, Opp> = {};
+    for (const list of Object.values(oppsByStageState)) {
+      for (const o of list) {
+        const prev = byId[o.id];
+        if (!prev || new Date(o.updated_at).getTime() > new Date(prev.updated_at).getTime()) {
+          byId[o.id] = o;
+        }
+      }
+    }
+    const map: Record<string, Opp[]> = {};
+    for (const o of Object.values(byId)) (map[o.stage_id] ||= []).push(o);
+    return map;
+  }, [oppsByStageState]);
+
   // Flat view — used for engagement/activities/drag lookups
   const allLoadedOpps = useMemo<Opp[]>(() => {
     if (isSearchMode) return searchResults;
-    return Object.values(oppsByStageState).flat();
-  }, [isSearchMode, searchResults, oppsByStageState]);
+    return Object.values(canonicalByStage).flat();
+  }, [isSearchMode, searchResults, canonicalByStage]);
 
   // Group search results by stage
   const searchByStage = useMemo(() => {
@@ -387,14 +440,14 @@ export default function PipelinePage() {
   }, [searchResults]);
 
   const oppsByStage = useCallback((stageId: string): Opp[] => {
-    const src = isSearchMode ? (searchByStage[stageId] || []) : (oppsByStageState[stageId] || []);
+    const src = isSearchMode ? (searchByStage[stageId] || []) : (canonicalByStage[stageId] || []);
     return [...src].sort((a, b) => {
       const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
       const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
       if (posA !== posB) return posA - posB;
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
-  }, [isSearchMode, searchByStage, oppsByStageState]);
+  }, [isSearchMode, searchByStage, canonicalByStage]);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -535,9 +588,12 @@ export default function PipelinePage() {
     setAggregatesByStage(map);
   }, [selectedPipeline, filterArgs]);
 
-  const mergeStageRows = (existing: Opp[], rows: Opp[]): Opp[] => {
+  // Preserva os extras já carregados (páginas 2+), mas DESCARTA quem não
+  // pertence mais à etapa — antes era união pura por id, então um card que saía
+  // da etapa nunca era removido do balde e ficava duplicado na tela.
+  const mergeStageRows = (existing: Opp[], rows: Opp[], stageId: string): Opp[] => {
     const byId: Record<string, Opp> = {};
-    for (const o of existing) byId[o.id] = o;
+    for (const o of existing) if (o.stage_id === stageId) byId[o.id] = o;
     for (const o of rows) byId[o.id] = o;
     return Object.values(byId);
   };
@@ -559,7 +615,7 @@ export default function PipelinePage() {
     setLoadingByStage(prev => ({ ...prev, [stageId]: true }));
     const rows = await fetchStagePage(stageId, page);
     setOppsByStageState(prev => {
-      const next = append ? mergeStageRows(prev[stageId] || [], rows) : rows;
+      const next = append ? mergeStageRows(prev[stageId] || [], rows, stageId) : rows;
       return { ...prev, [stageId]: next };
     });
     setPageByStage(prev => ({ ...prev, [stageId]: page }));
@@ -590,7 +646,7 @@ export default function PipelinePage() {
     if (targets.length === 0) return;
     await Promise.all(targets.map(async s => {
       const rows = await fetchStagePage(s.id, 0);
-      setOppsByStageState(prev => ({ ...prev, [s.id]: mergeStageRows(prev[s.id] || [], rows) }));
+      setOppsByStageState(prev => ({ ...prev, [s.id]: mergeStageRows(prev[s.id] || [], rows, s.id) }));
     }));
   }, [stages, oppsByStageState, fetchStagePage]);
 
@@ -1026,12 +1082,12 @@ export default function PipelinePage() {
 
       {/* Kanban */}
       <div className="flex-1 overflow-x-auto p-4 pt-0">
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={kanbanCollisionDetection} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="flex gap-4 h-full min-w-max">
             {stages.map(stage => {
               const stageOpps = oppsByStage(stage.id);
               const agg = aggregatesByStage[stage.id] || { count: 0, total: 0 };
-              const loadedCount = (oppsByStageState[stage.id] || []).length;
+              const loadedCount = (canonicalByStage[stage.id] || []).length;
               const showLoadMore = !isSearchMode && loadedCount < agg.count;
               const remaining = Math.max(0, agg.count - loadedCount);
               return (
