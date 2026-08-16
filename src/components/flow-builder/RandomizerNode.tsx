@@ -2,6 +2,7 @@ import { Handle, Position } from '@xyflow/react';
 import { Shuffle } from 'lucide-react';
 
 interface RandomizerOption {
+  id?: string; // opções antigas (pré-16/08) não têm id; o handle cai no formato por índice
   label: string;
   weight: number;
 }
@@ -35,13 +36,13 @@ export default function RandomizerNode({ data }: { data: Record<string, unknown>
           ))}
         </div>
       )}
-      {/* Multiple output handles - one per option */}
-      {options.map((_, i) => (
+      {/* Multiple output handles - one per option (id estável quando a opção tem id) */}
+      {options.map((opt, i) => (
         <Handle
-          key={`option-${i}`}
+          key={opt.id ? `opt-${opt.id}` : `option-${i}`}
           type="source"
           position={Position.Bottom}
-          id={`option-${i}`}
+          id={opt.id ? `opt-${opt.id}` : `option-${i}`}
           className="!w-2.5 !h-2.5 !bg-cyan-500 !border-2 !border-card"
           style={{
             left: `${((i + 1) / (options.length + 1)) * 100}%`,

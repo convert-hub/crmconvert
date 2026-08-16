@@ -84,6 +84,10 @@ export default function TriggerConfigPanel({ triggerType, config, onChange, flow
             onChange={(v) => set({ tag: v || undefined })}
           />
         </div>
+        <p className="text-[11px] text-muted-foreground pt-1.5 leading-relaxed">
+          Dispara quando esta tag é adicionada a um contato. Deixe vazio para
+          disparar com qualquer tag nova.
+        </p>
       </div>
     );
   }

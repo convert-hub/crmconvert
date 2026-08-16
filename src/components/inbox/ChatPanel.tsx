@@ -27,6 +27,7 @@ function formatDateSeparator(date: Date): string {
 }
 import { toast } from 'sonner';
 import AudioRecorder from '@/components/inbox/AudioRecorder';
+import StartFlowButton from '@/components/flow-builder/StartFlowButton';
 import AudioPlayer from '@/components/inbox/AudioPlayer';
 import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
 import ConversationScheduledDialog from '@/components/scheduled/ConversationScheduledDialog';
@@ -867,6 +868,13 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
             </span>
           </div>
           {status && <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[status] ?? ''}`}>{conversationStatusLabels[status] ?? status}</Badge>}
+          {tenant && (effectiveContact as any)?.id && (
+            <StartFlowButton
+              tenantId={tenant.id}
+              contactId={(effectiveContact as any).id}
+              conversationId={conversationId}
+            />
+          )}
         </div>
       )}
       <div ref={messagesScrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-background">

@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import type { Opportunity, Contact, Stage, Message, Activity, TenantMembership, Profile } from '@/types/crm';
 import { Button } from '@/components/ui/button';
 import { CtwaBadge } from '@/components/shared/CtwaBadge';
+import StartFlowButton from '@/components/flow-builder/StartFlowButton';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
@@ -464,6 +465,16 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-foreground">{opp.contact.name}</h3>
             <CtwaBadge contact={opp.contact as any} />
+            {tenant && opp.contact_id && (
+              <div className="ml-auto">
+                <StartFlowButton
+                  tenantId={tenant.id}
+                  contactId={opp.contact_id}
+                  conversationId={chatConvId}
+                  variant="button"
+                />
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
             {opp.contact.phone && <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" />{opp.contact.phone}</span>}

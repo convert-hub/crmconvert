@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -42,6 +42,12 @@ import RandomizerNode from '@/components/flow-builder/RandomizerNode';
 import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
+import { validateFlow, type FlowIssue } from '@/lib/flowValidation';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { AlertTriangle } from 'lucide-react';
 import WhatsAppInstancePicker from '@/components/shared/WhatsAppInstancePicker';
 import ConditionCriteriaEditor from '@/components/flow-builder/ConditionCriteriaEditor';
 import ActionsListEditor from '@/components/flow-builder/ActionsListEditor';
@@ -128,8 +134,42 @@ export default function FlowBuilderPage() {
   const [addPaletteOpen, setAddPaletteOpen] = useState(false);
   const [simulatorOpen, setSimulatorOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [exitDialogOpen, setExitDialogOpen] = useState(false);
+  const [issuesDialogOpen, setIssuesDialogOpen] = useState(false);
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const skipNextDirtyRef = useRef(true); // ignora o primeiro disparo após abrir/criar fluxo
+
+  // Problemas do fluxo atual (erros bloqueiam ativar; avisos só informam)
+  const issues = useMemo<FlowIssue[]>(
+    () => listView ? [] : validateFlow(nodes, edges, { triggerType, whatsappInstanceId }),
+    [nodes, edges, triggerType, whatsappInstanceId, listView]
+  );
+  const issueErrors = issues.filter(i => i.level === 'error');
+
+  // O gatilho não pode ser excluído (deletable: false vale para a tecla Delete do canvas)
+  const protectTrigger = (list: Node[]) =>
+    list.map(n => n.type === 'trigger' ? { ...n, deletable: false } : n);
+
+  // Fluxos antigos: opções do randomizador não têm id (aresta presa ao índice —
+  // excluir uma opção fazia as setas escorregarem). Dá id a cada opção e remapeia
+  // as arestas existentes para o novo handle estável.
+  const migrateRandomizerIds = (rawNodes: Node[], rawEdges: Edge[]) => {
+    let edgesOut = rawEdges;
+    const nodesOut = rawNodes.map(n => {
+      if (n.type !== 'randomizer') return n;
+      const options = (((n.data as any)?.options ?? []) as any[]);
+      if (options.length === 0 || options.every(o => o?.id)) return n;
+      const withIds = options.map((o, i) => o?.id ? o : { ...o, id: `r${i}${Math.random().toString(36).slice(2, 7)}` });
+      edgesOut = edgesOut.map(e => {
+        if (e.source !== n.id || !e.sourceHandle?.startsWith('option-')) return e;
+        const idx = Number(e.sourceHandle.slice('option-'.length));
+        const opt = withIds[idx];
+        return opt?.id ? { ...e, sourceHandle: `opt-${opt.id}` } : e;
+      });
+      return { ...n, data: { ...n.data, options: withIds } };
+    });
+    return { nodes: nodesOut, edges: edgesOut };
+  };
 
 
   // Load flows + folders
@@ -239,8 +279,9 @@ export default function FlowBuilderPage() {
     setTriggerConfig((flow.trigger_config as TriggerConfig) || {});
     setWhatsappInstanceId(((flow as any).whatsapp_instance_id as string | null) ?? null);
     setCurrentFolderId(flow.folder_id ?? null);
-    setNodes((flow.nodes as Node[]) || []);
-    setEdges((flow.edges as Edge[]) || []);
+    const migrated = migrateRandomizerIds((flow.nodes as Node[]) || [], (flow.edges as Edge[]) || []);
+    setNodes(protectTrigger(migrated.nodes));
+    setEdges(migrated.edges);
     setSavedAt(null);
     setDirty(false);
     setListView(false);
@@ -264,6 +305,7 @@ export default function FlowBuilderPage() {
       type: 'trigger',
       position: { x: 250, y: 50 },
       data: { label: 'Início', triggerType: 'message_received' },
+      deletable: false,
     };
     setNodes([triggerNode]);
     setEdges([]);
@@ -285,7 +327,10 @@ export default function FlowBuilderPage() {
     if (type === 'delay') data = { ...data, delayMinutes: 5 };
     if (type === 'action') data = { ...data, actionType: 'add_tag', config: {} };
     if (type === 'question') data = { ...data, question: '', saveField: 'name', customFieldKey: '', customFieldLabel: '', validationType: 'none' };
-    if (type === 'randomizer') data = { ...data, mode: 'random', options: [{ label: 'Opção A', weight: 50 }, { label: 'Opção B', weight: 50 }] };
+    if (type === 'randomizer') data = { ...data, mode: 'random', options: [
+      { id: `r${Date.now().toString(36).slice(-5)}a`, label: 'Opção A', weight: 50 },
+      { id: `r${Date.now().toString(36).slice(-5)}b`, label: 'Opção B', weight: 50 },
+    ] };
     if (type === 'menu') data = { ...data, question: '', options: [
       { id: `o${Date.now().toString(36).slice(-5)}a`, label: 'Opção 1', value: '' },
       { id: `o${Date.now().toString(36).slice(-5)}b`, label: 'Opção 2', value: '' },
@@ -297,8 +342,12 @@ export default function FlowBuilderPage() {
     setNodes((nds) => [...nds, newNode]);
   };
 
-  const handleSave = async (silent = false) => {
-    if (!tenant || !flowName.trim()) return;
+  const handleSave = async (silent = false): Promise<boolean> => {
+    if (!tenant) return false;
+    if (!flowName.trim()) {
+      if (!silent) toast.error('Dê um nome ao fluxo antes de salvar');
+      return false;
+    }
     setSaving(true);
     const payload = {
       name: flowName,
@@ -331,15 +380,60 @@ export default function FlowBuilderPage() {
       }
     } catch (e: any) {
       toast.error(e.message);
+      setSaving(false);
+      return false;
     }
     setSaving(false);
+    return true;
   };
 
 
-  const handleDelete = async (id: string) => {
-    await supabase.from('chatbot_flows').delete().eq('id', id);
-    setFlows(prev => prev.filter(f => f.id !== id));
+  const handleDelete = async (flow: FlowRecord) => {
+    const aviso = flow.is_active
+      ? `O fluxo "${flow.name}" está ATIVO e será excluído permanentemente. Contatos que caírem no gatilho dele deixarão de ser atendidos. Excluir mesmo assim?`
+      : `Excluir o fluxo "${flow.name}"? Esta ação não pode ser desfeita.`;
+    if (!window.confirm(aviso)) return;
+    const { error } = await supabase.from('chatbot_flows').delete().eq('id', flow.id);
+    if (error) { toast.error(`Erro ao excluir: ${error.message}`); return; }
+    setFlows(prev => prev.filter(f => f.id !== flow.id));
     toast.success('Fluxo removido');
+  };
+
+  // Sair do editor: se há alterações não salvas, confirma antes (vale para fluxo
+  // novo nunca salvo e para edição pendente de fluxo existente)
+  const requestExit = () => {
+    if (dirty || saving) setExitDialogOpen(true);
+    else setListView(true);
+  };
+  const exitWithoutSaving = () => {
+    setExitDialogOpen(false);
+    setDirty(false);
+    setListView(true);
+  };
+  const saveAndExit = async () => {
+    const ok = await handleSave(false);
+    if (ok) { setExitDialogOpen(false); setListView(true); }
+  };
+
+  // Fechar/atualizar a aba com alterações pendentes: aviso nativo do navegador
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!listView && dirty) { e.preventDefault(); e.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty, listView]);
+
+  // Ativar exige fluxo sem erros (avisos não bloqueiam)
+  const handleActiveToggle = (checked: boolean) => {
+    if (checked && issueErrors.length > 0) {
+      setIssuesDialogOpen(true);
+      return;
+    }
+    if (checked && issues.length > 0) {
+      toast.warning(`Fluxo ativado com ${issues.length} aviso${issues.length > 1 ? 's' : ''} — clique no indicador ⚠ para ver.`);
+    }
+    setFlowActive(checked);
   };
 
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
@@ -351,6 +445,15 @@ export default function FlowBuilderPage() {
   const saveNodeEdit = () => {
     if (!editingNode) return;
     setNodes(nds => nds.map(n => n.id === editingNode.id ? { ...n, data: { ...editingNode.data } } : n));
+    // Randomizador: remove arestas de opções excluídas (senão ficam setas penduradas
+    // apontando para um handle que não existe mais)
+    if (editingNode.type === 'randomizer') {
+      const options = (((editingNode.data as any)?.options ?? []) as any[]);
+      const validHandles = new Set(options.map((o, i) => o?.id ? `opt-${o.id}` : `option-${i}`));
+      setEdges(eds => eds.filter(e =>
+        e.source !== editingNode.id || !e.sourceHandle || validHandles.has(e.sourceHandle)
+      ));
+    }
     setNodeEditOpen(false);
     setEditingNode(null);
   };
@@ -494,7 +597,7 @@ export default function FlowBuilderPage() {
                     </Select>
                     <Button
                       variant="ghost" size="icon" className="h-8 w-8"
-                      onClick={() => handleDelete(flow.id)}
+                      onClick={() => handleDelete(flow)}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
@@ -514,7 +617,7 @@ export default function FlowBuilderPage() {
     <div ref={editorContainerRef} className={cn('flex flex-col bg-background', isFullscreen ? 'h-screen' : 'h-[calc(100vh-3.5rem)]')}>
       {/* Top bar */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-2 bg-card shrink-0">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setListView(true)}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={requestExit}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <Input
@@ -533,9 +636,26 @@ export default function FlowBuilderPage() {
           ) : null}
         </div>
         <div className="flex items-center gap-3 ml-auto">
+          {issues.length > 0 && (
+            <button
+              onClick={() => setIssuesDialogOpen(true)}
+              className={cn(
+                'flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+                issueErrors.length > 0
+                  ? 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                  : 'bg-amber-500/10 text-amber-600 hover:bg-amber-500/20'
+              )}
+              title="Ver problemas do fluxo"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {issueErrors.length > 0
+                ? `${issueErrors.length} erro${issueErrors.length > 1 ? 's' : ''}`
+                : `${issues.length} aviso${issues.length > 1 ? 's' : ''}`}
+            </button>
+          )}
           <div className="flex items-center gap-2">
             <Label className="text-xs text-muted-foreground">Ativo</Label>
-            <Switch checked={flowActive} onCheckedChange={setFlowActive} />
+            <Switch checked={flowActive} onCheckedChange={handleActiveToggle} />
           </div>
           <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setSimulatorOpen(true)}>
             <PlayCircle className="h-3.5 w-3.5 mr-1.5" />Simular
@@ -787,10 +907,10 @@ export default function FlowBuilderPage() {
               )}
 
               {editingNode.type === 'randomizer' && (() => {
-                const options = ((editingNode.data as any).options || []) as { label: string; weight: number }[];
+                const options = ((editingNode.data as any).options || []) as { id?: string; label: string; weight: number }[];
                 const mode = (editingNode.data as any).mode || 'random';
                 const totalWeight = options.reduce((s, o) => s + (o.weight || 0), 0);
-                const updateOptions = (newOptions: { label: string; weight: number }[]) =>
+                const updateOptions = (newOptions: { id?: string; label: string; weight: number }[]) =>
                   setEditingNode({ ...editingNode, data: { ...editingNode.data, options: newOptions } });
 
                 return (
@@ -826,7 +946,7 @@ export default function FlowBuilderPage() {
                     <div className="space-y-2">
                       <Label className="text-xs">Opções</Label>
                       {options.map((opt, i) => (
-                        <div key={i} className="flex items-center gap-2">
+                        <div key={opt.id ?? i} className="flex items-center gap-2">
                           <Input
                             value={opt.label}
                             onChange={e => {
@@ -870,7 +990,7 @@ export default function FlowBuilderPage() {
                         variant="outline"
                         size="sm"
                         className="w-full h-8 text-xs border-dashed"
-                        onClick={() => updateOptions([...options, { label: `Opção ${options.length + 1}`, weight: 0 }])}
+                        onClick={() => updateOptions([...options, { id: `r${Date.now().toString(36).slice(-6)}`, label: `Opção ${options.length + 1}`, weight: 0 }])}
                       >
                         <Plus className="h-3 w-3 mr-1" />Adicionar opção
                       </Button>
@@ -952,6 +1072,60 @@ export default function FlowBuilderPage() {
           edges={edges}
         />
       )}
+
+      {/* Sair com alterações não salvas */}
+      <AlertDialog open={exitDialogOpen} onOpenChange={setExitDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sair sem salvar?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedFlow
+                ? 'Você tem alterações que ainda não foram salvas. Se sair agora, elas serão perdidas.'
+                : 'Este fluxo ainda não foi criado. Se você sair agora, tudo o que montou será perdido.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Continuar editando</AlertDialogCancel>
+            <Button variant="outline" onClick={exitWithoutSaving}>Sair sem salvar</Button>
+            <AlertDialogAction onClick={(e) => { e.preventDefault(); saveAndExit(); }} disabled={saving}>
+              {saving ? 'Salvando…' : 'Salvar e sair'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Problemas do fluxo */}
+      <AlertDialog open={issuesDialogOpen} onOpenChange={setIssuesDialogOpen}>
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {issueErrors.length > 0 ? 'O fluxo tem erros' : 'Avisos do fluxo'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {issueErrors.length > 0
+                ? 'Corrija os erros abaixo para poder ativar o fluxo. Avisos não impedem a ativação.'
+                : 'Nada impede a ativação, mas vale revisar os pontos abaixo.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-72 overflow-y-auto space-y-1.5 text-sm">
+            {issues.map((issue, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs',
+                  issue.level === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700'
+                )}
+              >
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>{issue.message}</span>
+              </div>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogAction>Entendi</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
     </div>
   );

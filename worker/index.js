@@ -1048,10 +1048,51 @@ const handlers = {
           }
         } else if (node.type === 'condition') {
           const normalize = (s) => removeAccents(String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' '));
+
+          const criteria = Array.isArray(node.data?.criteria) && node.data.criteria.length > 0
+            ? node.data.criteria
+            : [{ field: node.data?.field || 'message', operator: node.data?.operator || 'contains', value: node.data?.value || '' }];
+
+          // Campos contact_* do editor não existiam em ctx.variables (que usa
+          // contact.name etc.) e caíam no fallback = texto da mensagem. Carrega o
+          // contato fresco uma vez por nó de condição.
+          let condContact = null;
+          if (ctx.contact_id && criteria.some(c => String(c.field || '').startsWith('contact_'))) {
+            const { data: cc } = await supabase.from('contacts')
+              .select('name, email, phone, status, tags').eq('id', ctx.contact_id).maybeSingle();
+            condContact = cc || null;
+          }
+          const fieldValue = (field) => {
+            switch (field) {
+              case 'contact_name':   return condContact?.name ?? '';
+              case 'contact_email':  return condContact?.email ?? '';
+              case 'contact_phone':  return condContact?.phone ?? '';
+              case 'contact_status': return condContact?.status ?? '';
+              case 'contact_tag':    return Array.isArray(condContact?.tags) ? condContact.tags : [];
+              case 'message':        return ctx.variables.message ?? '';
+              default:               return ctx.variables[field] ?? ctx.variables.message ?? '';
+            }
+          };
+
           const evalOne = (field, operator, value) => {
-            const testValue = ctx.variables[field] ?? ctx.variables.message ?? '';
-            const normTest = normalize(testValue);
+            const raw = fieldValue(field);
             const normValue = normalize(value);
+            if (Array.isArray(raw)) {
+              // Tags: compara contra CADA tag do contato
+              const tags = raw.map(t => normalize(t));
+              switch (operator) {
+                case 'contains':     return tags.some(t => t.includes(normValue));
+                case 'not_contains': return !tags.some(t => t.includes(normValue));
+                case 'equals':       return tags.includes(normValue);
+                case 'not_equals':   return !tags.includes(normValue);
+                case 'starts_with':  return tags.some(t => t.startsWith(normValue));
+                case 'ends_with':    return tags.some(t => t.endsWith(normValue));
+                case 'exists':       return tags.length > 0;
+                case 'not_exists':   return tags.length === 0;
+                default:             return false;
+              }
+            }
+            const normTest = normalize(raw);
             switch (operator) {
               case 'contains':     return normTest.includes(normValue);
               case 'not_contains': return !normTest.includes(normValue);
@@ -1059,15 +1100,12 @@ const handlers = {
               case 'not_equals':   return normTest !== normValue;
               case 'starts_with':  return normTest.startsWith(normValue);
               case 'ends_with':    return normTest.endsWith(normValue);
-              case 'exists':       return String(testValue ?? '').trim().length > 0;
-              case 'not_exists':   return String(testValue ?? '').trim().length === 0;
+              case 'exists':       return String(raw ?? '').trim().length > 0;
+              case 'not_exists':   return String(raw ?? '').trim().length === 0;
               default:             return false;
             }
           };
 
-          const criteria = Array.isArray(node.data?.criteria) && node.data.criteria.length > 0
-            ? node.data.criteria
-            : [{ field: node.data?.field || 'message', operator: node.data?.operator || 'contains', value: node.data?.value || '' }];
           const combinator = String(node.data?.combinator || 'AND').toUpperCase();
           const results = criteria.map(c => evalOne(c.field, c.operator, c.value));
           const result = combinator === 'OR' ? results.some(Boolean) : results.every(Boolean);
@@ -1416,9 +1454,11 @@ const handlers = {
               }).eq('id', execution.id);
             }
             console.log(`[Worker] Flow: randomizer ${mode} chose option ${chosenIndex} "${options[chosenIndex]?.label}"`);
-            // Follow edges from the chosen option handle
-            const handleKey = `${nodeId}:option-${chosenIndex}`;
-            const next = adjacency[handleKey] || [];
+            // Segue o handle estável (opt-<id>) quando a opção tem id; fluxos
+            // antigos ainda usam o formato por índice (option-N)
+            const chosenOpt = options[chosenIndex] || {};
+            const next = (chosenOpt.id && adjacency[`${nodeId}:opt-${chosenOpt.id}`])
+              || adjacency[`${nodeId}:option-${chosenIndex}`] || [];
             next.forEach(n => queue.push(n));
           }
         } else if (node.type === 'menu') {
