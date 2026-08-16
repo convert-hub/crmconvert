@@ -18,10 +18,34 @@ export default function DashboardPage() {
   const { tenant, profile } = useAuth();
   const navigate = useNavigate();
   const [stats, setStats] = useState({ contacts: 0, opportunities: 0, conversations: 0, totalValue: 0, inactive: 0 });
+  const [trends, setTrends] = useState<{ contacts: string | null; opportunities: string | null; contactsUp: boolean; opportunitiesUp: boolean }>({ contacts: null, opportunities: null, contactsUp: true, opportunitiesUp: true });
   const [activities, setActivities] = useState<UpcomingActivity[]>([]);
 
   useEffect(() => {
     if (!tenant) return;
+
+    // Tendência real: novos itens nos últimos 30 dias vs 30 dias anteriores.
+    // (Os percentuais antigos +12%/+8%/-3%/+22% eram números FIXOS no código.)
+    const d30 = new Date(Date.now() - 30 * 864e5).toISOString();
+    const d60 = new Date(Date.now() - 60 * 864e5).toISOString();
+    const pct = (cur: number, prev: number): string | null => {
+      if (prev === 0) return cur > 0 ? 'novo' : null;
+      return `${cur >= prev ? '+' : ''}${Math.round(((cur - prev) / prev) * 100)}%`;
+    };
+    Promise.all([
+      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id).gte('created_at', d30),
+      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id).gte('created_at', d60).lt('created_at', d30),
+      supabase.from('opportunities').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id).gte('created_at', d30),
+      supabase.from('opportunities').select('id', { count: 'exact', head: true }).eq('tenant_id', tenant.id).gte('created_at', d60).lt('created_at', d30),
+    ]).then(([c30, c60, o30, o60]) => {
+      const cCur = c30.count ?? 0, cPrev = c60.count ?? 0, oCur = o30.count ?? 0, oPrev = o60.count ?? 0;
+      setTrends({
+        contacts: pct(cCur, cPrev),
+        opportunities: pct(oCur, oPrev),
+        contactsUp: cCur >= cPrev,
+        opportunitiesUp: oCur >= oPrev,
+      });
+    });
 
     // Fetch stats
     Promise.all([
@@ -63,10 +87,12 @@ export default function DashboardPage() {
   const firstName = profile?.full_name?.split(' ')[0] ?? 'Usuário';
 
   const cards = [
-    { title: 'Contatos', value: stats.contacts, icon: Users, trend: '+12%', up: true },
-    { title: 'Oportunidades', value: stats.opportunities, icon: Target, trend: '+8%', up: true },
-    { title: 'Conversas Abertas', value: stats.conversations, icon: MessageSquare, trend: '-3%', up: false },
-    { title: 'Pipeline', value: `R$ ${stats.totalValue.toLocaleString('pt-BR')}`, icon: TrendingUp, trend: '+22%', up: true },
+    // trend: variação real de novos itens (30d vs 30d anteriores). Conversas e
+    // Pipeline ficam sem badge: não há histórico para comparar honestamente.
+    { title: 'Contatos', value: stats.contacts, icon: Users, trend: trends.contacts, up: trends.contactsUp },
+    { title: 'Oportunidades', value: stats.opportunities, icon: Target, trend: trends.opportunities, up: trends.opportunitiesUp },
+    { title: 'Conversas Abertas', value: stats.conversations, icon: MessageSquare, trend: null, up: true },
+    { title: 'Pipeline', value: `R$ ${stats.totalValue.toLocaleString('pt-BR')}`, icon: TrendingUp, trend: null, up: true },
     { title: 'Oport. Inativas', value: stats.inactive, icon: AlertTriangle, trend: stats.inactive > 0 ? `${stats.inactive} pendente${stats.inactive !== 1 ? 's' : ''}` : 'Nenhuma', up: false, isAlert: stats.inactive > 0 },
   ];
 
@@ -98,22 +124,24 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className={cn("text-2xl font-semibold", (c as any).isAlert && "text-destructive")}>{c.value}</div>
-              <div className="flex items-center gap-1 mt-1.5">
-                {(c as any).isAlert ? (
-                  <AlertTriangle className="h-3 w-3 text-destructive/70" />
-                ) : c.up ? (
-                  <ArrowUpRight className="h-3 w-3 text-success" />
-                ) : (
-                  <ArrowDownRight className="h-3 w-3 text-destructive/70" />
-                )}
-                <span className={cn(
-                  "text-xs font-medium",
-                  (c as any).isAlert ? "text-destructive/70" : c.up ? "text-success" : "text-destructive/70"
-                )}>
-                  {c.trend}
-                </span>
-                {!(c as any).isAlert && <span className="text-[11px] text-muted-foreground ml-1">vs anterior</span>}
-              </div>
+              {c.trend != null && (
+                <div className="flex items-center gap-1 mt-1.5">
+                  {(c as any).isAlert ? (
+                    <AlertTriangle className="h-3 w-3 text-destructive/70" />
+                  ) : c.up ? (
+                    <ArrowUpRight className="h-3 w-3 text-success" />
+                  ) : (
+                    <ArrowDownRight className="h-3 w-3 text-destructive/70" />
+                  )}
+                  <span className={cn(
+                    "text-xs font-medium",
+                    (c as any).isAlert ? "text-destructive/70" : c.up ? "text-success" : "text-destructive/70"
+                  )}>
+                    {c.trend}
+                  </span>
+                  {!(c as any).isAlert && <span className="text-[11px] text-muted-foreground ml-1">novos, 30d vs 30d anteriores</span>}
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
