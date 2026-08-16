@@ -32,6 +32,7 @@ import ScheduleMessageDialog from '@/components/inbox/ScheduleMessageDialog';
 import ConversationScheduledDialog from '@/components/scheduled/ConversationScheduledDialog';
 import SendTemplateDialog from '@/components/inbox/SendTemplateDialog';
 import { sendText, sendMedia, downloadMedia, getConversationProvider, type ProviderInfo } from '@/lib/whatsappRouter';
+import { humanizeSendError } from '@/lib/messageError';
 import { useCascadeDelete } from '@/hooks/useCascadeDelete';
 import VariablePicker from '@/components/shared/VariablePicker';
 import { useSystemVariables } from '@/hooks/useSystemVariables';
@@ -900,7 +901,10 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           const providerLabel = providerInfo?.provider === 'meta_cloud' ? 'WhatsApp Oficial' : 'WhatsApp';
           const rawFailedMsg = isOutsideWindow
             ? 'Cliente fora da janela de 24h. Envie um template para reativar a conversa.'
-            : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title || pmeta.error_message || `Falha no envio via ${providerLabel}.`);
+            // humanizeSendError descarta valores sem sentido para o atendente
+            // (ex: "true" de registros antigos, ou a mensagem genérica do SDK).
+            : (failedErr?.error_data?.details || failedErr?.message || failedErr?.title
+               || humanizeSendError(pmeta.error_message, `Falha no envio via ${providerLabel}.`));
           // Erro específico UAZAPI/Meta: número não tem WhatsApp → texto simples + opção de limpar
           const notOnWhatsApp = isFailed && /is not on whatsapp|not a valid whatsapp/i.test(String(rawFailedMsg));
           const failedMsg = notOnWhatsApp ? 'Esse número não está no WhatsApp.' : rawFailedMsg;

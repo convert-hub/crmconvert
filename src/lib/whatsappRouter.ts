@@ -67,6 +67,30 @@ function asErrorText(e: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Extrai o motivo REAL de uma falha de `functions.invoke`.
+ * O SDK entrega apenas "Edge Function returned a non-2xx status code" em
+ * error.message — texto que não diz nada ao atendente e que ficava gravado na
+ * mensagem. O detalhe verdadeiro vem no corpo da resposta (error.context).
+ * Devolve undefined quando só há a mensagem genérica, para o caller usar o
+ * fallback amigável.
+ */
+async function invokeErrorText(error: unknown): Promise<string | undefined> {
+  const ctx = (error as any)?.context;
+  if (ctx && typeof ctx.json === 'function') {
+    try {
+      const body = await ctx.clone?.().json?.() ?? await ctx.json();
+      const detail = asErrorText(body?.error)
+        || (typeof body?.message === 'string' ? body.message : undefined);
+      if (detail) return detail;
+    } catch { /* corpo não-JSON ou já consumido */ }
+  }
+  const msg = (error as any)?.message;
+  if (typeof msg !== 'string' || !msg.trim()) return undefined;
+  if (/non-2xx status code/i.test(msg)) return undefined; // genérica do SDK
+  return msg;
+}
+
 export async function sendText(params: {
   conversationId: string;
   tenantId: string;
@@ -88,7 +112,7 @@ export async function sendText(params: {
       },
     });
     if (error || data?.error || data?.ok === false) {
-      return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio Meta', code: data?.code };
+      return { ok: false, error: asErrorText(data?.error) || await invokeErrorText(error) || 'Falha no envio Meta', code: data?.code };
     }
     return { ok: true, provider_message_id: data?.provider_message_id ?? null };
   }
@@ -106,7 +130,7 @@ export async function sendText(params: {
   // Note: uazapi-proxy now always returns 200 with { ok, error?, code? } for UAZAPI-level failures.
   // We check data.ok / data.error explicitly; `error` from invoke is only set for real HTTP failures.
   if (error || data?.error || data?.ok === false) {
-    return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio', code: data?.code };
+    return { ok: false, error: asErrorText(data?.error) || await invokeErrorText(error) || 'Falha no envio', code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }
@@ -144,7 +168,7 @@ export async function sendMedia(params: {
     if (upRes.error || upRes.data?.ok === false || upRes.data?.error) {
       return {
         ok: false,
-        error: asErrorText(upRes.data?.error) || upRes.error?.message || 'Falha ao subir mídia para Meta',
+        error: asErrorText(upRes.data?.error) || await invokeErrorText(upRes.error) || 'Falha ao subir mídia para Meta',
         code: upRes.data?.code,
       };
     }
@@ -166,7 +190,7 @@ export async function sendMedia(params: {
     if (sendRes.error || sendRes.data?.error || sendRes.data?.ok === false) {
       return {
         ok: false,
-        error: asErrorText(sendRes.data?.error) || sendRes.error?.message || 'Falha no envio Meta',
+        error: asErrorText(sendRes.data?.error) || await invokeErrorText(sendRes.error) || 'Falha no envio Meta',
         code: sendRes.data?.code,
         meta_media_id: metaMediaId,
       };
@@ -191,7 +215,7 @@ export async function sendMedia(params: {
   });
   // uazapi-proxy now returns 200 with { ok, error?, code? } for UAZAPI failures.
   if (error || data?.error || data?.ok === false) {
-    return { ok: false, error: asErrorText(data?.error) || error?.message || 'Falha no envio', code: data?.code };
+    return { ok: false, error: asErrorText(data?.error) || await invokeErrorText(error) || 'Falha no envio', code: data?.code };
   }
   return { ok: true, provider_message_id: data?.provider_message_id ?? null };
 }

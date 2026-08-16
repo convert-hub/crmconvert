@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { opportunityStatusLabels, priorityLabels, activityTypeLabels } from '@/lib/labels';
 import { Checkbox } from '@/components/ui/checkbox';
 import { sendText } from '@/lib/whatsappRouter';
+import { humanizeSendError } from '@/lib/messageError';
 
 interface CustomFieldDef {
   key: string;
@@ -679,7 +680,7 @@ export default function OpportunityDetail({ opportunityId, stages, onMoveStage, 
                         <p className="text-xs text-foreground mt-0.5 line-clamp-2">{item.data.content || '[Mídia]'}</p>
                         {isFailed && (
                           <p className="text-[10px] text-destructive mt-0.5">
-                            {pmeta.error_message || 'Falha no envio via WhatsApp'}
+                            {humanizeSendError(pmeta.error_message)}
                           </p>
                         )}
                       </div>
