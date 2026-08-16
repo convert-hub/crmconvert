@@ -32,8 +32,13 @@ interface ShareRow {
   created_at: string;
 }
 
-const genToken = () =>
-  Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+// Gerador criptográfico (não Math.random): o token é a única barreira do
+// preview público em get_flow_share, então precisa ser imprevisível.
+const genToken = () => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+};
 
 export default function ShareFlowDialog(props: Props) {
   const { open, onOpenChange, tenantId, flowId, flowName, flowDescription, triggerType, triggerConfig, nodes, edges } = props;

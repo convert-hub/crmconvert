@@ -30,13 +30,13 @@ export default function FlowInstallPage() {
   useEffect(() => {
     if (!token) return;
     (async () => {
-      const { data } = await (supabase as any).from('flow_shares')
-        .select('id, token, title, description, snapshot, cloned_count, is_active, expires_at')
-        .eq('token', token)
-        .eq('is_active', true)
-        .maybeSingle();
-      if (!data) setNotFound(true);
-      else setShare(data as ShareRecord);
+      // Via RPC (não leitura direta da tabela): flow_shares deixou de ser
+      // legível por anon, senão qualquer visitante listava os templates —
+      // e os tenant_id — de todos os clientes. A RPC exige o token exato.
+      const { data } = await (supabase as any).rpc('get_flow_share', { _token: token });
+      const record = Array.isArray(data) ? data[0] : data;
+      if (!record) setNotFound(true);
+      else setShare(record as ShareRecord);
       setLoading(false);
     })();
   }, [token]);
