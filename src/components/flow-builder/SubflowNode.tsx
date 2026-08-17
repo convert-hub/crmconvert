@@ -7,7 +7,7 @@ export default function SubflowNode({ data, selected }: { data: Record<string, u
 
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[200px] max-w-[260px] ${selected ? 'border-fuchsia-500/60 ring-2 ring-fuchsia-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-fuchsia-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-fuchsia-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-fuchsia-500/10 shrink-0">
           <GitMerge className="h-4 w-4 text-fuchsia-600" strokeWidth={2} />
@@ -21,7 +21,7 @@ export default function SubflowNode({ data, selected }: { data: Record<string, u
         {mode === 'transfer' ? 'Transferir (encerra atual)' : 'Chamar (continua depois)'}
       </p>
       {mode === 'call' && (
-        <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-fuchsia-500 !border-2 !border-card" />
+        <Handle type="source" position={Position.Right} className="!w-3 !h-3 !bg-fuchsia-500 !border-2 !border-card" />
       )}
     </div>
   );

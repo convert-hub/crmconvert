@@ -17,7 +17,7 @@ export default function ActionNode({ data, selected }: { data: Record<string, un
   const hasList = actions.length > 0;
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[170px] max-w-[260px] ${selected ? 'border-red-500/60 ring-2 ring-red-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-red-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-red-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10">
           <Zap className="h-4 w-4 text-red-600" strokeWidth={2} />
@@ -37,7 +37,7 @@ export default function ActionNode({ data, selected }: { data: Record<string, un
           {actions.length > 3 && <li className="text-[10px] text-muted-foreground">+ {actions.length - 3}…</li>}
         </ul>
       )}
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-red-500 !border-2 !border-card" />
+      <Handle type="source" position={Position.Right} className="!w-3 !h-3 !bg-red-500 !border-2 !border-card" />
     </div>
   );
 }

@@ -312,7 +312,7 @@ export default function FlowBuilderPage() {
     const triggerNode: Node = {
       id: 'trigger-1',
       type: 'trigger',
-      position: { x: 250, y: 50 },
+      position: { x: 100, y: 200 },
       data: { label: 'Início', triggerType: 'message_received' },
       deletable: false,
     };
@@ -325,9 +325,10 @@ export default function FlowBuilderPage() {
   const addNode = (type: string, dropPosition?: { x: number; y: number }) => {
     const id = `${type}-${Date.now()}`;
     const lastNode = nodes[nodes.length - 1];
+    // Fluxo horizontal: novos nós nascem à direita do último
     const position = dropPosition ?? {
-      x: (lastNode?.position?.x ?? 250) + (Math.random() * 40 - 20),
-      y: (lastNode?.position?.y ?? 0) + 150,
+      x: (lastNode?.position?.x ?? 100) + 260,
+      y: (lastNode?.position?.y ?? 200) + (Math.random() * 40 - 20),
     };
 
     let data: Record<string, any> = { label: NODE_PALETTE.find(n => n.type === type)?.label ?? type };

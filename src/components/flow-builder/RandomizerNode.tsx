@@ -13,7 +13,7 @@ export default function RandomizerNode({ data, selected }: { data: Record<string
 
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[190px] ${selected ? 'border-cyan-500/60 ring-2 ring-cyan-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/10 shrink-0">
           <Shuffle className="h-4 w-4 text-cyan-600" strokeWidth={2} />
@@ -27,28 +27,24 @@ export default function RandomizerNode({ data, selected }: { data: Record<string
         {mode === 'random' ? 'Aleatório' : 'Sequencial'} · {options.length} opções
       </p>
       {options.length > 0 && (
-        <div className="mt-1.5 space-y-0.5">
+        <div className="mt-1.5 space-y-1">
+          {/* Uma saída por opção, alinhada à própria linha (id estável quando existe) */}
           {options.map((opt, i) => (
-            <div key={i} className="flex items-center justify-between text-[10px]">
+            <div key={opt.id ? `opt-${opt.id}` : `option-${i}`} className="flex items-center justify-between gap-2 text-[10px]">
               <span className="text-foreground/70 truncate max-w-[120px]">{opt.label || `Opção ${i + 1}`}</span>
-              {mode === 'random' && <span className="text-cyan-600 font-medium">{opt.weight}%</span>}
+              <div className="flex items-center gap-1">
+                {mode === 'random' && <span className="text-cyan-600 font-medium">{opt.weight}%</span>}
+                <Handle
+                  type="source"
+                  position={Position.Right}
+                  id={opt.id ? `opt-${opt.id}` : `option-${i}`}
+                  className="!w-2.5 !h-2.5 !bg-cyan-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[21px]"
+                />
+              </div>
             </div>
           ))}
         </div>
       )}
-      {/* Multiple output handles - one per option (id estável quando a opção tem id) */}
-      {options.map((opt, i) => (
-        <Handle
-          key={opt.id ? `opt-${opt.id}` : `option-${i}`}
-          type="source"
-          position={Position.Bottom}
-          id={opt.id ? `opt-${opt.id}` : `option-${i}`}
-          className="!w-2.5 !h-2.5 !bg-cyan-500 !border-2 !border-card"
-          style={{
-            left: `${((i + 1) / (options.length + 1)) * 100}%`,
-          }}
-        />
-      ))}
     </div>
   );
 }

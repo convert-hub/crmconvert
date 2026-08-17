@@ -13,7 +13,7 @@ export default function TriggerNode({ data, selected }: { data: Record<string, u
           <p className="text-xs font-medium text-foreground">{(data.label as string) ?? 'Início'}</p>
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-green-500 !border-2 !border-card" />
+      <Handle type="source" position={Position.Right} className="!w-3 !h-3 !bg-green-500 !border-2 !border-card" />
     </div>
   );
 }

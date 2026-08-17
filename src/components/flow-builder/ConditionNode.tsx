@@ -10,7 +10,7 @@ export default function ConditionNode({ data, selected }: { data: Record<string,
   const value = (data.value as string) || '';
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[190px] max-w-[260px] ${selected ? 'border-amber-500/60 ring-2 ring-amber-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-amber-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-amber-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5 mb-1.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
           <GitBranch className="h-4 w-4 text-amber-600" strokeWidth={2} />
@@ -25,12 +25,16 @@ export default function ConditionNode({ data, selected }: { data: Record<string,
       ) : value ? (
         <p className="text-[11px] text-muted-foreground mt-1">{field} {operator} "{value}"</p>
       ) : null}
-      <div className="flex justify-between mt-2 px-2">
-        <span className="text-[10px] text-green-600 font-medium">Sim</span>
-        <span className="text-[10px] text-red-500 font-medium">Não</span>
+      <div className="mt-2 space-y-1">
+        <div className="flex items-center justify-end gap-1.5">
+          <span className="text-[10px] text-green-600 font-medium">Sim</span>
+          <Handle type="source" position={Position.Right} id="yes" className="!w-3 !h-3 !bg-green-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[22px]" />
+        </div>
+        <div className="flex items-center justify-end gap-1.5">
+          <span className="text-[10px] text-red-500 font-medium">Não</span>
+          <Handle type="source" position={Position.Right} id="no" className="!w-3 !h-3 !bg-red-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[22px]" />
+        </div>
       </div>
-      <Handle type="source" position={Position.Bottom} id="yes" style={{ left: '30%' }} className="!w-3 !h-3 !bg-green-500 !border-2 !border-card" />
-      <Handle type="source" position={Position.Bottom} id="no" style={{ left: '70%' }} className="!w-3 !h-3 !bg-red-500 !border-2 !border-card" />
     </div>
   );
 }

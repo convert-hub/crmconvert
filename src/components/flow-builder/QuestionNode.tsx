@@ -21,7 +21,7 @@ export default function QuestionNode({ data, selected }: { data: Record<string, 
 
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[190px] max-w-[240px] ${selected ? 'border-teal-500/60 ring-2 ring-teal-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-teal-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-teal-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/10 shrink-0">
           <HelpCircle className="h-4 w-4 text-teal-600" strokeWidth={2} />
@@ -35,7 +35,7 @@ export default function QuestionNode({ data, selected }: { data: Record<string, 
       {saveField && (
         <p className="text-[10px] text-teal-600 mt-1">→ {fieldLabel}</p>
       )}
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-teal-500 !border-2 !border-card" />
+      <Handle type="source" position={Position.Right} className="!w-3 !h-3 !bg-teal-500 !border-2 !border-card" />
     </div>
   );
 }

@@ -8,7 +8,7 @@ export default function AIAssistantNode({ data, selected }: { data: Record<strin
 
   return (
     <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[220px] max-w-[280px] ${selected ? 'border-violet-500/60 ring-2 ring-violet-500/25' : 'border-border/70'}`}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-violet-500 !border-2 !border-card" />
+      <Handle type="target" position={Position.Left} className="!w-3 !h-3 !bg-violet-500 !border-2 !border-card" />
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 shrink-0">
           <Sparkles className="h-4 w-4 text-violet-600" strokeWidth={2} />
@@ -21,18 +21,18 @@ export default function AIAssistantNode({ data, selected }: { data: Record<strin
       <p className="text-[10px] text-muted-foreground mt-1.5 truncate">
         {model.split('/').pop()}{useRag ? ' · RAG' : ''}
       </p>
-      <div className="flex justify-between items-center mt-2 pt-2 border-t border-border/50">
-        <div className="flex flex-col items-center gap-0.5 relative">
+      <div className="mt-2 pt-2 border-t border-border/50 space-y-1">
+        <div className="flex items-center justify-end gap-1.5">
           <span className="text-[9px] uppercase tracking-wider text-green-600 font-semibold">Sucesso</span>
-          <Handle type="source" position={Position.Bottom} id="success" className="!w-2.5 !h-2.5 !bg-green-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0" />
+          <Handle type="source" position={Position.Right} id="success" className="!w-2.5 !h-2.5 !bg-green-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[21px]" />
         </div>
-        <div className="flex flex-col items-center gap-0.5">
+        <div className="flex items-center justify-end gap-1.5">
           <span className="text-[9px] uppercase tracking-wider text-amber-600 font-semibold">Handoff</span>
-          <Handle type="source" position={Position.Bottom} id="handoff" className="!w-2.5 !h-2.5 !bg-amber-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0" />
+          <Handle type="source" position={Position.Right} id="handoff" className="!w-2.5 !h-2.5 !bg-amber-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[21px]" />
         </div>
-        <div className="flex flex-col items-center gap-0.5">
+        <div className="flex items-center justify-end gap-1.5">
           <span className="text-[9px] uppercase tracking-wider text-rose-600 font-semibold">Inativo</span>
-          <Handle type="source" position={Position.Bottom} id="inactivity" className="!w-2.5 !h-2.5 !bg-rose-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0" />
+          <Handle type="source" position={Position.Right} id="inactivity" className="!w-2.5 !h-2.5 !bg-rose-500 !border-2 !border-card !relative !left-0 !top-0 !translate-x-0 !translate-y-0 !-mr-[21px]" />
         </div>
       </div>
     </div>
