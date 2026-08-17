@@ -289,16 +289,23 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
     console.error('[webhook-uazapi] ctwa attribution failed', e);
   }
 
-  // Find or create conversation
+  // Find or create conversation.
+  // IMPORTANTE: a mensagem chegou por ESTA instância — nunca usar conversa de
+  // OUTRO número do mesmo contato (ex: contato com conversa no número Meta
+  // oficial E no UAZAPI: responder pela conversa Meta estoura a janela de 24h
+  // com erro 131047 e nada chega). Prioridade: conversa desta instância →
+  // conversa legada sem instância (adotada abaixo) → criar nova.
   const { data: existingConvs } = await supabase.from('conversations')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('contact_id', contact.id)
     .eq('channel', 'whatsapp')
     .in('status', ['open', 'waiting_customer', 'waiting_agent'])
-    .limit(1);
+    .order('last_message_at', { ascending: false })
+    .limit(20);
 
-  let conversation = existingConvs?.[0];
+  let conversation = (existingConvs ?? []).find(c => c.whatsapp_instance_id === instanceId)
+    ?? (existingConvs ?? []).find(c => !c.whatsapp_instance_id);
   if (!conversation) {
     const { data: newConv } = await supabase.from('conversations').insert({
       tenant_id: tenantId,

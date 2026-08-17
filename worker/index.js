@@ -446,6 +446,9 @@ const handlers = {
           phone: cleanPhone,
           conversation_id: conversation_id || null,
           whatsapp_instance_id: instance.id,
+          // Caller que passou message_id já criou a linha em messages — sem isso
+          // o wa-meta-send criava uma segunda (mensagem duplicada no inbox)
+          skip_persist: !!message_id,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -935,10 +938,12 @@ const handlers = {
               if (item.kind === 'text') {
                 const content = interpolate(item.content || '');
                 if (content && ctx.conversation_id) {
-                  await supabase.from('messages').insert({
+                  // message_id no payload: o enviador atualiza ESTA linha em vez de
+                  // criar outra (bolha duplicada no canal Meta via wa-meta-send)
+                  const { data: mrow } = await supabase.from('messages').insert({
                     tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
                     content, is_ai_generated: false,
-                  });
+                  }).select('id').single();
                   if (contactPhone) {
                     await supabase.rpc('enqueue_job', {
                       _type: 'send_whatsapp',
@@ -946,6 +951,7 @@ const handlers = {
                         tenant_id, phone: contactPhone, message: content,
                         conversation_id: ctx.conversation_id,
                         whatsapp_instance_id: sendInstanceId,
+                        message_id: mrow?.id || null,
                       }),
                       _tenant_id: tenant_id,
                     });
@@ -956,12 +962,14 @@ const handlers = {
                 const caption = interpolate(item.caption || '');
                 if (mediaUrl && contactPhone) {
                   // Persist message stub
+                  let mediaRowId = null;
                   if (ctx.conversation_id) {
-                    await supabase.from('messages').insert({
+                    const { data: mrow } = await supabase.from('messages').insert({
                       tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
                       content: caption || null, media_url: mediaUrl, media_type: item.kind,
                       is_ai_generated: false,
-                    });
+                    }).select('id').single();
+                    mediaRowId = mrow?.id || null;
                   }
                   await supabase.rpc('enqueue_job', {
                     _type: 'send_whatsapp_media',
@@ -971,6 +979,7 @@ const handlers = {
                       caption: caption || null, filename: item.filename || null,
                       conversation_id: ctx.conversation_id,
                       whatsapp_instance_id: sendInstanceId,
+                      message_id: mediaRowId,
                     }),
                     _tenant_id: tenant_id,
                   });
@@ -1008,10 +1017,10 @@ const handlers = {
             // Text mode (or template fallback for UAZAPI / sem instância Meta)
             const content = interpolate(node.data?.content || '');
             if (content && ctx.conversation_id) {
-              await supabase.from('messages').insert({
+              const { data: mrow } = await supabase.from('messages').insert({
                 tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
                 content, is_ai_generated: false,
-              });
+              }).select('id').single();
               if (contactPhone) {
                 await supabase.rpc('enqueue_job', {
                   _type: 'send_whatsapp',
@@ -1019,6 +1028,7 @@ const handlers = {
                     tenant_id, phone: contactPhone, message: content,
                     conversation_id: ctx.conversation_id,
                     whatsapp_instance_id: sendInstanceId,
+                    message_id: mrow?.id || null,
                   }),
                   _tenant_id: tenant_id,
                 });
@@ -1334,16 +1344,17 @@ const handlers = {
                       if (c?.phone) {
                         const { data: conv } = await supabase.from('conversations')
                           .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
-                        await supabase.from('messages').insert({
+                        const { data: mrow } = await supabase.from('messages').insert({
                           tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
                           content: out, is_ai_generated: true,
-                        });
+                        }).select('id').single();
                         await supabase.rpc('enqueue_job', {
                           _type: 'send_whatsapp',
                           _payload: JSON.stringify({
                             tenant_id, phone: c.phone, message: out,
                             conversation_id: ctx.conversation_id,
                             whatsapp_instance_id: conv?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                            message_id: mrow?.id || null,
                           }),
                           _tenant_id: tenant_id,
                         });
@@ -1393,10 +1404,10 @@ const handlers = {
 
           if (questionText && ctx.conversation_id) {
             const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
-            await supabase.from('messages').insert({
+            const { data: mrow } = await supabase.from('messages').insert({
               tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
               content: interpolated, is_ai_generated: false,
-            });
+            }).select('id').single();
             if (contactPhone) {
               await supabase.rpc('enqueue_job', {
                 _type: 'send_whatsapp',
@@ -1404,6 +1415,7 @@ const handlers = {
                   tenant_id, phone: contactPhone, message: interpolated,
                   conversation_id: ctx.conversation_id,
                   whatsapp_instance_id: convInstance?.id || flow.whatsapp_instance_id || null,
+                  message_id: mrow?.id || null,
                 }),
                 _tenant_id: tenant_id,
               });
@@ -1481,10 +1493,10 @@ const handlers = {
 
           if (questionText && ctx.conversation_id) {
             const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
-            await supabase.from('messages').insert({
+            const { data: mrow } = await supabase.from('messages').insert({
               tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
               content: interpolated, is_ai_generated: false,
-            });
+            }).select('id').single();
             if (contactPhone) {
               await supabase.rpc('enqueue_job', {
                 _type: 'send_whatsapp',
@@ -1492,6 +1504,7 @@ const handlers = {
                   tenant_id, phone: contactPhone, message: interpolated,
                   conversation_id: ctx.conversation_id,
                   whatsapp_instance_id: convInstance?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                  message_id: mrow?.id || null,
                 }),
                 _tenant_id: tenant_id,
               });
@@ -1612,10 +1625,10 @@ const handlers = {
                 if (out && ctx.conversation_id) {
                   const { data: conv } = await supabase.from('conversations')
                     .select('whatsapp_instance_id').eq('id', ctx.conversation_id).maybeSingle();
-                  await supabase.from('messages').insert({
+                  const { data: mrow } = await supabase.from('messages').insert({
                     tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
                     content: out, is_ai_generated: true,
-                  });
+                  }).select('id').single();
                   if (ctx.contact_id) {
                     const { data: c } = await supabase.from('contacts').select('phone').eq('id', ctx.contact_id).single();
                     if (c?.phone) {
@@ -1625,6 +1638,7 @@ const handlers = {
                           tenant_id, phone: c.phone, message: out,
                           conversation_id: ctx.conversation_id,
                           whatsapp_instance_id: conv?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
+                          message_id: mrow?.id || null,
                         }),
                         _tenant_id: tenant_id,
                       });
@@ -1733,10 +1747,10 @@ const handlers = {
       if (execution.conversation_id) {
         const { data: contact } = await supabase.from('contacts').select('phone').eq('id', execution.contact_id).single();
         const { data: conv } = await supabase.from('conversations').select('whatsapp_instance_id').eq('id', execution.conversation_id).maybeSingle();
-        await supabase.from('messages').insert({
+        const { data: mrow } = await supabase.from('messages').insert({
           tenant_id: execution.tenant_id, conversation_id: execution.conversation_id,
           direction: 'outbound', content: pendingMenu.invalid_text, is_ai_generated: false,
-        });
+        }).select('id').single();
         if (contact?.phone) {
           await supabase.rpc('enqueue_job', {
             _type: 'send_whatsapp',
@@ -1745,6 +1759,7 @@ const handlers = {
               message: pendingMenu.invalid_text,
               conversation_id: execution.conversation_id,
               whatsapp_instance_id: conv?.whatsapp_instance_id || null,
+              message_id: mrow?.id || null,
             }),
             _tenant_id: execution.tenant_id,
           });
@@ -1831,14 +1846,14 @@ const handlers = {
     const conv = msg.conversations;
 
     // Insert message
-    await supabase.from('messages').insert({
+    const { data: schedRow } = await supabase.from('messages').insert({
       tenant_id: msg.tenant_id,
       conversation_id: msg.conversation_id,
       direction: 'outbound',
       content: msg.content,
       sender_membership_id: msg.created_by,
       is_ai_generated: false,
-    });
+    }).select('id').single();
 
     // Send via WhatsApp if applicable
     if (conv.channel === 'whatsapp' && conv.contact_id) {
@@ -1851,6 +1866,7 @@ const handlers = {
             phone: contact.phone,
             message: msg.content,
             conversation_id: msg.conversation_id,
+            message_id: schedRow?.id || null,
           }),
           _tenant_id: msg.tenant_id,
         });
