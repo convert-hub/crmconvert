@@ -872,8 +872,11 @@ export default function FlowBuilderPage() {
       </div>
 
 
-      {/* Node edit side panel */}
-      <Sheet open={nodeEditOpen} onOpenChange={setNodeEditOpen}>
+      {/* Node edit side panel. modal={false}: a trava de rolagem do Sheet modal
+          bloqueava a RODA do mouse nas listas dos seletores (Radix Select portalizado
+          fica fora da área permitida pelo scroll-lock; arrastar a barra funcionava,
+          rolar não). Não-modal dispensa a trava. */}
+      <Sheet open={nodeEditOpen} onOpenChange={setNodeEditOpen} modal={false}>
         <SheetContent side="right" className="w-[420px] sm:max-w-[420px] overflow-y-auto">
           <SheetHeader className="mb-2"><SheetTitle className="text-sm">Editar nó</SheetTitle></SheetHeader>
 

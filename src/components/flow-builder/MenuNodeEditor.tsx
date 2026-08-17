@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
 
 interface MenuOption { id: string; label: string; value?: string }
@@ -43,7 +44,7 @@ export default function MenuNodeEditor({ data, onChange }: Props) {
           placeholder="Ex: Como posso te ajudar?&#10;1 - Falar com vendas&#10;2 - Suporte"
           className="text-sm"
         />
-        <p className="text-[10px] text-muted-foreground">A numeração é adicionada automaticamente pelo contato — você pode incluir no texto também.</p>
+        <p className="text-[10px] text-muted-foreground">As opções numeradas (1. 2. 3…) são enviadas automaticamente logo abaixo da pergunta — não precisa digitá-las aqui.</p>
       </div>
 
       <div className="space-y-2">
@@ -86,25 +87,58 @@ export default function MenuNodeEditor({ data, onChange }: Props) {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <Label className="text-[11px]">Máx. tentativas</Label>
-          <Input
-            type="number" min={1} max={10}
-            value={data.maxRetries ?? 3}
-            onChange={(e) => set({ maxRetries: Number(e.target.value) || 3 })}
-            className="h-8 text-xs"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-[11px]">Salvar resposta em (opcional)</Label>
+      <div className="space-y-1">
+        <Label className="text-[11px]">Máx. tentativas</Label>
+        <Input
+          type="number" min={1} max={10}
+          value={data.maxRetries ?? 3}
+          onChange={(e) => set({ maxRetries: Number(e.target.value) || 3 })}
+          className="h-8 text-xs w-24"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-xs">Salvar escolha em</Label>
+        <Select
+          value={data.saveField ? data.saveField : (data.saveVariable ? 'variable' : 'none')}
+          onValueChange={(v) => {
+            if (v === 'none') set({ saveField: '', saveVariable: '', customFieldKey: '' });
+            else if (v === 'variable') set({ saveField: 'variable' });
+            else set({ saveField: v });
+          }}
+        >
+          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Não salvar</SelectItem>
+            <SelectItem value="variable">Variável do fluxo</SelectItem>
+            <SelectItem value="name">Nome</SelectItem>
+            <SelectItem value="email">E-mail</SelectItem>
+            <SelectItem value="phone">Telefone</SelectItem>
+            <SelectItem value="city">Cidade</SelectItem>
+            <SelectItem value="state">Estado</SelectItem>
+            <SelectItem value="notes">Observações</SelectItem>
+            <SelectItem value="custom">Campo personalizado</SelectItem>
+          </SelectContent>
+        </Select>
+        {(data.saveField === 'variable' || (!data.saveField && data.saveVariable)) && (
           <Input
             value={data.saveVariable ?? ''}
             onChange={(e) => set({ saveVariable: e.target.value })}
-            placeholder="ex: menu_choice"
+            placeholder="Nome da variável (ex: cargo) — use {{cargo}} nas mensagens"
             className="h-8 text-xs"
           />
-        </div>
+        )}
+        {data.saveField === 'custom' && (
+          <Input
+            value={data.customFieldKey ?? ''}
+            onChange={(e) => set({ customFieldKey: e.target.value })}
+            placeholder="Chave do campo (ex: cargo) — use {{contact.custom.cargo}}"
+            className="h-8 text-xs"
+          />
+        )}
+        <p className="text-[10px] text-muted-foreground">
+          O rótulo da opção escolhida é gravado no destino selecionado.
+        </p>
       </div>
 
       <div className="space-y-1.5">

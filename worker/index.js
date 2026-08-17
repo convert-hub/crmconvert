@@ -887,6 +887,48 @@ const handlers = {
           await supabase.from('flow_executions').update({ conversation_id: ctx.conversation_id }).eq('id', execution.id);
         }
       }
+      // Resolvedor de variáveis {{...}} — cobre o dicionário oficial do escopo
+      // 'flow' em src/lib/systemVariables.ts: variáveis do fluxo, contact.name/
+      // email/phone, contact.custom.<k>, opportunity.title/value e
+      // opportunity.custom.<k>. Contato/oportunidade carregados sob demanda.
+      let _interpContact = null, _interpOpp = null, _interpLoaded = false;
+      const loadInterpData = async () => {
+        if (_interpLoaded) return;
+        _interpLoaded = true;
+        if (ctx.contact_id) {
+          const { data: c } = await supabase.from('contacts')
+            .select('name, email, phone, custom_fields').eq('id', ctx.contact_id).maybeSingle();
+          _interpContact = c || null;
+          const { data: o } = await supabase.from('opportunities')
+            .select('title, value, custom_fields')
+            .eq('tenant_id', tenant_id).eq('contact_id', ctx.contact_id).eq('status', 'open')
+            .order('updated_at', { ascending: false }).limit(1).maybeSingle();
+          _interpOpp = o || null;
+        }
+      };
+      const resolveVar = (token) => {
+        const v = ctx.variables[token];
+        if (v !== undefined && v !== null && v !== '') return String(v);
+        if (token.startsWith('contact.custom.')) {
+          return String(_interpContact?.custom_fields?.[token.slice('contact.custom.'.length)] ?? '');
+        }
+        if (token === 'contact.name')  return _interpContact?.name ?? '';
+        if (token === 'contact.email') return _interpContact?.email ?? '';
+        if (token === 'contact.phone') return _interpContact?.phone ?? '';
+        if (token.startsWith('opportunity.custom.')) {
+          return String(_interpOpp?.custom_fields?.[token.slice('opportunity.custom.'.length)] ?? '');
+        }
+        if (token === 'opportunity.title') return _interpOpp?.title ?? '';
+        if (token === 'opportunity.value') return _interpOpp?.value != null ? String(_interpOpp.value) : '';
+        return '';
+      };
+      const interpolateText = async (s) => {
+        if (typeof s !== 'string') return '';
+        if (!s.includes('{{')) return s;
+        await loadInterpData();
+        return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, token) => resolveVar(token));
+      };
+
       let stepCount = 0;
       const MAX_STEPS = 50;
       let paused = false;
@@ -928,7 +970,6 @@ const handlers = {
             contactPhone = c?.phone || null;
           }
 
-          const interpolate = (s) => (typeof s === 'string' ? s : '').replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
           const sendInstanceId = convInstance?.id || flow.whatsapp_instance_id || null;
 
           if (mode === 'items' && Array.isArray(node.data?.items)) {
@@ -936,7 +977,7 @@ const handlers = {
             for (const item of node.data.items) {
               if (!item || !item.kind) continue;
               if (item.kind === 'text') {
-                const content = interpolate(item.content || '');
+                const content = await interpolateText(item.content || '');
                 if (content && ctx.conversation_id) {
                   // message_id no payload: o enviador atualiza ESTA linha em vez de
                   // criar outra (bolha duplicada no canal Meta via wa-meta-send)
@@ -958,8 +999,8 @@ const handlers = {
                   }
                 }
               } else if (item.kind === 'image' || item.kind === 'video' || item.kind === 'audio' || item.kind === 'file') {
-                const mediaUrl = interpolate(item.url || '');
-                const caption = interpolate(item.caption || '');
+                const mediaUrl = await interpolateText(item.url || '');
+                const caption = await interpolateText(item.caption || '');
                 if (mediaUrl && contactPhone) {
                   // Persist message stub
                   let mediaRowId = null;
@@ -1015,7 +1056,7 @@ const handlers = {
             console.log(`[Worker] Flow ${flow_id}: enqueued Meta template "${node.data.templateName || node.data.templateId}"`);
           } else {
             // Text mode (or template fallback for UAZAPI / sem instância Meta)
-            const content = interpolate(node.data?.content || '');
+            const content = await interpolateText(node.data?.content || '');
             if (content && ctx.conversation_id) {
               const { data: mrow } = await supabase.from('messages').insert({
                 tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
@@ -1376,6 +1417,8 @@ const handlers = {
             try { await runAction(a.type, a.config); }
             catch (err) { console.error(`[Worker] Flow ${flow_id}: action ${a.type} error:`, err.message); }
           }
+          // Ações podem mudar contato/oportunidade — recarrega dados do resolvedor de variáveis
+          _interpLoaded = false;
 
           const next = adjacency[nodeId] || [];
           next.forEach(n => queue.push(n));
@@ -1403,7 +1446,7 @@ const handlers = {
           }
 
           if (questionText && ctx.conversation_id) {
-            const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+            const interpolated = await interpolateText(questionText);
             const { data: mrow } = await supabase.from('messages').insert({
               tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
               content: interpolated, is_ai_generated: false,
@@ -1492,16 +1535,20 @@ const handlers = {
           }
 
           if (questionText && ctx.conversation_id) {
-            const interpolated = questionText.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_, key) => ctx.variables[key] || '');
+            // Envia a pergunta COM a lista numerada de opções — sem isso o contato
+            // recebia só a pergunta e tinha que adivinhar o que responder
+            const interpolated = await interpolateText(questionText);
+            const optionsList = options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
+            const fullText = optionsList ? `${interpolated}\n\n${optionsList}` : interpolated;
             const { data: mrow } = await supabase.from('messages').insert({
               tenant_id, conversation_id: ctx.conversation_id, direction: 'outbound',
-              content: interpolated, is_ai_generated: false,
+              content: fullText, is_ai_generated: false,
             }).select('id').single();
             if (contactPhone) {
               await supabase.rpc('enqueue_job', {
                 _type: 'send_whatsapp',
                 _payload: JSON.stringify({
-                  tenant_id, phone: contactPhone, message: interpolated,
+                  tenant_id, phone: contactPhone, message: fullText,
                   conversation_id: ctx.conversation_id,
                   whatsapp_instance_id: convInstance?.whatsapp_instance_id || flow.whatsapp_instance_id || null,
                   message_id: mrow?.id || null,
@@ -1522,6 +1569,8 @@ const handlers = {
               retries: 0,
               invalid_text: node.data?.invalidText || 'Desculpe, não entendi. Por favor, escolha uma das opções.',
               save_variable: node.data?.saveVariable || null,
+              save_field: node.data?.saveField || null,
+              custom_field_key: node.data?.customFieldKey || null,
             },
             context: { ...ctx },
           }).eq('id', execution.id);
@@ -1710,6 +1759,26 @@ const handlers = {
         const extraVars = { message: text, last_answer: text, menu_choice: matched.label };
         if (pendingMenu.save_variable) extraVars[pendingMenu.save_variable] = matched.label;
 
+        // Salva a escolha em campo do contato (sistema ou personalizado), se configurado.
+        // 'variable' = só variável do fluxo (já tratada acima em extraVars).
+        const menuSaveField = pendingMenu.save_field;
+        if (execution.contact_id && menuSaveField && menuSaveField !== 'variable') {
+          try {
+            if (menuSaveField === 'custom' && pendingMenu.custom_field_key) {
+              const { data: c } = await supabase.from('contacts')
+                .select('custom_fields').eq('id', execution.contact_id).single();
+              const customFields = { ...(c?.custom_fields || {}), [pendingMenu.custom_field_key]: matched.label };
+              await supabase.from('contacts').update({ custom_fields: customFields }).eq('id', execution.contact_id);
+              console.log(`[Worker] Menu: saved custom field "${pendingMenu.custom_field_key}" = "${matched.label}"`);
+            } else if (menuSaveField !== 'custom') {
+              await supabase.from('contacts').update({ [menuSaveField]: matched.label }).eq('id', execution.contact_id);
+              console.log(`[Worker] Menu: saved "${menuSaveField}" = "${matched.label}"`);
+            }
+          } catch (e) {
+            console.error('[Worker] Menu: falha ao salvar escolha no contato:', e.message);
+          }
+        }
+
         // Resume from option handle
         const { data: flow } = await supabase.from('chatbot_flows').select('edges').eq('id', execution.flow_id).single();
         const edges = flow?.edges || [];
@@ -1743,20 +1812,22 @@ const handlers = {
         });
       }
 
-      // Resend invalid message, keep paused
+      // Resend invalid message, keep paused (re-lista as opções para ajudar o contato)
       if (execution.conversation_id) {
         const { data: contact } = await supabase.from('contacts').select('phone').eq('id', execution.contact_id).single();
         const { data: conv } = await supabase.from('conversations').select('whatsapp_instance_id').eq('id', execution.conversation_id).maybeSingle();
+        const retryList = options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
+        const retryText = retryList ? `${pendingMenu.invalid_text}\n\n${retryList}` : pendingMenu.invalid_text;
         const { data: mrow } = await supabase.from('messages').insert({
           tenant_id: execution.tenant_id, conversation_id: execution.conversation_id,
-          direction: 'outbound', content: pendingMenu.invalid_text, is_ai_generated: false,
+          direction: 'outbound', content: retryText, is_ai_generated: false,
         }).select('id').single();
         if (contact?.phone) {
           await supabase.rpc('enqueue_job', {
             _type: 'send_whatsapp',
             _payload: JSON.stringify({
               tenant_id: execution.tenant_id, phone: contact.phone,
-              message: pendingMenu.invalid_text,
+              message: retryText,
               conversation_id: execution.conversation_id,
               whatsapp_instance_id: conv?.whatsapp_instance_id || null,
               message_id: mrow?.id || null,

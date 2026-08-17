@@ -72,6 +72,9 @@ export function validateFlow(nodes: Node[], edges: Edge[], opts: ValidateOpts = 
 
     if (n.type === 'menu') {
       if (!String(d.question ?? '').trim()) err(`${name}: o texto do menu está vazio.`, n.id);
+      if (d.saveField === 'custom' && !String(d.customFieldKey ?? '').trim()) {
+        err(`${name}: campo personalizado sem chave definida.`, n.id);
+      }
       const options: any[] = Array.isArray(d.options) ? d.options : [];
       if (options.length === 0) err(`${name}: o menu não tem opções.`, n.id);
       options.forEach((opt, i) => {
