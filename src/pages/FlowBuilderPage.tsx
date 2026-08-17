@@ -44,6 +44,7 @@ import TriggerNode from '@/components/flow-builder/TriggerNode';
 import DeletableEdge from '@/components/flow-builder/DeletableEdge';
 import TriggerConfigPanel, { type TriggerConfig } from '@/components/flow-builder/TriggerConfigPanel';
 import { validateFlow, type FlowIssue } from '@/lib/flowValidation';
+import ContactCustomFieldPicker from '@/components/shared/ContactCustomFieldPicker';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -957,25 +958,16 @@ export default function FlowBuilderPage() {
                     </Select>
                   </div>
                   {(editingNode.data as any).saveField === 'custom' && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <Label className="text-[11px]">Chave do campo</Label>
-                        <Input
-                          value={(editingNode.data as any).customFieldKey ?? ''}
-                          onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, customFieldKey: e.target.value } })}
-                          placeholder="ex: cpf"
-                          className="h-8 text-xs"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-[11px]">Rótulo</Label>
-                        <Input
-                          value={(editingNode.data as any).customFieldLabel ?? ''}
-                          onChange={e => setEditingNode({ ...editingNode, data: { ...editingNode.data, customFieldLabel: e.target.value } })}
-                          placeholder="ex: CPF"
-                          className="h-8 text-xs"
-                        />
-                      </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">Campo personalizado</Label>
+                      <ContactCustomFieldPicker
+                        tenantId={tenant?.id ?? null}
+                        value={(editingNode.data as any).customFieldKey ?? ''}
+                        onChange={(key, label) => setEditingNode({
+                          ...editingNode,
+                          data: { ...editingNode.data, customFieldKey: key, customFieldLabel: label ?? key },
+                        })}
+                      />
                     </div>
                   )}
                   <div className="space-y-1.5">
@@ -1111,6 +1103,7 @@ export default function FlowBuilderPage() {
 
               {editingNode.type === 'menu' && (
                 <MenuNodeEditor
+                  tenantId={tenant?.id ?? null}
                   data={editingNode.data as any}
                   onChange={(d) => setEditingNode({ ...editingNode, data: d as any })}
                 />

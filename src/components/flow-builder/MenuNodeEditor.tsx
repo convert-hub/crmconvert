@@ -3,16 +3,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import ContactCustomFieldPicker from '@/components/shared/ContactCustomFieldPicker';
 import { Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
 
 interface MenuOption { id: string; label: string; value?: string }
 
 interface Props {
+  tenantId: string | null;
   data: any;
   onChange: (data: any) => void;
 }
 
-export default function MenuNodeEditor({ data, onChange }: Props) {
+export default function MenuNodeEditor({ tenantId, data, onChange }: Props) {
   const options: MenuOption[] = Array.isArray(data.options) ? data.options : [];
   const set = (patch: any) => onChange({ ...data, ...patch });
 
@@ -129,11 +131,10 @@ export default function MenuNodeEditor({ data, onChange }: Props) {
           />
         )}
         {data.saveField === 'custom' && (
-          <Input
+          <ContactCustomFieldPicker
+            tenantId={tenantId}
             value={data.customFieldKey ?? ''}
-            onChange={(e) => set({ customFieldKey: e.target.value })}
-            placeholder="Chave do campo (ex: cargo) — use {{contact.custom.cargo}}"
-            className="h-8 text-xs"
+            onChange={(key, label) => set({ customFieldKey: key, customFieldLabel: label ?? key })}
           />
         )}
         <p className="text-[10px] text-muted-foreground">
