@@ -445,9 +445,17 @@ async function handleStatusUpdate(supabase: any, instance: any, st: any) {
     const statuses = Array.isArray(meta.statuses) ? meta.statuses : [];
     statuses.push({ status, at: nowIso, raw: st });
 
+    // A Meta entrega callbacks FORA DE ORDEM às vezes (read antes de sent).
+    // Sem esta trava, o last_status era rebaixado (read sobrescrito por sent)
+    // e a bolha ficava com 1 check mesmo com a mensagem lida.
+    const RANK: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 9 };
+    const prevRank = RANK[String(meta.last_status ?? "")] ?? 0;
+    const newRank = RANK[String(status)] ?? 0;
+    const lastStatus = newRank >= prevRank ? status : meta.last_status;
+
     await supabase
       .from("messages")
-      .update({ provider_metadata: { ...meta, statuses, last_status: status } })
+      .update({ provider_metadata: { ...meta, statuses, last_status: lastStatus } })
       .eq("id", msg.id);
   }
 

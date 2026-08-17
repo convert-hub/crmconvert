@@ -896,10 +896,18 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
           // `last_status` ('delivered'/'read') — sem isso, um `sent` antigo
           // escondia o `delivered` e a bolha ficava com 1 check para sempre.
           const rawStatus = pmeta.status ?? pmeta.last_status;
-          const lastStatus = pmeta.last_status;
-          const msgStatus = (rawStatus !== 'failed' && lastStatus
-            && (STATUS_RANK[lastStatus] ?? -1) > (STATUS_RANK[rawStatus] ?? -1))
-            ? lastStatus : rawStatus;
+          // Melhor status conhecido: considera também o HISTÓRICO de callbacks
+          // (pmeta.statuses). A Meta às vezes entrega callbacks fora de ordem e o
+          // last_status era rebaixado (read sobrescrito por sent meio segundo
+          // depois) — o histórico guarda a verdade.
+          const cbHistory: string[] = Array.isArray(pmeta.statuses)
+            ? pmeta.statuses.map((s: any) => String(s?.status ?? '')).filter(Boolean)
+            : [];
+          const bestStatus = [pmeta.status, pmeta.last_status, ...cbHistory]
+            .filter((s: any) => s && s !== 'failed')
+            .reduce((best: string | null, s: string) =>
+              (STATUS_RANK[s] ?? -1) > (STATUS_RANK[best ?? ''] ?? -1) ? s : best, null);
+          const msgStatus = rawStatus === 'failed' ? 'failed' : (bestStatus ?? rawStatus);
           const isFailed = msgStatus === 'failed';
           const failedErr = isFailed && Array.isArray(pmeta.statuses)
             ? pmeta.statuses.slice().reverse().find((s: any) => s?.status === 'failed')?.raw?.errors?.[0]
