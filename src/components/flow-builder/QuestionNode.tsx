@@ -12,7 +12,7 @@ const FIELD_LABELS: Record<string, string> = {
   custom: 'Campo personalizado',
 };
 
-export default function QuestionNode({ data }: { data: Record<string, unknown> }) {
+export default function QuestionNode({ data, selected }: { data: Record<string, unknown>; selected?: boolean }) {
   const question = (data.question as string) || 'Pergunta...';
   const saveField = (data.saveField as string) || '';
   const fieldLabel = saveField.startsWith('custom:')
@@ -20,11 +20,11 @@ export default function QuestionNode({ data }: { data: Record<string, unknown> }
     : FIELD_LABELS[saveField] || saveField;
 
   return (
-    <div className="rounded-xl border-2 border-teal-500/40 bg-card px-4 py-3 shadow-sm min-w-[180px] max-w-[240px]">
+    <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[190px] max-w-[240px] ${selected ? 'border-teal-500/60 ring-2 ring-teal-500/25' : 'border-border/70'}`}>
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-teal-500 !border-2 !border-card" />
-      <div className="flex items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-teal-500/10 shrink-0">
-          <HelpCircle className="h-3 w-3 text-teal-600" strokeWidth={2} />
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/10 shrink-0">
+          <HelpCircle className="h-4 w-4 text-teal-600" strokeWidth={2} />
         </div>
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-teal-600 font-semibold">Pergunta</p>

@@ -1,7 +1,7 @@
 import { Handle, Position } from '@xyflow/react';
 import { MessageSquare, FileCheck2, Layers } from 'lucide-react';
 
-export default function MessageNode({ data }: { data: Record<string, unknown> }) {
+export default function MessageNode({ data, selected }: { data: Record<string, unknown>; selected?: boolean }) {
   const content = (data.content as string) || '';
   const mode = (data.mode as string) || 'text';
   const isTemplate = mode === 'template';
@@ -9,13 +9,13 @@ export default function MessageNode({ data }: { data: Record<string, unknown> })
   const items = (data.items as any[]) || [];
   const templateName = (data.templateName as string) || '';
   return (
-    <div className="rounded-xl border-2 border-blue-500/40 bg-card px-4 py-3 shadow-sm min-w-[180px] max-w-[260px]">
+    <div className={`rounded-xl border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow min-w-[190px] max-w-[260px] ${selected ? 'border-blue-500/60 ring-2 ring-blue-500/25' : 'border-border/70'}`}>
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-blue-500 !border-2 !border-card" />
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500/10">
-          {isTemplate ? <FileCheck2 className="h-3 w-3 text-blue-600" strokeWidth={2} />
-            : isItems ? <Layers className="h-3 w-3 text-blue-600" strokeWidth={2} />
-            : <MessageSquare className="h-3 w-3 text-blue-600" strokeWidth={2} />}
+      <div className="flex items-center gap-2.5 mb-1.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 shrink-0">
+          {isTemplate ? <FileCheck2 className="h-4 w-4 text-blue-600" strokeWidth={2} />
+            : isItems ? <Layers className="h-4 w-4 text-blue-600" strokeWidth={2} />
+            : <MessageSquare className="h-4 w-4 text-blue-600" strokeWidth={2} />}
         </div>
         <p className="text-[10px] uppercase tracking-wider text-blue-600 font-semibold">
           {isTemplate ? 'Template Meta' : isItems ? 'Conteúdo' : 'Mensagem'}
