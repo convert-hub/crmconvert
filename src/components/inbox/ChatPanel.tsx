@@ -570,10 +570,23 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
         toast.success('Esta mensagem já tinha sido enviada — status atualizado.');
         return;
       }
-      if (!confirm('Reenviar esta mídia para o cliente?')) return;
       const storagePath = (fresh as any)?.storage_path || (msg as any).storage_path;
       const contactPhone = effectiveContact?.phone;
-      if (!storagePath || !contactPhone) { toast.error('Arquivo original ou telefone não encontrado para reenvio.'); return; }
+      if (!storagePath) {
+        // Bolha zumbi: o arquivo nunca chegou ao storage (upload morreu no meio).
+        // Não há o que reenviar — marca como falha para parar de enganar a equipe.
+        const failMeta = {
+          status: 'failed',
+          error_message: 'O arquivo não chegou a ser salvo no envio original (falha de conexão durante o upload). Grave ou anexe novamente.',
+          failed_at: new Date().toISOString(),
+        };
+        await supabase.from('messages').update({ provider_metadata: failMeta as any }).eq('id', msg.id);
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, provider_metadata: failMeta } as any : m));
+        toast.error('Este arquivo não chegou a ser salvo no envio original. A bolha foi marcada como falha: grave ou anexe novamente.', { duration: 10000 });
+        return;
+      }
+      if (!contactPhone) { toast.error('Telefone do contato não encontrado para reenvio.'); return; }
+      if (!confirm('Reenviar esta mídia para o cliente?')) return;
       const mt = String((fresh as any)?.media_type || (msg as any).media_type || '').toLowerCase();
       const mediaKind = mt.includes('audio') ? 'audio' : mt.includes('image') ? 'image' : mt.includes('video') ? 'video' : 'document';
       const { data: signed } = await supabase.storage.from('whatsapp-media').createSignedUrl(storagePath, 60 * 60);
@@ -719,36 +732,57 @@ export default function ChatPanel({ conversationId, contact, channel, status, sh
                            : mediaType === 'image' ? 'ImageMessage'
                            : mediaType === 'video' ? 'VideoMessage' : 'DocumentMessage';
       const contentLabel = `[${mediaType === 'audio' ? 'Áudio' : mediaType === 'image' ? 'Imagem' : mediaType === 'video' ? 'Vídeo' : 'Documento'}]`;
+      // UPLOAD PRIMEIRO, bolha depois. Antes, a linha em `messages` era criada
+      // ANTES do upload: se a rede caísse ou a aba fosse pro segundo plano no
+      // meio (celular), nenhum tratamento de erro rodava e ficava uma bolha
+      // zumbi em "enviando", sem arquivo e impossível de reenviar (caso SOS
+      // 18/08). Agora a bolha só nasce com o arquivo já salvo no storage —
+      // qualquer morte no meio deixa no máximo um arquivo órfão invisível.
+      const ext = file.name.split('.').pop()?.toLowerCase()
+        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
+      const storagePath = `${tenant.id}/${crypto.randomUUID()}.${ext}`;
+      let uploadError: { message: string } | null = null;
+      for (let tentativa = 1; tentativa <= 2; tentativa++) {
+        const { error } = await supabase.storage
+          .from('whatsapp-media')
+          .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
+        uploadError = error as any;
+        if (!error) break;
+      }
+      if (uploadError) {
+        console.error('[ChatPanel] upload bucket falhou', uploadError.message);
+        toast.error('Falha ao subir o arquivo (conexão instável). NADA foi enviado ao cliente.', {
+          duration: 10000,
+          action: { label: 'Tentar novamente', onClick: () => handleSendMedia(file) },
+        });
+        return;
+      }
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('whatsapp-media')
+        .createSignedUrl(storagePath, 60 * 60);
+      if (signErr || !signed?.signedUrl) {
+        toast.error('Falha ao gerar URL temporária do arquivo. NADA foi enviado ao cliente.', {
+          duration: 10000,
+          action: { label: 'Tentar novamente', onClick: () => handleSendMedia(file) },
+        });
+        return;
+      }
       const { data: savedMsg, error: insertErr } = await supabase.from('messages').insert({
         tenant_id: tenant.id, conversation_id: capturedConvId, direction: 'outbound',
         content: contentLabel,
         sender_membership_id: membership.id,
         media_type: mediaTypeLabel,
+        storage_path: storagePath,
         // Nasce como "enviando": a bolha só ganha check quando o envio for
         // CONFIRMADO (provider_message_id) — antes, a bolha aparecia como
         // enviada mesmo se o envio morresse no meio (aba fechada, rede).
         provider_metadata: { status: 'sending' },
       } as any).select('id').single();
-      if (insertErr || !savedMsg?.id) { toast.error('Falha ao registrar mensagem.'); return; }
-      const ext = file.name.split('.').pop()?.toLowerCase()
-        || (file.type.split('/')[1]?.split(';')[0] ?? 'bin');
-      const storagePath = `${tenant.id}/${savedMsg.id}.${ext}`;
-      const { error: uploadError } = await supabase.storage
-        .from('whatsapp-media')
-        .upload(storagePath, file, { contentType: file.type || 'application/octet-stream', upsert: true });
-      if (uploadError) {
-        console.error('[ChatPanel] upload bucket falhou', uploadError.message);
-        await supabase.from('messages').delete().eq('id', savedMsg.id);
-        toast.error('Falha ao enviar arquivo para o storage.');
-        return;
-      }
-      await supabase.from('messages').update({ storage_path: storagePath }).eq('id', savedMsg.id);
-      const { data: signed, error: signErr } = await supabase.storage
-        .from('whatsapp-media')
-        .createSignedUrl(storagePath, 60 * 60);
-      if (signErr || !signed?.signedUrl) {
-        await supabase.from('messages').delete().eq('id', savedMsg.id);
-        toast.error('Falha ao gerar URL temporária do arquivo.');
+      if (insertErr || !savedMsg?.id) {
+        toast.error('Falha ao registrar mensagem. NADA foi enviado ao cliente.', {
+          duration: 10000,
+          action: { label: 'Tentar novamente', onClick: () => handleSendMedia(file) },
+        });
         return;
       }
       if (currentConvIdRef.current === capturedConvId) {
