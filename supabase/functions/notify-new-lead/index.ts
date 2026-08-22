@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { normalizeBrazilPhone, phoneDigitsOnly } from '../_shared/phone.ts';
+import { revealSecret } from '../_shared/secrets.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -76,6 +77,7 @@ Deno.serve(async (req) => {
       console.log(`notify-new-lead: no active UAZAPI for tenant ${tenant_id}`);
       return json({ skipped: 'no_uazapi' });
     }
+    const instToken = await revealSecret(supabase, instance.api_token_encrypted);
 
     // 4. Recipients + phones
     const { data: memberships } = await supabase.from('tenant_memberships')
@@ -112,7 +114,7 @@ Deno.serve(async (req) => {
       try {
         const r = await fetch(`${apiBase}/send/text`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', token: instance.api_token_encrypted },
+          headers: { 'Content-Type': 'application/json', token: instToken },
           body: JSON.stringify({ number: t.phone, text, delay: 0 }),
         });
         const rt = await r.text();

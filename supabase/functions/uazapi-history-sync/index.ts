@@ -2,6 +2,7 @@
 // recém-conectada, criando/atualizando conversations e messages do tenant.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { normalizeBrazilPhone } from '../_shared/phone.ts';
+import { revealSecret } from '../_shared/secrets.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -60,7 +61,7 @@ Deno.serve(async (req) => {
       .eq('tenant_id', tenant_id)
       .maybeSingle();
     if (!instance) return json({ ok: true, skipped: 'instance not found' });
-    const instToken = instance.api_token_encrypted;
+    const instToken = await revealSecret(supabase, instance.api_token_encrypted);
     if (!instToken) return json({ ok: true, skipped: 'instance token missing' });
 
     const { data: key } = await supabase

@@ -3,6 +3,7 @@
 // telefones pedidos e só então pagina /message/find com o chatid correto.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { normalizeBrazilPhone } from '../_shared/phone.ts';
+import { revealSecret } from '../_shared/secrets.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -89,7 +90,7 @@ Deno.serve(async (req) => {
       .eq('tenant_id', tenant_id)
       .maybeSingle();
     if (!instance) return json({ ok: false, error: 'instance not found' }, 404);
-    const instToken = instance.api_token_encrypted;
+    const instToken = await revealSecret(supabase, instance.api_token_encrypted);
     if (!instToken) return json({ ok: false, error: 'instance token missing' }, 400);
 
     const { data: key } = await supabase

@@ -24,6 +24,8 @@ export interface OpportunityLinked {
   contactId: string | null;
 }
 
+const MEDIA_BUCKET = "whatsapp-media";
+
 export function useCascadeDelete() {
   const [loading, setLoading] = useState(false);
 
@@ -109,9 +111,60 @@ export function useCascadeDelete() {
     return result;
   };
 
+  // ── Mídia no bucket (LGPD: direito ao esquecimento) ───────────────────
+  // Apagar contato/conversa no banco não apagava os áudios, imagens e
+  // documentos em whatsapp-media: ficavam órfãos e recuperáveis por signed
+  // URL. As linhas de messages somem por ON DELETE CASCADE, então os
+  // storage_path precisam ser coletados ANTES da exclusão e removidos DEPOIS
+  // que o banco confirmou. Best-effort: uma falha aqui não desfaz a exclusão
+  // (os dados já se foram), mas é reportada ao usuário.
+  const conversationIdsOfContact = async (contactId: string): Promise<string[]> => {
+    const { data, error } = await supabase.from("conversations").select("id").eq("contact_id", contactId);
+    if (error) throw new Error(`Falha ao listar conversas do contato: ${error.message}`);
+    return (data ?? []).map(c => c.id);
+  };
+
+  const collectMediaPaths = async (conversationIds: string[]): Promise<string[]> => {
+    const paths: string[] = [];
+    for (let i = 0; i < conversationIds.length; i += 200) {
+      const ids = conversationIds.slice(i, i + 200);
+      let from = 0;
+      for (;;) {
+        const { data, error } = await supabase
+          .from("messages")
+          .select("storage_path")
+          .in("conversation_id", ids)
+          .not("storage_path", "is", null)
+          .range(from, from + 999);
+        if (error) throw new Error(`Falha ao listar mídias: ${error.message}`);
+        const rows = data ?? [];
+        for (const m of rows) if (m.storage_path) paths.push(m.storage_path);
+        if (rows.length < 1000) break;
+        from += 1000;
+      }
+    }
+    return paths;
+  };
+
+  const removeMediaPaths = async (paths: string[]) => {
+    if (paths.length === 0) return;
+    let failed = 0;
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      const { error } = await supabase.storage.from(MEDIA_BUCKET).remove(chunk);
+      if (error) failed += chunk.length;
+    }
+    if (failed > 0) toast.warning(`${failed} arquivo(s) de mídia não puderam ser removidos do armazenamento.`);
+  };
+
   const deleteConversationCascade = async (conversationId: string, contactId: string | null, alsoDelete: string[]) => {
     setLoading(true);
     try {
+      const wholeContact = contactId && (alsoDelete.includes("contact") || alsoDelete.includes("conversations"));
+      const mediaPaths = await collectMediaPaths(
+        wholeContact ? await conversationIdsOfContact(contactId) : [conversationId],
+      );
+
       if (alsoDelete.includes("activities")) {
         await supabase.from("activities").delete().eq("conversation_id", conversationId);
       }
@@ -135,6 +188,7 @@ export function useCascadeDelete() {
         }
       }
 
+      await removeMediaPaths(mediaPaths);
       toast.success("Exclusão concluída");
       return true;
     } catch (err: any) {
@@ -148,6 +202,11 @@ export function useCascadeDelete() {
   const deleteContactCascade = async (contactId: string, alsoDelete: string[]) => {
     setLoading(true);
     try {
+      // Só quando as conversas vão junto: se ficam (desvinculadas), a mídia fica.
+      const mediaPaths = alsoDelete.includes("conversations")
+        ? await collectMediaPaths(await conversationIdsOfContact(contactId))
+        : [];
+
       if (alsoDelete.includes("activities")) {
         await supabase.from("activities").delete().eq("contact_id", contactId);
       }
@@ -166,6 +225,7 @@ export function useCascadeDelete() {
       const { error } = await supabase.from("contacts").delete().eq("id", contactId);
       if (error) throw error;
 
+      await removeMediaPaths(mediaPaths);
       toast.success("Contato excluído");
       return true;
     } catch (err: any) {
@@ -179,6 +239,10 @@ export function useCascadeDelete() {
   const deleteOpportunityCascade = async (opportunityId: string, contactId: string | null, alsoDelete: string[]) => {
     setLoading(true);
     try {
+      const mediaPaths = contactId && (alsoDelete.includes("contact") || alsoDelete.includes("conversations"))
+        ? await collectMediaPaths(await conversationIdsOfContact(contactId))
+        : [];
+
       if (alsoDelete.includes("activities")) {
         await supabase.from("activities").delete().eq("opportunity_id", opportunityId);
       }
@@ -196,6 +260,7 @@ export function useCascadeDelete() {
         await supabase.from("conversations").delete().eq("contact_id", contactId);
       }
 
+      await removeMediaPaths(mediaPaths);
       toast.success("Oportunidade excluída");
       return true;
     } catch (err: any) {

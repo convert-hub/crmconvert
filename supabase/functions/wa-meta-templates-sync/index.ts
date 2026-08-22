@@ -1,6 +1,7 @@
 // WhatsApp Cloud API (Meta) — sync approved templates from WABA into local table
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const META_API_VERSION = "v21.0";
 
@@ -119,9 +120,10 @@ serve(async (req) => {
       }
     }
 
+    const accessToken = await revealSecret(supabaseAdmin, instance.meta_access_token_encrypted);
     const r = await fetch(
       `https://graph.facebook.com/${META_API_VERSION}/${instance.meta_waba_id}/message_templates?limit=200`,
-      { headers: { Authorization: `Bearer ${instance.meta_access_token_encrypted}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const data = await r.json();
     if (!r.ok) {

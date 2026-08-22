@@ -5,6 +5,7 @@
 // via SUPABASE_SERVICE_ROLE_KEY.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -58,9 +59,9 @@ Deno.serve(async (req) => {
     if (aiConfig) {
       model = aiConfig.model || model;
       if (aiConfig.api_key_encrypted) {
-        apiKey = aiConfig.api_key_encrypted;
+        apiKey = await revealSecret(supabase, aiConfig.api_key_encrypted);
       } else if (aiConfig.global_api_key?.api_key_encrypted) {
-        apiKey = aiConfig.global_api_key.api_key_encrypted;
+        apiKey = await revealSecret(supabase, aiConfig.global_api_key.api_key_encrypted);
       }
     }
     if (!apiKey) {

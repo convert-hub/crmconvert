@@ -2,6 +2,7 @@
 // Aditivo: não substitui uazapi-proxy. Roteado apenas quando a instância é provider='meta_cloud'.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const META_API_VERSION = "v21.0";
 
@@ -234,7 +235,7 @@ serve(async (req) => {
       }
     }
 
-    const accessToken = instance.meta_access_token_encrypted as string;
+    const accessToken = await revealSecret(supabaseAdmin, instance.meta_access_token_encrypted);
     const phoneNumberId = instance.meta_phone_number_id as string;
     const graphBase = `https://graph.facebook.com/${META_API_VERSION}`;
 

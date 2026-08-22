@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,6 +9,19 @@ const corsHeaders = {
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
+// Para logs: QR code e pair code são credenciais de sessão (quem escaneia
+// assume o WhatsApp) e token/apikey são o segredo da instância — nunca no log.
+function redactForLog(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const SENSITIVE = new Set(['qrcode', 'paircode', 'token', 'apikey', 'base64']);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+    if (SENSITIVE.has(k)) out[k] = v ? '[redacted]' : v;
+    else out[k] = redactForLog(v);
+  }
+  return out;
 }
 
 // Registra/atualiza o webhook do CRM de forma ADITIVA.
@@ -137,6 +151,21 @@ serve(async (req) => {
       return jsonResponse({ error: 'Forbidden' }, 403);
     }
 
+    // ── Papéis por ação ─────────────────────────────────────────────────
+    // Antes, qualquer membro ativo (inclusive 'readonly') conectava,
+    // desconectava e enviava. Gerenciar a conexão = admin ou manager (mesmo
+    // critério de "isAdmin" da tela de Configurações); enviar/presença =
+    // qualquer papel exceto readonly; status e download de mídia = todos.
+    const role: string = isSaasAdmin ? 'admin' : String(membership?.role ?? '');
+    const MANAGE_ACTIONS = new Set(['connect_number', 'create_instance', 'disconnect', 'setup_webhook', 'get_qr']);
+    const SEND_ACTIONS = new Set(['send_message', 'send_media', 'set_presence']);
+    if (MANAGE_ACTIONS.has(action) && role !== 'admin' && role !== 'manager') {
+      return jsonResponse({ error: 'Apenas administradores e gerentes podem gerenciar a conexão do WhatsApp' }, 403);
+    }
+    if (SEND_ACTIONS.has(action) && role === 'readonly') {
+      return jsonResponse({ error: 'Seu perfil é somente leitura: não pode enviar mensagens' }, 403);
+    }
+
     // Get UAZAPI global key (admin token + base_url)
     const { data: uazapiKey } = await supabaseAdmin.from('global_api_keys')
       .select('*')
@@ -149,7 +178,7 @@ serve(async (req) => {
       return jsonResponse({ error: 'UAZAPI não configurado. Adicione a chave global do provider "uazapi" no painel admin.' }, 400);
     }
 
-    const adminToken = uazapiKey.api_key_encrypted;
+    const adminToken = await revealSecret(supabaseAdmin, uazapiKey.api_key_encrypted);
     const baseUrl = (uazapiKey as any).metadata?.base_url;
     if (!baseUrl) {
       return jsonResponse({ error: 'URL base do UAZAPI não configurada na chave global.' }, 400);
@@ -340,7 +369,7 @@ serve(async (req) => {
         }
 
         const createData = await createRes.json();
-        console.log('UAZAPI create response:', JSON.stringify(createData));
+        console.log('UAZAPI create response:', JSON.stringify(redactForLog(createData)));
         const instanceToken = createData.token || createData.apikey || createData.instance?.token || '';
 
         // 2. Set webhook with tenant_id in URL (uses instance token header)
@@ -380,7 +409,7 @@ serve(async (req) => {
           });
           if (connectRes.ok) {
             const connectData = await connectRes.json();
-            console.log('UAZAPI connect response:', JSON.stringify(connectData));
+            console.log('UAZAPI connect response:', JSON.stringify(redactForLog(connectData)));
             qrcode = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
             if (qrcode === '') qrcode = null;
           } else {
@@ -391,7 +420,8 @@ serve(async (req) => {
           console.error('Connect after create failed:', qrErr);
         }
 
-        return jsonResponse({ ok: true, instance_name: instName, token: instanceToken, qrcode });
+        // O token da instância fica só no banco (cofre); nunca volta ao cliente.
+        return jsonResponse({ ok: true, instance_name: instName, qrcode });
       }
 
       // ── GET QR / GET STATUS ──
@@ -412,7 +442,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância encontrada. Crie uma primeiro.' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
 
         // GET /instance/status with token header
         const statusRes = await fetch(`${apiBase}/instance/status`, {
@@ -429,7 +459,7 @@ serve(async (req) => {
         }
 
         const statusData = await statusRes.json();
-        console.log('UAZAPI status response:', JSON.stringify(statusData));
+        console.log('UAZAPI status response:', JSON.stringify(redactForLog(statusData)));
 
         let qrcode = statusData.instance?.qrcode || statusData.qrcode || statusData.base64 || null;
         if (qrcode === '') qrcode = null; // UAZAPI returns empty string when no QR
@@ -449,7 +479,7 @@ serve(async (req) => {
             });
             if (connectRes.ok) {
               const connectData = await connectRes.json();
-              console.log('UAZAPI connect response:', JSON.stringify(connectData));
+              console.log('UAZAPI connect response:', JSON.stringify(redactForLog(connectData)));
               const newQr = connectData.instance?.qrcode || connectData.qrcode || connectData.base64 || null;
               if (newQr && newQr !== '') {
                 qrcode = newQr;
@@ -487,10 +517,11 @@ serve(async (req) => {
           .single();
 
         if (instance) {
+          const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
           try {
             await fetch(`${apiBase}/instance/disconnect`, {
               method: 'POST',
-              headers: { 'token': instance.api_token_encrypted || '' },
+              headers: { 'token': instToken },
             });
           } catch (e) {
             console.error('Disconnect request failed:', e);
@@ -520,7 +551,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
         
         // Format phone: remove + and non-digits, ensure no @s.whatsapp.net
         const cleanPhone = phone.replace(/\D/g, '');
@@ -589,7 +620,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância encontrada' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
         const webhookUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/webhook-uazapi?tenant_id=${effectiveTenantId}`;
 
         const wh = await ensureWebhook(apiBase, instToken, webhookUrl);
@@ -611,7 +642,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância encontrada' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
         const presence = body.presence || 'available';
 
         try {
@@ -648,7 +679,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
         const instancePhone = (instance.phone_number || '').replace(/\D/g, '');
 
         // UAZAPI v2: POST /message/download with { id: "owner:messageId" }
@@ -736,7 +767,7 @@ serve(async (req) => {
           return jsonResponse({ error: 'Nenhuma instância WhatsApp ativa' }, 404);
         }
 
-        const instToken = instance.api_token_encrypted || '';
+        const instToken = await revealSecret(supabaseAdmin, instance.api_token_encrypted);
         const cleanPhone = phone.replace(/\D/g, '');
 
         // UAZAPI v2: POST /send/media with { number, type, file, caption? }

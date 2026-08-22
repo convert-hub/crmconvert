@@ -5,6 +5,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { executeAutomations } = require('./automation-handler');
 const { normalizeBrazilPhone, upsertContactByPhone } = require('./lib/phone');
+const { revealSecret } = require('./lib/secrets');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -21,6 +22,21 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // Job handlers registry
 const handlers = {
+  // Retenção LGPD (apply_tenant_retention) e exclusões: SQL não remove o
+  // objeto físico do bucket, então a lista de storage_path chega por job e é
+  // apagada aqui com service_role.
+  async purge_storage_paths(payload) {
+    const paths = Array.isArray(payload.paths) ? payload.paths.filter(p => typeof p === 'string' && p) : [];
+    let removed = 0;
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      const { data, error } = await supabase.storage.from('whatsapp-media').remove(chunk);
+      if (error) throw new Error(`storage remove failed: ${error.message}`);
+      removed += (data || []).length;
+    }
+    return { removed, requested: paths.length };
+  },
+
   async process_form_webhook(payload) {
     return processLeadIntake({
       tenant_id: payload.tenant_id,
@@ -462,7 +478,7 @@ const handlers = {
     }
 
     // UAZAPI (default)
-    const instToken = instance.api_token_encrypted || '';
+    const instToken = await revealSecret(supabase, instance.api_token_encrypted);
     const response = await fetch(`${instance.api_url}/send/text`, {
       method: 'POST',
       headers: {
@@ -627,7 +643,7 @@ const handlers = {
     const uazType = media_kind === 'file' ? 'document' : media_kind;
     const response = await fetch(`${instance.api_url}/send/media`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'token': instance.api_token_encrypted || '' },
+      headers: { 'Content-Type': 'application/json', 'token': await revealSecret(supabase, instance.api_token_encrypted) },
       body: JSON.stringify({
         number: cleanPhone, type: uazType, file: media_url_final,
         text: caption || '', docName: filename || undefined, readchat: true,
@@ -2070,7 +2086,7 @@ const handlers = {
         .eq('tenant_id', tenant_id)
         .eq('task_type', 'message_generation')
         .maybeSingle();
-      if (aiConfig) apiKey = aiConfig.api_key_encrypted || aiConfig.global_api_key?.api_key_encrypted || null;
+      if (aiConfig) apiKey = (await revealSecret(supabase, aiConfig.api_key_encrypted || aiConfig.global_api_key?.api_key_encrypted)) || null;
       if (!apiKey) {
         const { data: globalKey } = await supabase
           .from('global_api_keys')
@@ -2079,7 +2095,7 @@ const handlers = {
           .eq('is_active', true)
           .limit(1)
           .maybeSingle();
-        if (globalKey) apiKey = globalKey.api_key_encrypted;
+        if (globalKey) apiKey = await revealSecret(supabase, globalKey.api_key_encrypted);
       }
       if (!apiKey) apiKey = process.env.OPENAI_API_KEY || null;
 
@@ -2813,7 +2829,7 @@ async function checkQualification(tenantId, conversation, contact, history) {
   const config = await getAiConfig(tenantId, 'qualification');
   if (!config) return;
 
-  const apiKey = config.api_key_encrypted || config.global_api_key?.api_key_encrypted || process.env.OPENAI_API_KEY;
+  const apiKey = (await revealSecret(supabase, config.api_key_encrypted || config.global_api_key?.api_key_encrypted)) || process.env.OPENAI_API_KEY;
   if (!apiKey) return;
 
   const template = await getPromptTemplate(tenantId, 'qualification');

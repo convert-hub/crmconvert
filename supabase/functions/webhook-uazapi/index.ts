@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret, timingSafeEqual } from "../_shared/secrets.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -18,45 +19,50 @@ serve(async (req) => {
     );
 
     const body = await req.json();
-
-    // Get tenant_id from query param > header > body > instance lookup
     const url = new URL(req.url);
-    let tenantId = url.searchParams.get('tenant_id')
-      || req.headers.get('x-tenant-id')
-      || body.tenant_id;
 
-    let instanceId: string | null = null;
+    // ── Autenticação do evento ──────────────────────────────────────────
+    // Todo evento da UAZAPI traz no corpo o token da instância — o único
+    // segredo compartilhado apenas entre a UAZAPI e o CRM. Ele é a credencial:
+    // o evento só entra se instanceName + token baterem com uma instância
+    // ATIVA cadastrada. Antes, bastava conhecer um tenant_id (UUID, não
+    // secreto) ou o nome previsível da instância (tenant_<8 hex>) para injetar
+    // mensagens/leads, disparar notificações e queimar créditos de IA.
+    // O tenant passa a ser o da instância autenticada — nunca o da query
+    // string, que é controlada por quem chama.
+    const providedToken = typeof body.token === 'string' ? body.token : '';
     const instanceName = body.instanceName || body.instance?.name || body.owner;
-    if (instanceName) {
-      const { data: inst } = await supabase.from('whatsapp_instances')
-        .select('id, tenant_id')
-        .eq('instance_name', instanceName)
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle();
-      if (inst) {
-        instanceId = inst.id;
-        if (!tenantId) tenantId = inst.tenant_id;
-      }
+    if (!providedToken || !instanceName) {
+      console.warn('webhook-uazapi: rejected, missing token/instanceName. Body keys:', Object.keys(body));
+      return unauthorized();
     }
 
-    if (!tenantId) {
-      console.error('webhook-uazapi: no tenant_id found. Body keys:', Object.keys(body));
-      return jsonOk({ error: 'tenant_id required' });
+    const { data: inst } = await supabase.from('whatsapp_instances')
+      .select('id, tenant_id, api_token_encrypted')
+      .eq('instance_name', instanceName)
+      .eq('provider', 'uazapi')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    const expectedToken = inst ? await revealSecret(supabase, inst.api_token_encrypted) : '';
+    if (!inst || !expectedToken || !timingSafeEqual(providedToken, expectedToken)) {
+      // Cobre também instâncias desativadas no CRM que continuam enviando
+      // eventos: se o CRM diz que está desativada, nada dela deve entrar.
+      console.warn(`webhook-uazapi: rejected, no active instance matches name+token (instance=${instanceName})`);
+      return unauthorized();
     }
 
-    // Fallback: pick the tenant's uazapi instance if we couldn't resolve from payload
-    if (!instanceId) {
-      const { data: inst } = await supabase.from('whatsapp_instances')
-        .select('id')
-        .eq('tenant_id', tenantId)
-        .eq('provider', 'uazapi')
-        .eq('is_active', true)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (inst) instanceId = inst.id;
+    const instanceId: string = inst.id;
+    const tenantId: string = inst.tenant_id;
+    const queryTenant = url.searchParams.get('tenant_id');
+    if (queryTenant && queryTenant !== tenantId) {
+      console.warn(`webhook-uazapi: tenant_id da URL (${queryTenant}) difere do tenant da instância; usando o da instância`);
     }
+
+    // O token jamais pode ser persistido: sem isto ele ia parar em
+    // webhook_events.raw_payload e em messages.provider_metadata, ambos
+    // legíveis por qualquer membro do tenant.
+    delete body.token;
 
     // Save raw webhook event (fire and forget)
     supabase.from('webhook_events').insert({
@@ -100,6 +106,13 @@ serve(async (req) => {
 function jsonOk(data: unknown) {
   return new Response(JSON.stringify(data), {
     status: 200,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+function unauthorized() {
+  return new Response(JSON.stringify({ error: 'unauthorized' }), {
+    status: 401,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }
@@ -452,10 +465,11 @@ async function handleIncomingMessage(supabase: any, tenantId: string, body: any,
 
         if (inst) {
           const ab = inst.api_url.replace(/\/+$/, '');
+          const instTok = await revealSecret(supabase, inst.api_token_encrypted);
           const cleanPh = phone.replace(/\D/g, '');
           const detailsRes = await fetch(`${ab}/chat/details`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'token': inst.api_token_encrypted || '' },
+            headers: { 'Content-Type': 'application/json', 'token': instTok },
             body: JSON.stringify({ number: cleanPh, preview: false }),
           });
           if (detailsRes.ok) {

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -62,8 +63,8 @@ serve(async (req) => {
       .eq("task_type", "message_generation")
       .maybeSingle();
 
-    const apiKey = aiConfig?.api_key_encrypted
-      || aiConfig?.global_api_key?.api_key_encrypted
+    const apiKey = (await revealSecret(supabase, aiConfig?.api_key_encrypted))
+      || (await revealSecret(supabase, aiConfig?.global_api_key?.api_key_encrypted))
       || Deno.env.get("OPENAI_API_KEY");
 
     if (!apiKey) {
@@ -97,7 +98,7 @@ serve(async (req) => {
 
         if (instance) {
           const apiBase = instance.api_url.replace(/\/+$/, "");
-          const token = instance.api_token_encrypted || "";
+          const token = await revealSecret(supabase, instance.api_token_encrypted);
           const instancePhone = (instance.phone_number || "").replace(/\D/g, "");
 
           // Mirror uazapi-proxy: try owner:messageId first, then short messageId

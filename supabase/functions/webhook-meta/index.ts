@@ -2,6 +2,7 @@
 // Endpoint NOVO. Não interfere com webhook-uazapi.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { revealSecret } from "../_shared/secrets.ts";
 
 const META_API_VERSION = "v21.0";
 
@@ -88,6 +89,13 @@ serve(async (req) => {
       console.warn("[webhook-meta] orphan_event phone_number_id=", phoneNumberId, "field=", change?.field);
       return jsonOk({ ok: true, ignored: "instance_not_found", phone_number_id: phoneNumberId });
     }
+
+    // Segredos vêm do Vault (ver _shared/secrets.ts): revela uma vez e
+    // substitui no objeto para o restante do fluxo (assinatura HMAC, download
+    // de mídia) usar como antes.
+    instance.meta_app_secret_encrypted = (await revealSecret(supabase, instance.meta_app_secret_encrypted)) || null;
+    instance.meta_access_token_encrypted = (await revealSecret(supabase, instance.meta_access_token_encrypted)) || null;
+
     console.log("[webhook-meta] event_received", {
       instance_id: instance.id,
       tenant_id: instance.tenant_id,

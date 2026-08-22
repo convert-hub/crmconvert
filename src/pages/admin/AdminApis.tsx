@@ -154,6 +154,10 @@ export default function AdminApis() {
     return key.slice(0, 4) + '••••••••' + key.slice(-4);
   };
 
+  // Chave guardada no Vault: a coluna traz só a referência "vault:<uuid>" e o
+  // valor não pode ser lido de volta pelo painel — só substituído.
+  const isVaultRef = (key: string) => typeof key === 'string' && key.startsWith('vault:');
+
   // WhatsApp handlers - uses uazapi-proxy edge function with global key
   const handleCreateWhatsAppViaProxy = async () => {
     if (!waForm.tenant_id) return;
@@ -307,11 +311,15 @@ export default function AdminApis() {
                     </div>
                     <div className="flex items-center gap-1 mt-0.5">
                       <p className="text-xs text-muted-foreground font-mono">
-                        {showKeys[k.id] ? k.api_key_encrypted : maskKey(k.api_key_encrypted)}
+                        {isVaultRef(k.api_key_encrypted)
+                          ? 'guardada no cofre — não pode ser exibida'
+                          : showKeys[k.id] ? k.api_key_encrypted : maskKey(k.api_key_encrypted)}
                       </p>
-                      <button onClick={() => setShowKeys(s => ({ ...s, [k.id]: !s[k.id] }))} className="text-muted-foreground hover:text-foreground p-0.5">
-                        {showKeys[k.id] ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                      </button>
+                      {!isVaultRef(k.api_key_encrypted) && (
+                        <button onClick={() => setShowKeys(s => ({ ...s, [k.id]: !s[k.id] }))} className="text-muted-foreground hover:text-foreground p-0.5">
+                          {showKeys[k.id] ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                        </button>
+                      )}
                     </div>
                   </div>
                   <Switch checked={k.is_active} onCheckedChange={v => handleToggleKeyActive(k.id, v)} />
